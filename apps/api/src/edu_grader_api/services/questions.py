@@ -336,6 +336,8 @@ def _required_test_categories(question_type: str, policy_version: str | None = N
         required.add("invalid_ast")
         if policy_version == "2":
             required.update({"invalid_mathjson", "resource_limit"})
+    if question_type == "E3":
+        required.add("grammar_feedback")
     if question_type == "E4":
         required.add("needs_review")
     return required

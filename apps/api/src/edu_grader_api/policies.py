@@ -74,6 +74,102 @@ E1_POLICY_V1: dict[str, Any] = {
     },
 }
 
+E1_POLICY_V2: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["accepted_answers"],
+    "properties": {
+        "accepted_answers": E1_POLICY_V1["properties"]["accepted_answers"],
+        "normalization": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "unicode_form": {"const": "NFKC"},
+                "collapse_whitespace": {"type": "boolean"},
+                "ignore_case": {"type": "boolean"},
+                "ignore_terminal_punctuation": {"type": "boolean"},
+            },
+        },
+        "max_score": {"type": "number", "exclusiveMinimum": 0, "maximum": 100},
+    },
+}
+
+_ENGLISH_CONSTRAINT: dict[str, Any] = {"type": ["string", "null"], "maxLength": 64}
+
+E2_POLICY_V1: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["lemma", "accepted_forms"],
+    "properties": {
+        "lemma": {"type": "string", "minLength": 1, "maxLength": 128},
+        "accepted_forms": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 256},
+            "minItems": 1,
+            "maxItems": 50,
+            "uniqueItems": True,
+        },
+        "constraints": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "part_of_speech": _ENGLISH_CONSTRAINT,
+                "tense": _ENGLISH_CONSTRAINT,
+                "number": _ENGLISH_CONSTRAINT,
+                "determiner": _ENGLISH_CONSTRAINT,
+            },
+        },
+        "max_score": {"type": "number", "exclusiveMinimum": 0, "maximum": 100},
+    },
+}
+
+E3_POLICY_V1: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["grammar_feedback_required"],
+    "properties": {
+        "grammar_feedback_required": {"type": "boolean"},
+        "accepted_answers": E1_POLICY_V1["properties"]["accepted_answers"],
+        "max_score": {"type": "number", "exclusiveMinimum": 0, "maximum": 100},
+    },
+}
+
+E4_POLICY_V2: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["scoring_points"],
+    "properties": {
+        "scoring_points": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 20,
+            "uniqueItems": True,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["id", "evidence_phrases", "score"],
+                "properties": {
+                    "id": {"type": "string", "minLength": 1, "maxLength": 64},
+                    "evidence_phrases": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 20,
+                        "uniqueItems": True,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 2_000},
+                    },
+                    "score": {"type": "number", "exclusiveMinimum": 0, "maximum": 100},
+                },
+            },
+        },
+        "similarity_threshold": {"type": "number", "minimum": 0, "maximum": 1},
+        "max_score": {"type": "number", "exclusiveMinimum": 0, "maximum": 100},
+    },
+}
+
 E4_POLICY_V1: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -91,7 +187,11 @@ POLICY_SCHEMAS: dict[tuple[str, str], Mapping[str, Any]] = {
     ("M2", "1"): M2_POLICY_V1,
     ("M2", "2"): M2_POLICY_V2,
     ("E1", "1"): E1_POLICY_V1,
+    ("E1", "2"): E1_POLICY_V2,
+    ("E2", "1"): E2_POLICY_V1,
+    ("E3", "1"): E3_POLICY_V1,
     ("E4", "1"): E4_POLICY_V1,
+    ("E4", "2"): E4_POLICY_V2,
 }
 
 
