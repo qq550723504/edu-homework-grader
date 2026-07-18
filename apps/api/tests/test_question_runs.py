@@ -33,7 +33,12 @@ class FakeGradeResult:
 
 class FakeGraderClient:
     def grade(
-        self, question_type: str, rule_json: dict[str, object], answer_json: dict[str, object]
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
     ) -> FakeGradeResult:
         return FakeGradeResult(**answer_json["result"])
 

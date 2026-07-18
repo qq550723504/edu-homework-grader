@@ -5,9 +5,11 @@ from enum import StrEnum
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -180,6 +182,7 @@ class GradingPolicy(Base):
     retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     question_versions: Mapped[list[QuestionVersion]] = relationship(back_populates="grading_policy")
+    grading_runs: Mapped[list[GradingRun]] = relationship(back_populates="grading_policy")
 
 
 class Question(Base):
@@ -233,6 +236,7 @@ class QuestionVersion(Base):
     test_cases: Mapped[list[QuestionTestCase]] = relationship(back_populates="question_version")
     test_runs: Mapped[list[QuestionTestRun]] = relationship(back_populates="question_version")
     assignment_items: Mapped[list[AssignmentItem]] = relationship(back_populates="question_version")
+    grading_runs: Mapped[list[GradingRun]] = relationship(back_populates="question_version")
 
 
 class QuestionTestCase(Base):
@@ -399,6 +403,72 @@ class AttemptAnswer(Base):
 
     attempt: Mapped[StudentAttempt] = relationship(back_populates="answers")
     assignment_item: Mapped[AssignmentItem] = relationship(back_populates="answers")
+    grading_runs: Mapped[list[GradingRun]] = relationship(back_populates="attempt_answer")
+
+
+class GradingRun(Base):
+    __tablename__ = "grading_runs"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    attempt_answer_id: Mapped[UUID] = mapped_column(
+        ForeignKey("attempt_answers.id"), nullable=False
+    )
+    question_version_id: Mapped[UUID] = mapped_column(
+        ForeignKey("question_versions.id"), nullable=False
+    )
+    grading_policy_id: Mapped[UUID] = mapped_column(
+        ForeignKey("grading_policies.id"), nullable=False
+    )
+    policy_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    rule_snapshot_json: Mapped[dict[str, object]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql")
+    )
+    answer_snapshot_json: Mapped[dict[str, object]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql")
+    )
+    decision: Mapped[str] = mapped_column(String(30), nullable=False)
+    score: Mapped[float] = mapped_column(Float, nullable=False)
+    max_score: Mapped[float] = mapped_column(Float, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    requires_review: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    grader_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    dependency_versions_json: Mapped[dict[str, object]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql")
+    )
+    thresholds_json: Mapped[dict[str, object]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql")
+    )
+    evidence_json: Mapped[dict[str, object]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    attempt_answer: Mapped[AttemptAnswer] = relationship(back_populates="grading_runs")
+    question_version: Mapped[QuestionVersion] = relationship(back_populates="grading_runs")
+    grading_policy: Mapped[GradingPolicy] = relationship(back_populates="grading_runs")
+    signals: Mapped[list[GradingSignal]] = relationship(back_populates="grading_run")
+
+
+class GradingSignal(Base):
+    __tablename__ = "grading_signals"
+    __table_args__ = (
+        UniqueConstraint("grading_run_id", "ordinal", name="uq_grading_signal_run_ordinal"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    grading_run_id: Mapped[UUID] = mapped_column(ForeignKey("grading_runs.id"), nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    code: Mapped[str | None] = mapped_column(String(100))
+    passed: Mapped[bool | None] = mapped_column(Boolean)
+    score: Mapped[float | None] = mapped_column(Float)
+    max_score: Mapped[float | None] = mapped_column(Float)
+    evidence_json: Mapped[dict[str, object]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    grading_run: Mapped[GradingRun] = relationship(back_populates="signals")
 
 
 class SubmissionReceipt(Base):

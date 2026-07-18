@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
@@ -17,6 +18,8 @@ from ..models import (
     ClassTeacher,
     Classroom,
     Enrollment,
+    GradingRun,
+    GradingSignal,
     Question,
     QuestionVersion,
     StudentAttempt,
@@ -26,6 +29,7 @@ from ..models import (
 )
 from ..settings import settings
 from .grader import HttpGraderClient, MathAnswerNormalizationError
+from .questions import GradeResult
 
 
 class AssignmentAccessError(Exception):
@@ -57,6 +61,17 @@ class MathAnswerValidationError(ValueError):
 
 class MathAnswerNormalizer(Protocol):
     def normalize_math_answer(self, answer_json: dict[str, object]) -> dict[str, object]: ...
+
+
+class SubmissionGraderClient(Protocol):
+    def grade(
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
+    ) -> GradeResult: ...
 
 
 def create_assignment(
@@ -359,6 +374,7 @@ def submit_attempt(
     student_id: UUID,
     assignment_id: UUID,
     idempotency_key: str,
+    grader_client: SubmissionGraderClient | None = None,
 ) -> tuple[int, dict[str, object]]:
     assignment, attempt = get_student_assignment(
         session, tenant_id=tenant_id, student_id=student_id, assignment_id=assignment_id
@@ -376,9 +392,19 @@ def submit_attempt(
         return receipt.response_status, receipt.response_json
     if attempt.status is not AttemptStatus.DRAFT:
         raise SubmissionConflictError("attempt has already been submitted")
+    grading = _grade_attempt(
+        session,
+        assignment=assignment,
+        attempt=attempt,
+        grader_client=grader_client or HttpGraderClient(settings.grader_base_url),
+    )
     attempt.status = AttemptStatus.SUBMITTED
     attempt.submitted_at = utc_now()
-    response = {"attempt_id": str(attempt.id), "status": AttemptStatus.SUBMITTED.value}
+    response = {
+        "attempt_id": str(attempt.id),
+        "status": AttemptStatus.SUBMITTED.value,
+        "grading": grading,
+    }
     session.add(
         SubmissionReceipt(
             tenant_id=tenant_id,
@@ -400,6 +426,205 @@ def submit_attempt(
         metadata={"assignment_id": str(assignment_id)},
     )
     return 200, response
+
+
+def _grade_attempt(
+    session: Session,
+    *,
+    assignment: Assignment,
+    attempt: StudentAttempt,
+    grader_client: SubmissionGraderClient,
+) -> list[dict[str, object]]:
+    items = list(
+        session.scalars(
+            select(AssignmentItem)
+            .where(AssignmentItem.assignment_id == assignment.id)
+            .order_by(AssignmentItem.position)
+        )
+    )
+    answers = {
+        answer.assignment_item_id: answer
+        for answer in session.scalars(
+            select(AttemptAnswer).where(AttemptAnswer.attempt_id == attempt.id)
+        )
+    }
+    response: list[dict[str, object]] = []
+    for item in items:
+        answer = answers.get(item.id)
+        if answer is None:
+            answer = AttemptAnswer(
+                attempt=attempt,
+                assignment_item=item,
+                answer_json={"answer": ""},
+                version=1,
+            )
+            session.add(answer)
+            session.flush()
+        version = item.question_version
+        policy = version.grading_policy
+        policy_version = policy.policy_version if policy is not None else None
+        try:
+            result = grader_client.grade(
+                version.question_type,
+                version.rule_json,
+                answer.answer_json,
+                policy_version=policy_version,
+            )
+        except Exception as error:  # Dependency errors must remain visible and reviewable.
+            result = _dependency_review_result(version.rule_json, error)
+        run = _persist_grading_run(session, answer=answer, item=item, result=result)
+        response.append(_student_grading_summary(item, run))
+    return response
+
+
+def _dependency_review_result(rule: dict[str, object], error: Exception) -> GradeResult:
+    max_score = rule.get("max_score", 1)
+    if isinstance(max_score, bool) or not isinstance(max_score, int | float) or max_score <= 0:
+        max_score = 1
+    return GradeResult(
+        decision="needs_review",
+        score=0.0,
+        grader_version="grader-unavailable",
+        evidence={
+            "max_score": float(max_score),
+            "confidence": 0.0,
+            "criteria": [
+                {
+                    "code": "grader_dependency",
+                    "score": 0.0,
+                    "max_score": float(max_score),
+                    "passed": False,
+                    "evidence": str(error),
+                }
+            ],
+            "feedback": [{"type": "dependency", "message": "批改服务暂不可用，已转人工复核。"}],
+            "signals": [{"kind": "dependency", "message": str(error)}],
+            "requires_review": True,
+            "dependency_versions": {"grader": "unavailable"},
+        },
+    )
+
+
+def _persist_grading_run(
+    session: Session,
+    *,
+    answer: AttemptAnswer,
+    item: AssignmentItem,
+    result: GradeResult,
+) -> GradingRun:
+    evidence = deepcopy(result.evidence)
+    max_score = _evidence_number(evidence, "max_score", default=1.0)
+    confidence = _evidence_number(evidence, "confidence", default=0.0)
+    requires_review = evidence.get("requires_review") is True
+    dependency_versions = evidence.get("dependency_versions")
+    signals = evidence.get("signals")
+    rule = item.question_version.rule_json
+    threshold = rule.get("similarity_threshold")
+    thresholds = {"similarity": threshold} if isinstance(threshold, int | float) else {}
+    run = GradingRun(
+        attempt_answer=answer,
+        question_version_id=item.question_version_id,
+        grading_policy_id=item.question_version.grading_policy_id,
+        policy_version=(
+            item.question_version.grading_policy.policy_version
+            if item.question_version.grading_policy is not None
+            else "unavailable"
+        ),
+        rule_snapshot_json=deepcopy(rule),
+        answer_snapshot_json=deepcopy(answer.answer_json),
+        decision=result.decision,
+        score=result.score,
+        max_score=max_score,
+        confidence=confidence,
+        requires_review=requires_review,
+        grader_version=result.grader_version,
+        dependency_versions_json=(
+            deepcopy(dependency_versions) if isinstance(dependency_versions, dict) else {}
+        ),
+        thresholds_json=thresholds,
+        evidence_json=evidence,
+    )
+    session.add(run)
+    for ordinal, signal in enumerate(_signals_from_evidence(evidence, signals)):
+        run.signals.append(signal)
+        signal.ordinal = ordinal
+    session.flush()
+    return run
+
+
+def _signals_from_evidence(evidence: dict[str, object], signals: object) -> list[GradingSignal]:
+    rows: list[GradingSignal] = []
+    criteria = evidence.get("criteria")
+    if isinstance(criteria, list):
+        for criterion in criteria:
+            if isinstance(criterion, dict):
+                rows.append(
+                    GradingSignal(
+                        kind="criterion",
+                        code=criterion.get("code")
+                        if isinstance(criterion.get("code"), str)
+                        else None,
+                        passed=criterion.get("passed")
+                        if isinstance(criterion.get("passed"), bool)
+                        else None,
+                        score=_optional_number(criterion.get("score")),
+                        max_score=_optional_number(criterion.get("max_score")),
+                        evidence_json=deepcopy(criterion),
+                    )
+                )
+    if isinstance(signals, list):
+        for signal in signals:
+            if isinstance(signal, dict):
+                rows.append(
+                    GradingSignal(
+                        kind=signal.get("kind")
+                        if isinstance(signal.get("kind"), str)
+                        else "signal",
+                        code=signal.get("code") if isinstance(signal.get("code"), str) else None,
+                        passed=None,
+                        score=None,
+                        max_score=None,
+                        evidence_json=deepcopy(signal),
+                    )
+                )
+    feedback = evidence.get("feedback")
+    if isinstance(feedback, list):
+        for item in feedback:
+            if isinstance(item, dict):
+                rows.append(
+                    GradingSignal(
+                        kind="feedback",
+                        code=item.get("rule_id") if isinstance(item.get("rule_id"), str) else None,
+                        passed=None,
+                        score=None,
+                        max_score=None,
+                        evidence_json=deepcopy(item),
+                    )
+                )
+    return rows
+
+
+def _evidence_number(evidence: dict[str, object], key: str, *, default: float) -> float:
+    value = evidence.get(key)
+    return (
+        float(value) if isinstance(value, int | float) and not isinstance(value, bool) else default
+    )
+
+
+def _optional_number(value: object) -> float | None:
+    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
+
+
+def _student_grading_summary(item: AssignmentItem, run: GradingRun) -> dict[str, object]:
+    feedback = run.evidence_json.get("feedback")
+    return {
+        "assignment_item_id": str(item.id),
+        "decision": run.decision,
+        "score": run.score,
+        "max_score": run.max_score,
+        "requires_review": run.requires_review,
+        "feedback": deepcopy(feedback) if isinstance(feedback, list) else [],
+    }
 
 
 def _assigned_classroom(

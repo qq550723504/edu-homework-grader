@@ -24,17 +24,27 @@ class HttpGraderClient:
         question_type: str,
         rule_json: dict[str, object],
         answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
     ) -> GradeResult:
-        path, payload = self._request(question_type, rule_json, answer_json)
+        path, payload = self._request(
+            question_type,
+            rule_json,
+            answer_json,
+            policy_version=policy_version,
+        )
         response = httpx.post(f"{self.base_url}{path}", json=payload, timeout=10)
         response.raise_for_status()
         data = response.json()
+        if not isinstance(data, dict):
+            raise ValueError("grader response must be an object")
         return GradeResult(
             decision=data["decision"],
             score=data["score"],
             evidence={
-                "criteria": data.get("criteria", []),
-                "requires_review": data.get("requires_review", False),
+                key: value
+                for key, value in data.items()
+                if key not in {"decision", "score", "grader_version"}
             },
             grader_version=data["grader_version"],
         )
@@ -74,9 +84,13 @@ class HttpGraderClient:
         question_type: str,
         rule_json: dict[str, object],
         answer_json: dict[str, object],
+        *,
+        policy_version: str | None,
     ) -> tuple[str, dict[str, Any]]:
         if question_type == "M2":
             return _mathjson_request(rule_json, answer_json)
+        if question_type in {"E1", "E2", "E3", "E4"}:
+            return _english_request(question_type, rule_json, answer_json, policy_version)
         if question_type != "M1":
             raise ValueError(f"question type {question_type} has no HTTP grader adapter")
         answer = answer_json.get("answer")
@@ -96,6 +110,28 @@ class HttpGraderClient:
                 "tolerance": str(tolerance),
             },
         )
+
+
+def _english_request(
+    question_type: str,
+    rule_json: dict[str, object],
+    answer_json: dict[str, object],
+    policy_version: str | None,
+) -> tuple[str, dict[str, Any]]:
+    answer = answer_json.get("answer")
+    if not isinstance(answer, str):
+        raise ValueError("English answers require an answer string")
+    if not policy_version:
+        raise ValueError(f"{question_type} rules require a grading policy version")
+    return (
+        "/v1/grade/english",
+        {
+            "question_type": question_type,
+            "policy_version": policy_version,
+            "rule": rule_json,
+            "answer": {"answer": answer},
+        },
+    )
 
 
 def _mathjson_request(

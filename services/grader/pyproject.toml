@@ -9,6 +9,7 @@ description = "Deterministic grading service for English and mathematics homewor
 requires-python = ">=3.12"
 dependencies = [
   "fastapi==0.139.0",
+  "sentence-transformers==5.6.0",
   "sympy==1.14.0",
   "uvicorn[standard]>=0.35,<1",
 ]
