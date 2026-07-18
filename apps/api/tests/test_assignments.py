@@ -237,6 +237,7 @@ def test_enrolled_student_lists_pending_and_opens_frozen_assignment(
     assert [entry["id"] for entry in listed.json()["pending"]] == [str(assignment.id)]
     assert detail.status_code == 200
     assert detail.json()["items"][0]["question_version_id"] == str(published.id)
+    assert detail.json()["items"][0]["prompt"] == "What is 2 + 3?"
 
 
 def test_answer_save_rejects_stale_version_and_submitted_attempt(
