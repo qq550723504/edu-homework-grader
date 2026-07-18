@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 from ..auth import CurrentPrincipal
 from ..db import get_session
 from ..dependencies import require_role
-from ..models import AssignmentItem, AttemptAnswer, GradingRun, Role
+from ..models import AssignmentItem, AttemptAnswer, GradePublication, GradingRun, Role
+from ..services.reviews import published_student_grading
 from ..services.assignments import (
     AssignmentAccessError,
     AnswerConflictError,
@@ -250,7 +251,7 @@ def get_student_assignment_route(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
         ) from None
-    return {
+    response: dict[str, object] = {
         **_assignment_summary(assignment),
         "attempt": {"id": str(attempt.id), "status": attempt.status.value},
         "items": [
@@ -266,6 +267,9 @@ def get_student_assignment_route(
             for item in items
         ],
     }
+    if session.scalar(select(GradePublication).where(GradePublication.attempt_id == attempt.id)):
+        response["grading"] = published_student_grading(session, attempt_id=attempt.id)
+    return response
 
 
 @student_router.put("/attempts/{attempt_id}/answers/{assignment_item_id}")

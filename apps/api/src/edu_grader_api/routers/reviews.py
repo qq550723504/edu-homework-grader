@@ -17,10 +17,12 @@ from ..services.reviews import (
     decide_review_task,
     get_teacher_review_task,
     list_teacher_review_tasks,
+    publish_attempt_results,
 )
 
 
 router = APIRouter(prefix="/v1/review-tasks", tags=["teacher reviews"])
+publication_router = APIRouter(prefix="/v1/assignments", tags=["grade publication"])
 
 
 class ReviewDecisionRequest(BaseModel):
@@ -198,3 +200,33 @@ def batch_confirm_route(
             {"id": str(decision.id), "action": decision.action.value} for decision in decisions
         ]
     }
+
+
+@publication_router.post(
+    "/{assignment_id}/attempts/{attempt_id}/publish-results", status_code=status.HTTP_201_CREATED
+)
+def publish_attempt_results_route(
+    assignment_id: UUID,
+    attempt_id: UUID,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, str]:
+    try:
+        session.rollback()
+        with session.begin():
+            publication = publish_attempt_results(
+                session,
+                tenant_id=UUID(principal.tenant_id),
+                teacher_id=UUID(principal.user_id),
+                assignment_id=assignment_id,
+                attempt_id=attempt_id,
+            )
+    except ReviewAccessError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+        ) from None
+    except ReviewConflictError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="attempt is not publishable"
+        ) from None
+    return {"id": str(publication.id), "status": "published"}

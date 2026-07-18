@@ -10,6 +10,7 @@ from ..models import (
     AuditLog,
     ClassTeacher,
     GradingRun,
+    GradePublication,
     QuestionVersion,
     ReviewReason,
     ReviewAction,
@@ -202,3 +203,81 @@ def batch_confirm_deterministic(
         )
         for task in tasks
     ]
+
+
+def publish_attempt_results(
+    session: Session,
+    *,
+    tenant_id: UUID,
+    teacher_id: UUID,
+    assignment_id: UUID,
+    attempt_id: UUID,
+) -> GradePublication:
+    attempt = session.scalar(
+        select(StudentAttempt)
+        .join(Assignment, StudentAttempt.assignment_id == Assignment.id)
+        .join(ClassTeacher, ClassTeacher.class_id == Assignment.class_id)
+        .where(
+            StudentAttempt.id == attempt_id,
+            Assignment.id == assignment_id,
+            Assignment.tenant_id == tenant_id,
+            ClassTeacher.teacher_id == teacher_id,
+        )
+    )
+    if attempt is None:
+        raise ReviewAccessError()
+    if session.scalar(select(GradePublication).where(GradePublication.attempt_id == attempt.id)):
+        raise ReviewConflictError()
+    tasks = list(
+        session.scalars(
+            select(ReviewTask)
+            .join(AttemptAnswer, ReviewTask.attempt_answer_id == AttemptAnswer.id)
+            .where(AttemptAnswer.attempt_id == attempt.id)
+        )
+    )
+    if not tasks or any(task.status is not ReviewTaskStatus.RESOLVED for task in tasks):
+        raise ReviewConflictError()
+    publication = GradePublication(attempt=attempt, published_by_user_id=teacher_id)
+    session.add(publication)
+    session.add(
+        AuditLog(
+            tenant_id=tenant_id,
+            actor_user_id=teacher_id,
+            event_type="attempt.grades_published",
+            target_type="student_attempt",
+            target_id=attempt.id,
+            metadata_json={"assignment_id": str(assignment_id)},
+        )
+    )
+    return publication
+
+
+def published_student_grading(session: Session, *, attempt_id: UUID) -> list[dict[str, object]]:
+    answers = list(
+        session.scalars(
+            select(AttemptAnswer)
+            .join(AssignmentItem, AttemptAnswer.assignment_item_id == AssignmentItem.id)
+            .where(AttemptAnswer.attempt_id == attempt_id)
+            .order_by(AssignmentItem.position)
+        )
+    )
+    results: list[dict[str, object]] = []
+    for answer in answers:
+        task = session.scalar(
+            select(ReviewTask)
+            .where(ReviewTask.attempt_answer_id == answer.id)
+            .order_by(ReviewTask.created_at.desc())
+        )
+        if task is None:
+            continue
+        decision = task.decisions[-1] if task.decisions else None
+        feedback = task.grading_run.evidence_json.get("feedback")
+        results.append(
+            {
+                "assignment_item_id": str(answer.assignment_item_id),
+                "score": decision.final_score if decision is not None else task.grading_run.score,
+                "max_score": task.grading_run.max_score,
+                "feedback": feedback if isinstance(feedback, list) else [],
+            }
+        )
+    return results
