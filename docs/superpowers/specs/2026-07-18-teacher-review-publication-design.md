@@ -35,15 +35,18 @@ automatic-grading evidence and are never updated by a teacher action.
 
 ### ReviewTask
 
-One task is created for every submitted answer whose latest automatic result
-requires review. It carries the assignment, attempt answer, current grading
-run, queue reason, status, and an optimistic-lock version. A unique constraint
-on the attempt answer prevents duplicate open tasks.
+One task is created for every submitted answer's latest automatic result. It
+carries the assignment, attempt answer, current grading run, queue reason,
+status, and an optimistic-lock version. A unique open-task constraint on the
+attempt answer prevents duplicate active dispositions. The normal teacher view
+defaults to manual work, while deterministic `auto_confirmation` tasks remain
+available to the batch-confirm operation.
 
-Queue reasons are `needs_review`, `regrade_requested`, and `rule_problem`.
+Queue reasons are `needs_review`, `auto_confirmation`, `regrade_requested`,
+and `rule_problem`.
 Statuses are `open`, `resolved`, and `superseded`. Regrading creates a new
 automatic `GradingRun`, supersedes the old task, and opens a replacement task
-when the new result still requires review.
+for the replacement grading result.
 
 ### ReviewDecision
 
@@ -65,7 +68,7 @@ Publication is recorded per submitted attempt. It carries a status of `draft`
 or `published`, the publishing teacher, and timestamp. An attempt can be
 published only when every answer is eligible:
 
-- deterministic, non-subjective automatic results may be batch-confirmed;
+- deterministic, non-subjective automatic results must be batch-confirmed;
 - `needs_review` and subjective results require a resolved review task;
 - a task under regrade is not eligible.
 
@@ -96,8 +99,9 @@ student-safe feedback; teacher-only rule snapshots and signals remain hidden.
 
 ## Processing Flow
 
-1. Submission persists automatic runs and creates review tasks for every
-   review-required result in the same transaction.
+1. Submission persists automatic runs and creates a disposition task for every
+   result in the same transaction: `auto_confirmation` for deterministic work
+   and `needs_review` for manual work.
 2. A teacher lists and filters tasks in classes they teach, then opens a task
    detail using the immutable grading evidence.
 3. The teacher submits one decision with the task's version. A stale version or
