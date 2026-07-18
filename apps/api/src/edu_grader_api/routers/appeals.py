@@ -9,13 +9,24 @@ from ..auth import CurrentPrincipal
 from ..db import get_session
 from ..dependencies import require_role
 from ..models import Role
-from ..services.appeals import AppealAccessError, AppealConflictError, create_student_appeal
+from ..services.appeals import (
+    AppealAccessError,
+    AppealConflictError,
+    create_student_appeal,
+    decide_appeal,
+)
 
 router = APIRouter(prefix="/v1/student", tags=["student appeals"])
+teacher_router = APIRouter(prefix="/v1/review-appeals", tags=["teacher appeals"])
 
 
 class CreateAppealRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=2_000)
+
+
+class DecideAppealRequest(BaseModel):
+    approve: bool
+    version: int = Field(ge=0)
 
 
 @router.post("/attempts/{attempt_id}/appeals", status_code=status.HTTP_201_CREATED)
@@ -40,3 +51,28 @@ def create_appeal_route(
     except AppealConflictError:
         raise HTTPException(status_code=409, detail="open appeal already exists") from None
     return {"id": str(appeal.id), "status": appeal.status.value}
+
+
+@teacher_router.post("/{appeal_id}/decisions", status_code=status.HTTP_201_CREATED)
+def decide_appeal_route(
+    appeal_id: UUID,
+    body: DecideAppealRequest,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, str | None]:
+    try:
+        session.rollback()
+        with session.begin():
+            link = decide_appeal(
+                session,
+                tenant_id=UUID(principal.tenant_id),
+                teacher_id=UUID(principal.user_id),
+                appeal_id=appeal_id,
+                approve=body.approve,
+                version=body.version,
+            )
+    except AppealAccessError:
+        raise HTTPException(status_code=404, detail="resource not found") from None
+    except AppealConflictError:
+        raise HTTPException(status_code=409, detail="appeal changed") from None
+    return {"correction_attempt_id": str(link.correction_attempt_id) if link else None}
