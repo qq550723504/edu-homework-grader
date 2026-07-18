@@ -79,6 +79,14 @@ class StaticSimilarity:
         return _valid_similarity(self._value)
 
 
+class UnavailableSimilarity:
+    def __init__(self, message: str) -> None:
+        self._message = message
+
+    def score(self, left: str, right: str) -> float:
+        raise EnglishDependencyError(self._message)
+
+
 class SentenceTransformerSimilarity:
     def __init__(
         self,
