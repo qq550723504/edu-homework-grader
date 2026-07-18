@@ -120,10 +120,10 @@ POST /v1/grade/math/expression
 docker compose exec api python -m alembic -c alembic.ini upgrade head
 ```
 
-当前 HTTP Grader 适配器已接入 M1；其他题型策略可先完成版本和测试用例配置，待对应 Grader
-适配器上线后运行测试。每次测试运行和发布都会保留版本、规则、批改器版本及结果记录。
+当前 HTTP Grader 适配器已接入 M1 和 M2@2（受限 MathJSON）；M2@1 保留原有兼容策略。每次测试运行和发布都会保留版本、规则、批改器版本及结果记录。
 
 数学表达式接口只接受受控 JSON AST，不接受未经清洗的 Python、LaTeX 或 SymPy 字符串。当前原型对节点类型、变量、深度、节点数、数字长度和指数范围做白名单限制。
+学生端以 MathLive 同时保存展示用 LaTeX 和 MathJSON，服务端会再次验证并只将规范化 AST 交给隔离 worker。默认 worker 限制为 1 CPU 秒、128 MiB 地址空间和 1 秒墙钟；可用 `GRADER_MATH_CPU_SECONDS`、`GRADER_MATH_MEMORY_BYTES` 与 `GRADER_MATH_TIMEOUT_SECONDS` 调整。Compose 还对 Grader 设定 0.5 CPU、256 MiB 和 64 PID 上限。超时或资源耗尽会进入教师复核，绝不自动判零。
 
 ## 质量门槛
 

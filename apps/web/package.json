@@ -10,7 +10,9 @@
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
+    "@cortex-js/compute-engine": "^0.84.1",
     "dexie": "4.4.4",
+    "mathlive": "^0.110.0",
     "nuxt": "4.4.8"
   },
   "devDependencies": {

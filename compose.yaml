@@ -61,6 +61,12 @@ services:
       context: ./services/grader
     environment:
       APP_ENV: ${APP_ENV:-development}
+      GRADER_MATH_CPU_SECONDS: ${GRADER_MATH_CPU_SECONDS:-1}
+      GRADER_MATH_MEMORY_BYTES: ${GRADER_MATH_MEMORY_BYTES:-134217728}
+      GRADER_MATH_TIMEOUT_SECONDS: ${GRADER_MATH_TIMEOUT_SECONDS:-1}
+    cpus: 0.50
+    mem_limit: 256m
+    pids_limit: 64
     ports:
       - "${GRADER_PORT:-8010}:8010"
     healthcheck:

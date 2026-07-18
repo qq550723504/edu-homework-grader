@@ -36,6 +36,25 @@ M2_POLICY_V1: dict[str, Any] = {
     },
 }
 
+M2_POLICY_V2: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["expected"],
+    "properties": {
+        "expected": {"type": ["array", "string", "number"]},
+        "variables": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 32},
+            "uniqueItems": True,
+            "maxItems": 10,
+        },
+        "required_form": {"enum": ["expanded"]},
+        "form_score": {"type": "number", "minimum": 0, "maximum": 100},
+        "max_score": {"type": "number", "exclusiveMinimum": 0, "maximum": 100},
+    },
+}
+
 E1_POLICY_V1: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -70,6 +89,7 @@ E4_POLICY_V1: dict[str, Any] = {
 POLICY_SCHEMAS: dict[tuple[str, str], Mapping[str, Any]] = {
     ("M1", "1"): M1_POLICY_V1,
     ("M2", "1"): M2_POLICY_V1,
+    ("M2", "2"): M2_POLICY_V2,
     ("E1", "1"): E1_POLICY_V1,
     ("E4", "1"): E4_POLICY_V1,
 }

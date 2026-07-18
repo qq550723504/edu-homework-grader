@@ -255,7 +255,9 @@ def run_question_tests(
 
     session.flush()
     case_runs = list(test_run.case_runs)
-    missing_categories = _required_test_categories(draft.question_type) - {
+    policy = session.get(GradingPolicy, draft.grading_policy_id)
+    policy_version = policy.policy_version if policy is not None else None
+    missing_categories = _required_test_categories(draft.question_type, policy_version) - {
         test_case.category for test_case in test_cases
     }
     if grader_error:
@@ -328,10 +330,12 @@ def publish_question_version(
     return draft
 
 
-def _required_test_categories(question_type: str) -> set[str]:
+def _required_test_categories(question_type: str, policy_version: str | None = None) -> set[str]:
     required = {"correct", "incorrect", "empty", "boundary"}
     if question_type == "M2":
         required.add("invalid_ast")
+        if policy_version == "2":
+            required.update({"invalid_mathjson", "resource_limit"})
     if question_type == "E4":
         required.add("needs_review")
     return required

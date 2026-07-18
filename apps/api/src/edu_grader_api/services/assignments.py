@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy import select, update
@@ -23,6 +24,8 @@ from ..models import (
     VersionStatus,
     utc_now,
 )
+from ..settings import settings
+from .grader import HttpGraderClient, MathAnswerNormalizationError
 
 
 class AssignmentAccessError(Exception):
@@ -44,6 +47,16 @@ class AnswerConflictError(Exception):
 
 class SubmissionConflictError(Exception):
     """Raised when a submission key or attempt cannot be submitted."""
+
+
+class MathAnswerValidationError(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(message)
+
+
+class MathAnswerNormalizer(Protocol):
+    def normalize_math_answer(self, answer_json: dict[str, object]) -> dict[str, object]: ...
 
 
 def create_assignment(
@@ -239,6 +252,7 @@ def save_answer(
     assignment_item_id: UUID,
     answer_json: dict[str, object],
     expected_version: int,
+    answer_normalizer: MathAnswerNormalizer | None = None,
 ) -> AttemptAnswer:
     attempt = session.scalar(
         select(StudentAttempt)
@@ -260,6 +274,11 @@ def save_answer(
     )
     if attempt is None or item is None:
         raise AssignmentAccessError()
+    stored_answer = _normalize_answer_if_needed(
+        item,
+        answer_json,
+        answer_normalizer or HttpGraderClient(settings.grader_base_url),
+    )
     answer = session.scalar(
         select(AttemptAnswer).where(
             AttemptAnswer.attempt_id == attempt_id,
@@ -272,7 +291,7 @@ def save_answer(
         answer = AttemptAnswer(
             attempt=attempt,
             assignment_item=item,
-            answer_json=answer_json,
+            answer_json=stored_answer,
             version=1,
         )
         session.add(answer)
@@ -281,7 +300,7 @@ def save_answer(
     updated = session.execute(
         update(AttemptAnswer)
         .where(AttemptAnswer.id == answer.id, AttemptAnswer.version == expected_version)
-        .values(answer_json=answer_json, version=expected_version + 1, updated_at=utc_now())
+        .values(answer_json=stored_answer, version=expected_version + 1, updated_at=utc_now())
     )
     if updated.rowcount != 1:
         session.refresh(answer)
@@ -289,6 +308,48 @@ def save_answer(
     session.flush()
     session.refresh(answer)
     return answer
+
+
+def _normalize_answer_if_needed(
+    item: AssignmentItem,
+    answer_json: dict[str, object],
+    answer_normalizer: MathAnswerNormalizer,
+) -> dict[str, object]:
+    if not _is_mathjson_item(item):
+        return answer_json
+    if answer_json.get("format") != "mathjson-v1":
+        raise MathAnswerValidationError("invalid_format", "数学答案必须使用 mathjson-v1 格式。")
+    latex = answer_json.get("latex")
+    if not isinstance(latex, str) or not latex.strip() or len(latex) > 2_000:
+        raise MathAnswerValidationError("invalid_latex", "数学答案 LaTeX 无效或过长。")
+    if "mathjson" not in answer_json:
+        raise MathAnswerValidationError("missing_mathjson", "数学答案缺少 MathJSON。")
+    variables = item.question_version.rule_json.get("variables", [])
+    try:
+        ast = answer_normalizer.normalize_math_answer(
+            {"mathjson": answer_json["mathjson"], "variables": variables}
+        )
+    except MathAnswerNormalizationError as error:
+        raise MathAnswerValidationError(error.code, str(error)) from error
+    return {
+        "format": "mathjson-v1",
+        "latex": latex,
+        "mathjson": answer_json["mathjson"],
+        "ast": ast,
+    }
+
+
+def is_mathjson_item(item: AssignmentItem) -> bool:
+    return _is_mathjson_item(item)
+
+
+def _is_mathjson_item(item: AssignmentItem) -> bool:
+    version = item.question_version
+    return (
+        version.question_type == "M2"
+        and version.grading_policy is not None
+        and version.grading_policy.policy_version == "2"
+    )
 
 
 def submit_attempt(

@@ -8,6 +8,7 @@ from typing import Any, Literal
 import sympy as sp
 from pydantic import BaseModel, Field
 
+from .mathjson import MathJsonValidationError, normalize_mathjson
 from .models import Criterion, Feedback, GradingResult
 
 _SYMBOL_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,31}$")
@@ -218,3 +219,153 @@ def grade_expression(request: ExpressionGradeRequest) -> GradingResult:
         criteria=criteria,
         feedback=feedback,
     )
+
+
+def grade_mathjson_expression(
+    *,
+    student_mathjson: object,
+    expected_mathjson: object,
+    variables: list[str],
+    required_form: Literal["expanded"] | None,
+    form_score: float,
+    max_score: float,
+) -> GradingResult:
+    if form_score > max_score:
+        raise ValueError("form_score cannot exceed max_score")
+    try:
+        student_ast = normalize_mathjson(student_mathjson, variables)
+        expected_ast = normalize_mathjson(expected_mathjson, variables)
+    except MathJsonValidationError as error:
+        return mathjson_review_result(error, max_score)
+
+    return grade_normalized_expression(
+        student_ast=student_ast,
+        expected_ast=expected_ast,
+        variables=variables,
+        required_form=required_form,
+        form_score=form_score,
+        max_score=max_score,
+    )
+
+
+def grade_normalized_expression(
+    *,
+    student_ast: dict[str, object],
+    expected_ast: dict[str, object],
+    variables: list[str],
+    required_form: Literal["expanded"] | None,
+    form_score: float,
+    max_score: float,
+) -> GradingResult:
+    if form_score > max_score:
+        raise ValueError("form_score cannot exceed max_score")
+
+    student = build_expression(student_ast, variables)
+    expected = build_expression(expected_ast, variables)
+    equivalent = sp.cancel(sp.together(student - expected)) == 0
+    form_ok = required_form is None or is_expanded_ast(student_ast)
+    correctness_max = max_score - form_score
+    correctness_score = correctness_max if equivalent else 0.0
+    awarded_form_score = form_score if equivalent and form_ok else 0.0
+    total = correctness_score + awarded_form_score
+
+    criteria = [
+        Criterion(
+            code="algebraic_equivalence",
+            score=correctness_score,
+            max_score=correctness_max,
+            passed=equivalent,
+            evidence=(
+                "The bounded symbolic difference simplified to zero."
+                if equivalent
+                else "The bounded symbolic difference did not simplify to zero."
+            ),
+        )
+    ]
+    feedback: list[Feedback] = []
+    if not equivalent:
+        feedback.append(Feedback(type="correctness", message="表达式与标准答案不等价。"))
+    elif not form_ok:
+        feedback.append(Feedback(type="form", message="结果等价，但未按题目要求展开。"))
+    if form_score > 0:
+        criteria.append(
+            Criterion(
+                code="required_form",
+                score=awarded_form_score,
+                max_score=form_score,
+                passed=form_ok,
+                evidence=(
+                    "The answer is in the required expanded form."
+                    if form_ok
+                    else "The answer is algebraically correct but not expanded."
+                ),
+            )
+        )
+
+    return GradingResult(
+        decision="auto_accepted"
+        if equivalent and form_ok
+        else "partial"
+        if equivalent
+        else "auto_rejected",
+        score=total,
+        max_score=max_score,
+        confidence=0.99,
+        criteria=criteria,
+        feedback=feedback,
+    )
+
+
+def is_expanded_ast(node: dict[str, object]) -> bool:
+    kind = node["type"]
+    if kind == "number" or kind == "symbol":
+        return True
+    if kind == "neg":
+        return is_expanded_ast(_node(node["arg"]))
+    if kind == "div":
+        return is_expanded_ast(_node(node["numerator"])) and is_expanded_ast(
+            _node(node["denominator"])
+        )
+    if kind == "pow":
+        base = _node(node["base"])
+        return base["type"] != "add" and is_expanded_ast(base)
+    if kind == "mul":
+        arguments = _nodes(node["args"])
+        return all(
+            argument["type"] != "add" and is_expanded_ast(argument) for argument in arguments
+        )
+    if kind == "add":
+        return all(is_expanded_ast(argument) for argument in _nodes(node["args"]))
+    raise ValueError(f"Unsupported AST node type: {kind!r}")
+
+
+def mathjson_review_result(error: MathJsonValidationError, max_score: float) -> GradingResult:
+    return GradingResult(
+        decision="needs_review",
+        score=0,
+        max_score=max_score,
+        confidence=0,
+        requires_review=True,
+        criteria=[
+            Criterion(
+                code=error.code,
+                score=0,
+                max_score=max_score,
+                passed=False,
+                evidence=str(error),
+            )
+        ],
+        feedback=[Feedback(type="math_input", message="该数学表达式需要教师复核。")],
+    )
+
+
+def _node(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError("AST node must be an object")
+    return value
+
+
+def _nodes(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list) or not all(isinstance(node, dict) for node in value):
+        raise ValueError("AST arguments must be objects")
+    return value
