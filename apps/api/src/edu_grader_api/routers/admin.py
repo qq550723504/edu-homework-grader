@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -96,3 +96,35 @@ def assign_teacher(
             )
         )
     return {"class_id": str(classroom.id), "teacher_id": str(teacher.id)}
+
+
+@router.get("/audit-logs")
+def list_audit_logs(
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.ADMIN))],
+    session: Annotated[Session, Depends(get_session)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    event_type: str | None = None,
+) -> dict[str, object]:
+    statement = select(AuditLog).where(AuditLog.tenant_id == UUID(principal.tenant_id))
+    if event_type is not None:
+        statement = statement.where(AuditLog.event_type == event_type)
+    entries = session.scalars(
+        statement.order_by(AuditLog.occurred_at.desc(), AuditLog.id.desc())
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    return {
+        "items": [
+            {
+                "id": str(entry.id),
+                "event_type": entry.event_type,
+                "target_type": entry.target_type,
+                "target_id": str(entry.target_id),
+                "metadata": entry.metadata_json,
+            }
+            for entry in entries
+        ],
+        "limit": limit,
+        "offset": offset,
+    }

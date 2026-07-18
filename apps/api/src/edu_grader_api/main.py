@@ -2,6 +2,7 @@ from fastapi import Depends, FastAPI
 
 from .auth import CurrentPrincipal, get_current_principal
 from .routers.admin import router as admin_router
+from .routers.classes import router as classes_router
 from .settings import settings
 
 app = FastAPI(
@@ -10,6 +11,7 @@ app = FastAPI(
     description="Core API for assignments, submissions, reviews, corrections and audit trails.",
 )
 app.include_router(admin_router)
+app.include_router(classes_router)
 
 
 @app.get("/health", tags=["system"])

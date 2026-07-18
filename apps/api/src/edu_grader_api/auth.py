@@ -135,10 +135,12 @@ def get_current_principal(
     if user is None:
         user = bind_rostered_student(session, identity)
 
-    if user is None or user.tenant.slug != settings.oidc_tenant_slug:
+    if user is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="platform membership required"
         )
+    if user.tenant.slug != settings.oidc_tenant_slug:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
 
     return CurrentPrincipal(
         user_id=str(user.id),
