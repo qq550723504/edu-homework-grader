@@ -4,7 +4,15 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, String, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON, Uuid
@@ -30,6 +38,16 @@ class TestRunStatus(StrEnum):
     GRADING_ERROR = "grading_error"
 
 
+class AssignmentStatus(StrEnum):
+    DRAFT = "draft"
+    PUBLISHED = "published"
+
+
+class AttemptStatus(StrEnum):
+    DRAFT = "draft"
+    SUBMITTED = "submitted"
+
+
 def role_values(roles: type[Role]) -> list[str]:
     return [role.value for role in roles]
 
@@ -48,6 +66,8 @@ class Tenant(Base):
 
     users: Mapped[list[User]] = relationship(back_populates="tenant")
     classes: Mapped[list[Classroom]] = relationship(back_populates="tenant")
+    assignments: Mapped[list[Assignment]] = relationship(back_populates="tenant")
+    student_attempts: Mapped[list[StudentAttempt]] = relationship(back_populates="tenant")
 
 
 class User(Base):
@@ -83,6 +103,11 @@ class User(Base):
     tenant: Mapped[Tenant] = relationship(back_populates="users")
     taught_classes: Mapped[list[ClassTeacher]] = relationship(back_populates="teacher")
     enrollments: Mapped[list[Enrollment]] = relationship(back_populates="student")
+    created_assignments: Mapped[list[Assignment]] = relationship(
+        back_populates="created_by_user", foreign_keys="Assignment.created_by_user_id"
+    )
+    student_attempts: Mapped[list[StudentAttempt]] = relationship(back_populates="student")
+    submission_receipts: Mapped[list[SubmissionReceipt]] = relationship(back_populates="student")
 
 
 class Classroom(Base):
@@ -101,6 +126,7 @@ class Classroom(Base):
     tenant: Mapped[Tenant] = relationship(back_populates="classes")
     teachers: Mapped[list[ClassTeacher]] = relationship(back_populates="classroom")
     enrollments: Mapped[list[Enrollment]] = relationship(back_populates="classroom")
+    assignments: Mapped[list[Assignment]] = relationship(back_populates="classroom")
 
 
 class ClassTeacher(Base):
@@ -206,6 +232,7 @@ class QuestionVersion(Base):
     created_by_user: Mapped[User] = relationship(foreign_keys=[created_by_user_id])
     test_cases: Mapped[list[QuestionTestCase]] = relationship(back_populates="question_version")
     test_runs: Mapped[list[QuestionTestRun]] = relationship(back_populates="question_version")
+    assignment_items: Mapped[list[AssignmentItem]] = relationship(back_populates="question_version")
 
 
 class QuestionTestCase(Base):
@@ -274,3 +301,124 @@ class QuestionTestCaseRun(Base):
     error_detail: Mapped[str | None] = mapped_column(String(2_000))
 
     test_run: Mapped[QuestionTestRun] = relationship(back_populates="case_runs")
+
+
+class Assignment(Base):
+    __tablename__ = "assignments"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    class_id: Mapped[UUID] = mapped_column(ForeignKey("classes.id"), nullable=False)
+    created_by_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    title: Mapped[str] = mapped_column(String(200))
+    subject: Mapped[str] = mapped_column(String(30))
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    submission_rule_json: Mapped[dict[str, object]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql")
+    )
+    status: Mapped[AssignmentStatus] = mapped_column(
+        Enum(AssignmentStatus, native_enum=False, values_callable=role_values),
+        default=AssignmentStatus.DRAFT,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    tenant: Mapped[Tenant] = relationship(back_populates="assignments")
+    classroom: Mapped[Classroom] = relationship(back_populates="assignments")
+    created_by_user: Mapped[User] = relationship(
+        back_populates="created_assignments", foreign_keys=[created_by_user_id]
+    )
+    items: Mapped[list[AssignmentItem]] = relationship(back_populates="assignment")
+    attempts: Mapped[list[StudentAttempt]] = relationship(back_populates="assignment")
+    submission_receipts: Mapped[list[SubmissionReceipt]] = relationship(back_populates="assignment")
+
+
+class AssignmentItem(Base):
+    __tablename__ = "assignment_items"
+    __table_args__ = (
+        UniqueConstraint("assignment_id", "position", name="uq_assignment_item_position"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    assignment_id: Mapped[UUID] = mapped_column(ForeignKey("assignments.id"), nullable=False)
+    question_version_id: Mapped[UUID] = mapped_column(
+        ForeignKey("question_versions.id"), nullable=False
+    )
+    position: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    assignment: Mapped[Assignment] = relationship(back_populates="items")
+    question_version: Mapped[QuestionVersion] = relationship(back_populates="assignment_items")
+    answers: Mapped[list[AttemptAnswer]] = relationship(back_populates="assignment_item")
+
+
+class StudentAttempt(Base):
+    __tablename__ = "student_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "assignment_id", "student_id", "attempt_number", name="uq_student_attempt_number"
+        ),
+        CheckConstraint("attempt_number > 0", name="ck_student_attempt_number_positive"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    assignment_id: Mapped[UUID] = mapped_column(ForeignKey("assignments.id"), nullable=False)
+    student_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    attempt_number: Mapped[int] = mapped_column(Integer)
+    status: Mapped[AttemptStatus] = mapped_column(
+        Enum(AttemptStatus, native_enum=False, values_callable=role_values),
+        default=AttemptStatus.DRAFT,
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    assignment: Mapped[Assignment] = relationship(back_populates="attempts")
+    tenant: Mapped[Tenant] = relationship(back_populates="student_attempts")
+    student: Mapped[User] = relationship(back_populates="student_attempts")
+    answers: Mapped[list[AttemptAnswer]] = relationship(back_populates="attempt")
+
+
+class AttemptAnswer(Base):
+    __tablename__ = "attempt_answers"
+    __table_args__ = (
+        UniqueConstraint("attempt_id", "assignment_item_id", name="uq_attempt_answer_item"),
+        CheckConstraint("version > 0", name="ck_attempt_answer_version_positive"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    attempt_id: Mapped[UUID] = mapped_column(ForeignKey("student_attempts.id"), nullable=False)
+    assignment_item_id: Mapped[UUID] = mapped_column(
+        ForeignKey("assignment_items.id"), nullable=False
+    )
+    answer_json: Mapped[dict[str, object]] = mapped_column(JSON().with_variant(JSONB, "postgresql"))
+    version: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+    attempt: Mapped[StudentAttempt] = relationship(back_populates="answers")
+    assignment_item: Mapped[AssignmentItem] = relationship(back_populates="answers")
+
+
+class SubmissionReceipt(Base):
+    __tablename__ = "submission_receipts"
+    __table_args__ = (
+        UniqueConstraint("student_id", "idempotency_key", name="uq_submission_receipt_student_key"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    student_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    assignment_id: Mapped[UUID] = mapped_column(ForeignKey("assignments.id"), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(36))
+    request_fingerprint: Mapped[str] = mapped_column(String(200))
+    response_status: Mapped[int] = mapped_column(Integer)
+    response_json: Mapped[dict[str, object]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    tenant: Mapped[Tenant] = relationship()
+    student: Mapped[User] = relationship(back_populates="submission_receipts")
+    assignment: Mapped[Assignment] = relationship(back_populates="submission_receipts")
