@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,7 +10,7 @@ from sqlalchemy.pool import StaticPool
 from edu_grader_api.auth import VerifiedIdentity, get_token_verifier
 from edu_grader_api.db import Base, get_session
 from edu_grader_api.main import app
-from edu_grader_api.models import Enrollment, Role, Tenant, User
+from edu_grader_api.models import AuditLog, ClassTeacher, Enrollment, Role, Tenant, User
 from edu_grader_api.settings import settings
 
 
@@ -100,3 +101,32 @@ def test_reimport_updates_name_without_duplicate_enrollment(
         == 200
     )
     assert session.scalar(select(func.count(Enrollment.class_id))) == 1
+
+
+def test_admin_can_create_class_and_assign_tenant_teacher(
+    admin_client: TestClient, session: Session
+) -> None:
+    teacher = User(
+        tenant=session.scalar(select(Tenant).where(Tenant.slug == "pilot")),
+        role=Role.TEACHER,
+        display_name="Teacher",
+    )
+    session.add(teacher)
+    session.commit()
+
+    created = admin_client.post(
+        "/v1/admin/classes",
+        json={"code": "7A", "name": "Year 7 A"},
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert created.status_code == 201
+    class_id = created.json()["id"]
+    assigned = admin_client.put(
+        f"/v1/admin/classes/{class_id}/teachers/{teacher.id}",
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert assigned.status_code == 200
+    assert session.get(ClassTeacher, (UUID(class_id), teacher.id)) is not None
+    assert session.scalar(select(func.count(AuditLog.id))) == 2
