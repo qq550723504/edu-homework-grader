@@ -53,6 +53,24 @@ docker compose up --build
 - Grader：http://localhost:8010/docs
 - PostgreSQL：localhost:5432
 - Redis：localhost:6379
+- Keycloak（开发身份服务）：http://localhost:8080
+
+开发身份服务会在首次启动时导入 `infra/keycloak/edu-grader-realm.json`。仅本地开发可使用
+`.env` 中的 Keycloak 管理员凭据和演示账号；生产环境必须替换为学校的 OIDC 发行方和受控密钥。
+
+首次启动 API 前执行迁移与管理员引导：
+
+```bash
+docker compose exec api python -m alembic -c alembic.ini upgrade head
+docker compose exec api python -m edu_grader_api.bootstrap
+```
+
+可重复运行的 API 质量检查：
+
+```bash
+make api-test
+make api-lint
+```
 
 ### 不使用 Docker
 

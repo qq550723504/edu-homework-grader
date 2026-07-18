@@ -69,8 +69,6 @@ def grade_exact(request: EnglishExactRequest) -> GradingResult:
             )
         ],
         feedback=(
-            []
-            if matched
-            else [Feedback(type="answer", message="答案未匹配教师配置的可接受答案。")]
+            [] if matched else [Feedback(type="answer", message="答案未匹配教师配置的可接受答案。")]
         ),
     )

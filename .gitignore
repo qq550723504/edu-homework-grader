@@ -28,3 +28,6 @@ Thumbs.db
 # Runtime
 *.log
 coverage/
+
+# Local linked worktrees
+.worktrees/
