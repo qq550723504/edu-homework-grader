@@ -111,9 +111,14 @@ def _normalize(value: object, context: _Context, depth: int) -> dict[str, object
         exponent = _normalize(arguments[1], context, depth + 1)
         if exponent["type"] != "number" or not _INTEGER.fullmatch(str(exponent["value"])):
             raise MathJsonValidationError("invalid_exponent", "exponents must be integers")
-        if not -10 <= int(str(exponent["value"])) <= 10:
+        exponent_value = int(str(exponent["value"]))
+        if not -10 <= exponent_value <= 10:
             raise MathJsonValidationError(
                 "exponent_out_of_range", "exponents must be between -10 and 10"
+            )
+        if exponent_value < 0 and base["type"] != "number":
+            raise MathJsonValidationError(
+                "symbolic_denominator", "negative powers of symbolic expressions require review"
             )
         return {"type": "pow", "base": base, "exponent": exponent}
     raise MathJsonValidationError("unsupported_operator", f"operator {operator!r} is not supported")

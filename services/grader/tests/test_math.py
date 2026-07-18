@@ -5,7 +5,9 @@ from edu_grader.math_ast import (
     NumericGradeRequest,
     build_expression,
     grade_expression,
+    grade_mathjson_expression,
     grade_numeric,
+    is_expanded_ast,
 )
 
 
@@ -105,3 +107,44 @@ def test_exponent_limit_is_enforced() -> None:
 
     with pytest.raises(ValueError, match="between -10 and 10"):
         build_expression(expression, variables=["x"])
+
+
+def test_mathjson_symbolic_denominator_requires_review() -> None:
+    result = grade_mathjson_expression(
+        student_mathjson=["Divide", 1, "x"],
+        expected_mathjson=["Divide", 1, "x"],
+        variables=["x"],
+        required_form=None,
+        form_score=0,
+        max_score=1,
+    )
+
+    assert result.decision == "needs_review"
+    assert result.requires_review is True
+    assert result.criteria[0].code == "symbolic_denominator"
+
+
+def test_mathjson_unsupported_operator_requires_review() -> None:
+    result = grade_mathjson_expression(
+        student_mathjson=["Assign", "x", 1],
+        expected_mathjson=["Add", "x", 1],
+        variables=["x"],
+        required_form=None,
+        form_score=0,
+        max_score=1,
+    )
+
+    assert result.decision == "needs_review"
+    assert result.criteria[0].code == "unsupported_operator"
+
+
+def test_product_with_additive_factor_is_not_expanded() -> None:
+    assert (
+        is_expanded_ast(
+            {
+                "type": "mul",
+                "args": [number("2"), {"type": "add", "args": [symbol("x"), number("3")]}],
+            }
+        )
+        is False
+    )
