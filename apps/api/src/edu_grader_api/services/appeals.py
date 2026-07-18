@@ -31,6 +31,7 @@ def decide_appeal(
     appeal_id: UUID,
     approve: bool,
     version: int,
+    reason: str | None,
 ) -> CorrectionAttempt | None:
     appeal = session.scalar(select(ReviewAppeal).where(ReviewAppeal.id == appeal_id))
     if appeal is None:
@@ -45,11 +46,14 @@ def decide_appeal(
         raise AppealAccessError()
     if appeal.status is not AppealStatus.OPEN or appeal.version != version:
         raise AppealConflictError()
+    if not approve and not (reason and reason.strip()):
+        raise ValueError("reason is required")
     appeal.version += 1
     appeal.decided_by_user_id = teacher_id
     appeal.decided_at = utc_now()
     if not approve:
         appeal.status = AppealStatus.REJECTED
+        appeal.decision_reason = reason.strip()
         return None
     correction = StudentAttempt(
         tenant_id=tenant_id,

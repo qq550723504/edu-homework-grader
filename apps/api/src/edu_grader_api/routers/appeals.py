@@ -4,11 +4,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from ..auth import CurrentPrincipal
 from ..db import get_session
 from ..dependencies import require_role
-from ..models import Role
+from ..models import ReviewAppeal, Role
 from ..services.appeals import (
     AppealAccessError,
     AppealConflictError,
@@ -27,6 +28,7 @@ class CreateAppealRequest(BaseModel):
 class DecideAppealRequest(BaseModel):
     approve: bool
     version: int = Field(ge=0)
+    reason: str | None = Field(default=None, max_length=2_000)
 
 
 @router.post("/attempts/{attempt_id}/appeals", status_code=status.HTTP_201_CREATED)
@@ -53,6 +55,30 @@ def create_appeal_route(
     return {"id": str(appeal.id), "status": appeal.status.value}
 
 
+@router.get("/appeals")
+def list_student_appeals(
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.STUDENT))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, list[dict[str, str]]]:
+    appeals = list(
+        session.scalars(
+            select(ReviewAppeal)
+            .where(ReviewAppeal.student_id == UUID(principal.user_id))
+            .order_by(ReviewAppeal.created_at, ReviewAppeal.id)
+        )
+    )
+    return {
+        "appeals": [
+            {
+                "id": str(appeal.id),
+                "attempt_id": str(appeal.original_attempt_id),
+                "status": appeal.status.value,
+            }
+            for appeal in appeals
+        ]
+    }
+
+
 @teacher_router.post("/{appeal_id}/decisions", status_code=status.HTTP_201_CREATED)
 def decide_appeal_route(
     appeal_id: UUID,
@@ -70,9 +96,12 @@ def decide_appeal_route(
                 appeal_id=appeal_id,
                 approve=body.approve,
                 version=body.version,
+                reason=body.reason,
             )
     except AppealAccessError:
         raise HTTPException(status_code=404, detail="resource not found") from None
     except AppealConflictError:
         raise HTTPException(status_code=409, detail="appeal changed") from None
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     return {"correction_attempt_id": str(link.correction_attempt_id) if link else None}
