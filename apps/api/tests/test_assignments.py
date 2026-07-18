@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
@@ -13,6 +14,7 @@ from edu_grader_api.db import Base, get_session
 from edu_grader_api.main import app
 from edu_grader_api.models import (
     Assignment,
+    AssignmentItem,
     AssignmentStatus,
     ClassTeacher,
     Classroom,
@@ -20,6 +22,8 @@ from edu_grader_api.models import (
     Question,
     QuestionVersion,
     Role,
+    StudentAttempt,
+    SubmissionReceipt,
     Tenant,
     User,
     VersionStatus,
@@ -196,3 +200,80 @@ def test_unassigned_teacher_and_draft_question_are_rejected(
     )
 
     assert draft_item.status_code == 422
+
+
+def published_assignment_for_student(
+    session: Session,
+) -> tuple[User, Classroom, Assignment, AssignmentItem, QuestionVersion]:
+    teacher, _, student, classroom, published, _ = make_classroom_data(session)
+    assignment = Assignment(
+        tenant=classroom.tenant,
+        classroom=classroom,
+        created_by_user=teacher,
+        title="Published algebra",
+        subject="mathematics",
+        due_at=datetime(2026, 7, 20, tzinfo=timezone.utc),
+        submission_rule_json={"allow_late": False},
+        status=AssignmentStatus.PUBLISHED,
+        published_at=datetime(2026, 7, 18, tzinfo=timezone.utc),
+    )
+    item = AssignmentItem(assignment=assignment, question_version=published, position=1)
+    session.add_all([assignment, item])
+    session.commit()
+    return student, classroom, assignment, item, published
+
+
+def test_enrolled_student_lists_pending_and_opens_frozen_assignment(
+    client: TestClient, session: Session
+) -> None:
+    student, _, assignment, _, published = published_assignment_for_student(session)
+
+    listed = client.get("/v1/student/assignments", headers=authorize(client, student))
+    detail = client.get(
+        f"/v1/student/assignments/{assignment.id}", headers=authorize(client, student)
+    )
+
+    assert listed.status_code == 200
+    assert [entry["id"] for entry in listed.json()["pending"]] == [str(assignment.id)]
+    assert detail.status_code == 200
+    assert detail.json()["items"][0]["question_version_id"] == str(published.id)
+
+
+def test_answer_save_rejects_stale_version_and_submitted_attempt(
+    client: TestClient, session: Session
+) -> None:
+    student, _, assignment, item, _ = published_assignment_for_student(session)
+    detail = client.get(
+        f"/v1/student/assignments/{assignment.id}", headers=authorize(client, student)
+    )
+    attempt_id = detail.json()["attempt"]["id"]
+    answer_url = f"/v1/student/attempts/{attempt_id}/answers/{item.id}"
+
+    saved = client.put(
+        answer_url,
+        headers=authorize(client, student),
+        json={"answer": {"value": "5"}, "version": 0},
+    )
+    conflict = client.put(
+        answer_url,
+        headers=authorize(client, student),
+        json={"answer": {"value": "6"}, "version": 0},
+    )
+
+    assert saved.status_code == 200
+    assert saved.json()["version"] == 1
+    assert conflict.status_code == 409
+    assert conflict.json()["current"]["answer"] == {"value": "5"}
+
+
+def test_submit_replays_a_matching_idempotency_key(client: TestClient, session: Session) -> None:
+    student, _, assignment, _, _ = published_assignment_for_student(session)
+    headers = authorize(client, student) | {"Idempotency-Key": str(uuid4())}
+
+    first = client.post(f"/v1/student/assignments/{assignment.id}/submit", headers=headers)
+    retry = client.post(f"/v1/student/assignments/{assignment.id}/submit", headers=headers)
+
+    assert first.status_code == retry.status_code == 200
+    assert first.json() == retry.json()
+    assert session.scalar(select(func.count(SubmissionReceipt.id))) == 1
+    assert session.scalar(select(StudentAttempt.status)).value == "submitted"

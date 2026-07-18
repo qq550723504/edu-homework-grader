@@ -4,6 +4,7 @@ from .auth import CurrentPrincipal, get_current_principal
 from .routers.admin import router as admin_router
 from .routers.classes import router as classes_router
 from .routers.assignments import router as assignments_router
+from .routers.assignments import student_router as student_assignments_router
 from .routers.questions import router as questions_router
 from .routers.questions import version_router as question_versions_router
 from .settings import settings
@@ -16,6 +17,7 @@ app = FastAPI(
 app.include_router(admin_router)
 app.include_router(classes_router)
 app.include_router(assignments_router)
+app.include_router(student_assignments_router)
 app.include_router(questions_router)
 app.include_router(question_versions_router)
 
