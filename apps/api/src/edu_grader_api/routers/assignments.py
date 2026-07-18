@@ -17,6 +17,7 @@ from ..services.assignments import (
     AnswerConflictError,
     AssignmentStateError,
     AssignmentValidationError,
+    MathAnswerValidationError,
     add_assignment_item,
     create_assignment,
     get_teacher_assignment,
@@ -26,6 +27,7 @@ from ..services.assignments import (
     save_answer,
     SubmissionConflictError,
     submit_attempt,
+    is_mathjson_item,
 )
 
 
@@ -193,6 +195,7 @@ def get_student_assignment_route(
                 "question_version_id": str(item.question_version_id),
                 "prompt": item.question_version.prompt,
                 "position": item.position,
+                "input": _item_input(item),
                 "answer": answers[item.id].answer_json if item.id in answers else None,
                 "version": answers[item.id].version if item.id in answers else 0,
             }
@@ -234,6 +237,11 @@ def save_answer_route(
         )
     except AssignmentStateError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    except MathAnswerValidationError as error:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            content={"code": error.code, "message": str(error)},
+        )
     return {"answer": answer.answer_json, "version": answer.version}
 
 
@@ -280,4 +288,15 @@ def _assignment_summary(assignment) -> dict[str, str]:
         "subject": assignment.subject,
         "due_at": assignment.due_at.isoformat(),
         "status": assignment.status.value,
+    }
+
+
+def _item_input(item: AssignmentItem) -> dict[str, object]:
+    if not is_mathjson_item(item):
+        return {"kind": "text"}
+    rule = item.question_version.rule_json
+    return {
+        "kind": "mathjson-v1",
+        "variables": rule.get("variables", []),
+        "required_form": rule.get("required_form"),
     }
