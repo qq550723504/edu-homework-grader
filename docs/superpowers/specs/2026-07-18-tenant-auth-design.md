@@ -62,7 +62,7 @@ Database constraints and service checks enforce that every linked user belongs t
 ## Authorization and request flow
 
 1. The API dependency reads the Bearer token and validates it using the configured issuer, audience, Discovery metadata, and JWKS key matching `kid`.
-2. It finds the user by verified `(issuer, sub)`. If the identity is an unbound rostered student, it matches the verified `school_id` claim within the tenant and binds the subject transactionally. It never creates an ordinary user from an arbitrary token.
+2. It finds the user by verified `(issuer, sub)`. The trusted server-side `OIDC_TENANT_SLUG` configuration selects the only tenant eligible for the issuer in this pilot. If the identity is an unbound rostered student, it matches the verified `school_id` claim only inside that tenant and binds the subject transactionally. It never creates an ordinary user from an arbitrary token.
 3. The request receives a `CurrentPrincipal` containing the internal user UUID, tenant UUID, and database role. Route dependencies use this value, not a client-supplied tenant ID or raw token role.
 4. Admin routes require `admin`. Teacher class routes require an assignment in `class_teachers`. Student class routes require an `enrollments` row for the current student. All entity queries include the principal's `tenant_id`.
 
@@ -81,7 +81,7 @@ Malformed CSV, duplicate student IDs in the same input, unknown referenced users
 
 ## Configuration and operations
 
-Add `DATABASE_URL`, `OIDC_ISSUER`, `OIDC_AUDIENCE`, `OIDC_SCHOOL_ID_CLAIM`, `BOOTSTRAP_ADMIN_SUB`, and `BOOTSTRAP_ADMIN_TENANT_SLUG` to application settings and `.env.example`. Use a single PostgreSQL Compose service for the pilot database; Keycloak has its own PostgreSQL database/schema configuration so identity data remains outside the application tables. Compose starts Keycloak before services that need its Discovery endpoint, but API tests inject a verifier and never depend on the network or a running identity provider.
+Add `DATABASE_URL`, `OIDC_ISSUER`, `OIDC_AUDIENCE`, `OIDC_SCHOOL_ID_CLAIM`, `OIDC_TENANT_SLUG`, `BOOTSTRAP_ADMIN_SUB`, and `BOOTSTRAP_ADMIN_TENANT_SLUG` to application settings and `.env.example`. Use a single PostgreSQL Compose service for the pilot database; Keycloak has its own PostgreSQL database/schema configuration so identity data remains outside the application tables. Compose starts Keycloak before services that need its Discovery endpoint, but API tests inject a verifier and never depend on the network or a running identity provider.
 
 Alembic is the only supported schema change mechanism. Application startup does not call `create_all`; local Docker startup runs `alembic upgrade head` before serving requests.
 
@@ -97,4 +97,3 @@ Tests are written before implementation and exercise real route dependencies and
 6. A fresh PostgreSQL database migrates to the Alembic head with the required primary keys, tenant foreign keys, unique constraints, and audit table.
 
 The slice satisfies Issue #2's tenant/user/class/enrollment models, three roles, teacher/student boundaries, student/class roster import interface, cross-tenant tests, and audit requirements. It intentionally defers product and grading data to dependent issues.
-
