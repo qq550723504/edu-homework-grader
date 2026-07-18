@@ -56,6 +56,8 @@ class GraderClient(Protocol):
         question_type: str,
         rule_json: dict[str, object],
         answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
     ) -> GradeResult: ...
 
 
@@ -214,12 +216,17 @@ def run_question_tests(
     )
     session.add(test_run)
     session.flush()
+    policy = session.get(GradingPolicy, draft.grading_policy_id)
+    policy_version = policy.policy_version if policy is not None else None
 
     grader_error = False
     for test_case in test_cases:
         try:
             result = grader_client.grade(
-                draft.question_type, draft.rule_json, test_case.answer_json
+                draft.question_type,
+                draft.rule_json,
+                test_case.answer_json,
+                policy_version=policy_version,
             )
         except Exception as error:  # Grader failures must remain visible in run history.
             grader_error = True
@@ -255,8 +262,6 @@ def run_question_tests(
 
     session.flush()
     case_runs = list(test_run.case_runs)
-    policy = session.get(GradingPolicy, draft.grading_policy_id)
-    policy_version = policy.policy_version if policy is not None else None
     missing_categories = _required_test_categories(draft.question_type, policy_version) - {
         test_case.category for test_case in test_cases
     }
