@@ -164,3 +164,41 @@ def decide_review_task(
     )
     session.flush()
     return decision
+
+
+def batch_confirm_deterministic(
+    session: Session,
+    *,
+    tenant_id: UUID,
+    teacher_id: UUID,
+    assignment_id: UUID,
+    task_ids: list[UUID],
+) -> list[ReviewDecision]:
+    tasks = [
+        get_teacher_review_task(
+            session, tenant_id=tenant_id, teacher_id=teacher_id, task_id=task_id
+        )
+        for task_id in task_ids
+    ]
+    for task in tasks:
+        question_type = task.grading_run.question_version.question_type
+        if (
+            task.attempt_answer.attempt.assignment_id != assignment_id
+            or task.reason is not ReviewReason.AUTO_CONFIRMATION
+            or task.grading_run.requires_review
+            or question_type in {"E3", "E4"}
+        ):
+            raise ReviewConflictError()
+    return [
+        decide_review_task(
+            session,
+            tenant_id=tenant_id,
+            teacher_id=teacher_id,
+            task_id=task.id,
+            action=ReviewAction.CONFIRM,
+            version=task.version,
+            score=None,
+            reason=None,
+        )
+        for task in tasks
+    ]

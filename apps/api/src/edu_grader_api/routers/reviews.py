@@ -13,6 +13,7 @@ from ..services.reviews import (
     ReviewAccessError,
     ReviewConflictError,
     ReviewValidationError,
+    batch_confirm_deterministic,
     decide_review_task,
     get_teacher_review_task,
     list_teacher_review_tasks,
@@ -27,6 +28,10 @@ class ReviewDecisionRequest(BaseModel):
     version: int = Field(ge=0)
     score: float | None = None
     reason: str | None = Field(default=None, max_length=2_000)
+
+
+class BatchConfirmRequest(BaseModel):
+    task_ids: list[UUID] = Field(min_length=1)
 
 
 @router.get("")
@@ -160,4 +165,36 @@ def decide_review_task_route(
         "original_score": decision.original_score,
         "final_score": decision.final_score,
         "task_version": decision.task_version,
+    }
+
+
+@router.post("/batch-confirm", status_code=status.HTTP_201_CREATED)
+def batch_confirm_route(
+    assignment_id: UUID,
+    body: BatchConfirmRequest,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, list[dict[str, object]]]:
+    try:
+        session.rollback()
+        with session.begin():
+            decisions = batch_confirm_deterministic(
+                session,
+                tenant_id=UUID(principal.tenant_id),
+                teacher_id=UUID(principal.user_id),
+                assignment_id=assignment_id,
+                task_ids=body.task_ids,
+            )
+    except ReviewAccessError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+        ) from None
+    except ReviewConflictError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="task is not batch eligible"
+        ) from None
+    return {
+        "decisions": [
+            {"id": str(decision.id), "action": decision.action.value} for decision in decisions
+        ]
     }
