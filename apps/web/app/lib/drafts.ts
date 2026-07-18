@@ -19,15 +19,26 @@ interface OutboxRecord extends DraftRecord {
   id: string
 }
 
+interface SubmissionRecord {
+  attemptId: string
+  key: string
+}
+
 class HomeworkDraftDatabase extends Dexie {
   drafts!: Table<DraftRecord, [string, string, string, string]>
   outbox!: Table<OutboxRecord, string>
+  submissions!: Table<SubmissionRecord, string>
 
   constructor() {
     super('edu-homework-grader-drafts')
     this.version(1).stores({
       drafts: '[tenantId+userId+attemptId+itemId], attemptId, updatedAt',
       outbox: 'id, attemptId, updatedAt'
+    })
+    this.version(2).stores({
+      drafts: '[tenantId+userId+attemptId+itemId], attemptId, updatedAt',
+      outbox: 'id, attemptId, updatedAt',
+      submissions: 'attemptId'
     })
   }
 }
@@ -55,6 +66,25 @@ export async function queueAnswer(input: Omit<DraftRecord, 'status' | 'updatedAt
 export async function resetDraftDatabase(): Promise<void> {
   await draftDatabase.drafts.clear()
   await draftDatabase.outbox.clear()
+  await draftDatabase.submissions.clear()
+}
+
+export async function canSubmitAttempt(attemptId: string): Promise<boolean> {
+  const queued = await draftDatabase.outbox.where('attemptId').equals(attemptId).count()
+  const conflicts = await draftDatabase.drafts.where('attemptId').equals(attemptId)
+    .filter((draft) => draft.status === 'conflict').count()
+  return queued === 0 && conflicts === 0
+}
+
+export async function getSubmissionKey(
+  attemptId: string,
+  createKey: () => string = () => crypto.randomUUID()
+): Promise<string> {
+  const existing = await draftDatabase.submissions.get(attemptId)
+  if (existing) return existing.key
+  const key = createKey()
+  await draftDatabase.submissions.put({ attemptId, key })
+  return key
 }
 
 export async function flushAttempt(attemptId: string, api: DraftSyncApi): Promise<void> {

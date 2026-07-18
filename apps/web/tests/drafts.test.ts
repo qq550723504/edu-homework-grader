@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { draftDatabase, flushAttempt, queueAnswer, resetDraftDatabase } from '../app/lib/drafts'
+import {
+  canSubmitAttempt,
+  draftDatabase,
+  flushAttempt,
+  getSubmissionKey,
+  queueAnswer,
+  resetDraftDatabase
+} from '../app/lib/drafts'
 
 afterEach(async () => {
   await resetDraftDatabase()
@@ -42,5 +49,18 @@ describe('assignment draft outbox', () => {
     })
     expect(await draftDatabase.drafts.get(['tenant-1', 'student-1', 'attempt-1', 'item-1']))
       .toMatchObject({ answer: { value: '6' }, status: 'conflict', serverAnswer: { value: '4' }, serverVersion: 2 })
+  })
+
+  it('blocks submission until the outbox is clear and reuses one generated submission key', async () => {
+    await queueAnswer({
+      tenantId: 'tenant-1', userId: 'student-1', attemptId: 'attempt-1', itemId: 'item-1',
+      answer: { value: '6' }, version: 0
+    })
+    expect(await canSubmitAttempt('attempt-1')).toBe(false)
+
+    await flushAttempt('attempt-1', { saveAnswer: async () => ({ kind: 'saved' as const, version: 1 }) })
+    expect(await canSubmitAttempt('attempt-1')).toBe(true)
+    expect(await getSubmissionKey('attempt-1', () => 'key-1')).toBe('key-1')
+    expect(await getSubmissionKey('attempt-1', () => 'key-2')).toBe('key-1')
   })
 })
