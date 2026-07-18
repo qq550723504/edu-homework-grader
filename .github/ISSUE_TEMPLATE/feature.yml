@@ -1,0 +1,24 @@
+name: 功能任务
+about: 产品、研发或教学能力任务
+title: "[Feature] "
+labels: []
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: 目标结果
+      description: 描述用户或业务最终获得什么。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收条件
+      description: 使用可验证的条目描述完成标准。
+    validations:
+      required: true
+  - type: textarea
+    id: risks
+    attributes:
+      label: 风险与边界
+      description: 记录隐私、安全、评分准确性和暂不处理的范围。
