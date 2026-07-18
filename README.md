@@ -58,6 +58,20 @@ docker compose up --build
 开发身份服务会在首次启动时导入 `infra/keycloak/edu-grader-realm.json`。仅本地开发可使用
 `.env` 中的 Keycloak 管理员凭据和演示账号；生产环境必须替换为学校的 OIDC 发行方和受控密钥。
 
+首次启动 API 前执行迁移与管理员引导：
+
+```bash
+docker compose exec api python -m alembic -c alembic.ini upgrade head
+docker compose exec api python -m edu_grader_api.bootstrap
+```
+
+可重复运行的 API 质量检查：
+
+```bash
+make api-test
+make api-lint
+```
+
 ### 不使用 Docker
 
 Python 需要 3.12 或更高版本，Node.js 建议使用 22 LTS。
