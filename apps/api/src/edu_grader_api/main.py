@@ -1,5 +1,12 @@
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
+from .auth import CurrentPrincipal, get_current_principal
+from .routers.admin import router as admin_router
+from .routers.classes import router as classes_router
+from .routers.assignments import router as assignments_router
+from .routers.assignments import student_router as student_assignments_router
+from .routers.questions import router as questions_router
+from .routers.questions import version_router as question_versions_router
 from .settings import settings
 
 app = FastAPI(
@@ -7,6 +14,12 @@ app = FastAPI(
     version="0.1.0",
     description="Core API for assignments, submissions, reviews, corrections and audit trails.",
 )
+app.include_router(admin_router)
+app.include_router(classes_router)
+app.include_router(assignments_router)
+app.include_router(student_assignments_router)
+app.include_router(questions_router)
+app.include_router(question_versions_router)
 
 
 @app.get("/health", tags=["system"])
@@ -33,4 +46,15 @@ def capabilities() -> dict[str, object]:
         },
         "grading_policy": "deterministic-auto; ambiguous-review",
         "grader_base_url": settings.grader_base_url,
+    }
+
+
+@app.get("/v1/me", tags=["identity"])
+def me(principal: CurrentPrincipal = Depends(get_current_principal)) -> dict[str, str | None]:
+    return {
+        "id": principal.user_id,
+        "tenant_id": principal.tenant_id,
+        "role": principal.role.value,
+        "school_id": principal.school_id,
+        "display_name": principal.display_name,
     }

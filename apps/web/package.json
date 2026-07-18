@@ -5,10 +5,16 @@
   "scripts": {
     "dev": "nuxt dev",
     "build": "nuxt build",
+    "test": "vitest run",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
+    "dexie": "4.4.4",
     "nuxt": "4.4.8"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "6.2.5",
+    "vitest": "4.1.10"
   }
 }

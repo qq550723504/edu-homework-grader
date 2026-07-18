@@ -25,6 +25,37 @@ services:
       timeout: 3s
       retries: 10
 
+  keycloak-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${KEYCLOAK_POSTGRES_DB:-keycloak}
+      POSTGRES_USER: ${KEYCLOAK_POSTGRES_USER:-keycloak}
+      POSTGRES_PASSWORD: ${KEYCLOAK_POSTGRES_PASSWORD:-change-me}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${KEYCLOAK_POSTGRES_USER:-keycloak} -d ${KEYCLOAK_POSTGRES_DB:-keycloak}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4.7
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-change-me}
+      KC_DB: postgres
+      KC_DB_URL_HOST: keycloak-postgres
+      KC_DB_URL_DATABASE: ${KEYCLOAK_POSTGRES_DB:-keycloak}
+      KC_DB_USERNAME: ${KEYCLOAK_POSTGRES_USER:-keycloak}
+      KC_DB_PASSWORD: ${KEYCLOAK_POSTGRES_PASSWORD:-change-me}
+    ports:
+      - "${KEYCLOAK_PORT:-8080}:8080"
+    volumes:
+      - ./infra/keycloak:/opt/keycloak/data/import:ro
+    depends_on:
+      keycloak-postgres:
+        condition: service_healthy
+
   grader:
     build:
       context: ./services/grader
@@ -46,6 +77,12 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://edu_grader:change-me@postgres:5432/edu_grader}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       GRADER_BASE_URL: ${GRADER_BASE_URL:-http://grader:8010}
+      OIDC_ISSUER: ${OIDC_ISSUER:-http://keycloak:8080/realms/edu-grader}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-edu-grader-api}
+      OIDC_SCHOOL_ID_CLAIM: ${OIDC_SCHOOL_ID_CLAIM:-school_id}
+      OIDC_TENANT_SLUG: ${OIDC_TENANT_SLUG:-pilot}
+      BOOTSTRAP_ADMIN_SUB: ${BOOTSTRAP_ADMIN_SUB:-}
+      BOOTSTRAP_ADMIN_TENANT_SLUG: ${BOOTSTRAP_ADMIN_TENANT_SLUG:-}
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:
