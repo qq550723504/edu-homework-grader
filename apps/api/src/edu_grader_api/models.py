@@ -70,6 +70,13 @@ class ReviewAction(StrEnum):
     REPORT_RULE_PROBLEM = "report_rule_problem"
 
 
+class AppealStatus(StrEnum):
+    OPEN = "open"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    SUPERSEDED = "superseded"
+
+
 def role_values(roles: type[Role]) -> list[str]:
     return [role.value for role in roles]
 
@@ -550,6 +557,42 @@ class GradePublication(Base):
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     attempt: Mapped[StudentAttempt] = relationship(back_populates="grade_publication")
+
+
+class ReviewAppeal(Base):
+    __tablename__ = "review_appeals"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    original_attempt_id: Mapped[UUID] = mapped_column(
+        ForeignKey("student_attempts.id"), nullable=False
+    )
+    student_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    reason: Mapped[str] = mapped_column(String(2_000), nullable=False)
+    status: Mapped[AppealStatus] = mapped_column(
+        Enum(AppealStatus, native_enum=False, values_callable=role_values),
+        default=AppealStatus.OPEN,
+    )
+    version: Mapped[int] = mapped_column(Integer, default=0)
+    decision_reason: Mapped[str | None] = mapped_column(String(2_000))
+    decided_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CorrectionAttempt(Base):
+    __tablename__ = "correction_attempts"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    original_attempt_id: Mapped[UUID] = mapped_column(
+        ForeignKey("student_attempts.id"), nullable=False
+    )
+    correction_attempt_id: Mapped[UUID] = mapped_column(
+        ForeignKey("student_attempts.id"), nullable=False
+    )
+    appeal_id: Mapped[UUID] = mapped_column(
+        ForeignKey("review_appeals.id"), nullable=False, unique=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class SubmissionReceipt(Base):
