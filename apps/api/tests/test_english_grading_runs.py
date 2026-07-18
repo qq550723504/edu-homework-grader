@@ -4,7 +4,15 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from edu_grader_api.models import AttemptAnswer, GradingPolicy, GradingRun, GradingSignal
+from edu_grader_api.models import (
+    AttemptAnswer,
+    GradingPolicy,
+    GradingRun,
+    GradingSignal,
+    ReviewReason,
+    ReviewTask,
+    ReviewTaskStatus,
+)
 from edu_grader_api.services.assignments import get_student_assignment, save_answer, submit_attempt
 from edu_grader_api.services.questions import GradeResult
 from test_assignments import published_assignment_for_student
@@ -183,13 +191,17 @@ def test_submit_persists_e4_evidence_without_leaking_rubric(
     assert response["grading"] == [
         {
             "assignment_item_id": str(item.id),
-            "decision": "needs_review",
-            "score": 0,
-            "max_score": 1,
             "requires_review": True,
             "feedback": [{"type": "grammar", "message": "Use an"}],
         }
     ]
+    task = database_session.scalar(select(ReviewTask))
+    run = database_session.scalar(select(GradingRun))
+    assert task is not None
+    assert run is not None
+    assert task.reason is ReviewReason.NEEDS_REVIEW
+    assert task.status is ReviewTaskStatus.OPEN
+    assert task.grading_run_id == run.id
     assert "evidence_phrases" not in str(response)
     run = database_session.scalar(select(GradingRun))
     assert run is not None
