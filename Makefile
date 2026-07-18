@@ -1,4 +1,4 @@
-.PHONY: install-python test lint format api-test api-lint api-migrate web-install web-build dev down
+.PHONY: install-python test lint format api-test api-lint api-migrate question-test web-install web-build dev down
 
 install-python:
 	python -m pip install -e "apps/api[dev]" -e "services/grader[dev]"
@@ -15,6 +15,9 @@ api-lint:
 
 api-migrate:
 	python -m alembic -c apps/api/alembic.ini upgrade head
+
+question-test:
+	python -m pytest apps/api/tests/test_policies.py apps/api/tests/test_question_models.py apps/api/tests/test_question_versions.py apps/api/tests/test_question_runs.py apps/api/tests/test_questions.py
 
 lint:
 	python -m ruff check apps/api services/grader

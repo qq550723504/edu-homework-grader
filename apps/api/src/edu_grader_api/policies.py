@@ -17,9 +17,61 @@ M1_POLICY_V1: dict[str, Any] = {
     },
 }
 
+M2_POLICY_V1: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["expected"],
+    "properties": {
+        "expected": {"type": "object"},
+        "variables": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 32},
+            "uniqueItems": True,
+            "maxItems": 10,
+        },
+        "required_form": {"enum": ["expanded"]},
+        "form_score": {"type": "number", "minimum": 0},
+        "max_score": {"type": "number", "exclusiveMinimum": 0, "maximum": 100},
+    },
+}
+
+E1_POLICY_V1: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["accepted_answers"],
+    "properties": {
+        "accepted_answers": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 2_000},
+            "minItems": 1,
+            "maxItems": 50,
+            "uniqueItems": True,
+        },
+        "ignore_case": {"type": "boolean"},
+        "ignore_terminal_punctuation": {"type": "boolean"},
+        "max_score": {"type": "number", "exclusiveMinimum": 0, "maximum": 100},
+    },
+}
+
+E4_POLICY_V1: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["rubric"],
+    "properties": {
+        "rubric": {"type": "string", "minLength": 1, "maxLength": 10_000},
+        "max_score": {"type": "number", "exclusiveMinimum": 0, "maximum": 100},
+    },
+}
+
 
 POLICY_SCHEMAS: dict[tuple[str, str], Mapping[str, Any]] = {
     ("M1", "1"): M1_POLICY_V1,
+    ("M2", "1"): M2_POLICY_V1,
+    ("E1", "1"): E1_POLICY_V1,
+    ("E4", "1"): E4_POLICY_V1,
 }
 
 

@@ -70,6 +70,7 @@ docker compose exec api python -m edu_grader_api.bootstrap
 ```bash
 make api-test
 make api-lint
+make question-test
 ```
 
 ### 不使用 Docker
@@ -102,6 +103,25 @@ POST /v1/grade/english/exact
 POST /v1/grade/math/numeric
 POST /v1/grade/math/expression
 ```
+
+## 题目版本与发布门禁
+
+教师使用 `POST /v1/questions` 创建租户内题目和第一个草稿版本。规则 JSON 仅可使用平台维护的
+`M1`（数值）、`M2`（表达式）、`E1`（英文精确匹配）和 `E4`（英文辅助简答）策略版本；API 会在保存前返回带 JSON Pointer 的 422 校验错误。
+
+发布前，为草稿添加 `correct`、`incorrect`、`empty` 和 `boundary` 测试用例，并调用
+`POST /v1/question-versions/{version_id}/test-runs`。只有同一草稿最近一次完整测试通过，
+`POST /v1/question-versions/{version_id}/publish` 才会成功；已发布版本须通过
+`POST /v1/questions/{question_id}/versions` 创建后继草稿，不能原地修改。
+
+首次部署或升级后执行：
+
+```bash
+docker compose exec api python -m alembic -c alembic.ini upgrade head
+```
+
+当前 HTTP Grader 适配器已接入 M1；其他题型策略可先完成版本和测试用例配置，待对应 Grader
+适配器上线后运行测试。每次测试运行和发布都会保留版本、规则、批改器版本及结果记录。
 
 数学表达式接口只接受受控 JSON AST，不接受未经清洗的 Python、LaTeX 或 SymPy 字符串。当前原型对节点类型、变量、深度、节点数、数字长度和指数范围做白名单限制。
 

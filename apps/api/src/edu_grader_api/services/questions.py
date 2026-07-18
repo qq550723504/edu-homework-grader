@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..models import (
     AuditLog,
+    GradingPolicy,
     Question,
     QuestionTestCase,
     QuestionTestCaseRun,
@@ -18,6 +19,7 @@ from ..models import (
     VersionStatus,
     utc_now,
 )
+from ..policies import POLICY_SCHEMAS, validate_policy
 
 
 class QuestionVersionAccessError(PermissionError):
@@ -30,6 +32,14 @@ class QuestionVersionStateError(ValueError):
 
 class PublishConflict(QuestionVersionStateError):
     """Raised when a draft does not satisfy the publication gate."""
+
+
+class QuestionPolicyValidationError(ValueError):
+    """Raised when a question rule does not conform to its policy schema."""
+
+    def __init__(self, errors: list[dict[str, str]]) -> None:
+        super().__init__("question rule is invalid")
+        self.errors = errors
 
 
 @dataclass(frozen=True)
@@ -47,6 +57,66 @@ class GraderClient(Protocol):
         rule_json: dict[str, object],
         answer_json: dict[str, object],
     ) -> GradeResult: ...
+
+
+def create_question(
+    session: Session,
+    *,
+    tenant_id: UUID,
+    actor_user_id: UUID,
+    title: str,
+    prompt: str,
+    question_type: str,
+    policy_version: str,
+    rule_json: dict[str, object],
+) -> QuestionVersion:
+    """Create a tenant question and its first mutable version."""
+
+    errors = validate_policy(question_type, policy_version, rule_json)
+    if errors:
+        raise QuestionPolicyValidationError(errors)
+
+    policy = session.scalar(
+        select(GradingPolicy).where(
+            GradingPolicy.question_type == question_type,
+            GradingPolicy.policy_version == policy_version,
+            GradingPolicy.retired_at.is_(None),
+        )
+    )
+    if policy is None:
+        policy = GradingPolicy(
+            question_type=question_type,
+            policy_version=policy_version,
+            json_schema=dict(POLICY_SCHEMAS[(question_type, policy_version)]),
+        )
+        session.add(policy)
+        session.flush()
+
+    question = Question(tenant_id=tenant_id, created_by_user_id=actor_user_id, title=title)
+    session.add(question)
+    session.flush()
+    version = QuestionVersion(
+        question_id=question.id,
+        version_number=1,
+        status=VersionStatus.DRAFT,
+        prompt=prompt,
+        question_type=question_type,
+        grading_policy_id=policy.id,
+        rule_json=rule_json,
+        created_by_user_id=actor_user_id,
+    )
+    session.add(version)
+    session.add(
+        AuditLog(
+            tenant_id=tenant_id,
+            actor_user_id=actor_user_id,
+            event_type="question.created",
+            target_type="question",
+            target_id=question.id,
+            metadata_json={"title": title, "version_number": 1},
+        )
+    )
+    return version
 
 
 def create_successor_draft(
@@ -77,6 +147,18 @@ def create_successor_draft(
         created_by_user_id=actor_user_id,
     )
     session.add(successor)
+    session.flush()
+    for test_case in published_version.test_cases:
+        session.add(
+            QuestionTestCase(
+                question_version_id=successor.id,
+                category=test_case.category,
+                answer_json=test_case.answer_json.copy(),
+                expected_decision=test_case.expected_decision,
+                expected_score=test_case.expected_score,
+                expected_evidence_json=test_case.expected_evidence_json.copy(),
+            )
+        )
     return successor
 
 
@@ -86,12 +168,21 @@ def update_draft(
     *,
     actor_user_id: UUID,
     prompt: str,
+    rule_json: dict[str, object] | None = None,
 ) -> None:
     """Update mutable draft content without allowing history rewrites."""
 
     _require_author(session, draft, actor_user_id)
     if draft.status is not VersionStatus.DRAFT:
         raise QuestionVersionStateError("only draft versions can be edited")
+    if rule_json is not None:
+        policy = session.get(GradingPolicy, draft.grading_policy_id)
+        if policy is None:
+            raise QuestionVersionStateError("grading policy is unavailable")
+        errors = validate_policy(policy.question_type, policy.policy_version, rule_json)
+        if errors:
+            raise QuestionPolicyValidationError(errors)
+        draft.rule_json = rule_json
     draft.prompt = prompt
     session.add(draft)
 
@@ -182,6 +273,18 @@ def run_question_tests(
         test_run.status = TestRunStatus.PASSED
     test_run.finished_at = utc_now()
     session.add(test_run)
+    question = session.get(Question, draft.question_id)
+    if question is not None:
+        session.add(
+            AuditLog(
+                tenant_id=question.tenant_id,
+                actor_user_id=draft.created_by_user_id,
+                event_type="question.test_run",
+                target_type="question_version",
+                target_id=draft.id,
+                metadata_json={"test_run_id": str(test_run.id), "status": test_run.status.value},
+            )
+        )
     return test_run
 
 
