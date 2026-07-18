@@ -20,6 +20,8 @@ from ..models import (
     StudentAttempt,
     utc_now,
 )
+from ..settings import settings
+from .grader import HttpGraderClient
 
 
 class ReviewAccessError(Exception):
@@ -119,6 +121,7 @@ def decide_review_task(
     version: int,
     score: float | None,
     reason: str | None,
+    grader_client: object | None = None,
 ) -> ReviewDecision:
     task = get_teacher_review_task(
         session, tenant_id=tenant_id, teacher_id=teacher_id, task_id=task_id
@@ -148,11 +151,20 @@ def decide_review_task(
         reason=normalized_reason or None,
         task_version=version,
     )
-    task.status = ReviewTaskStatus.RESOLVED
-    task.active_key = None
-    task.resolved_at = utc_now()
-    task.version += 1
     session.add(decision)
+    if action is ReviewAction.REQUEST_REGRADE:
+        _rerun_task(
+            session,
+            task=task,
+            grader_client=grader_client or HttpGraderClient(settings.grader_base_url),
+        )
+        task.status = ReviewTaskStatus.SUPERSEDED
+        task.active_key = None
+    else:
+        task.status = ReviewTaskStatus.RESOLVED
+        task.active_key = None
+        task.resolved_at = utc_now()
+    task.version += 1
     session.add(
         AuditLog(
             tenant_id=tenant_id,
@@ -165,6 +177,26 @@ def decide_review_task(
     )
     session.flush()
     return decision
+
+
+def _rerun_task(session: Session, *, task: ReviewTask, grader_client: object) -> None:
+    from .assignments import _dependency_review_result, _persist_grading_run
+
+    run = task.grading_run
+    item = task.attempt_answer.assignment_item
+    try:
+        result = grader_client.grade(
+            item.question_version.question_type,
+            run.rule_snapshot_json,
+            run.answer_snapshot_json,
+            policy_version=run.policy_version,
+        )
+    except Exception as error:
+        result = _dependency_review_result(run.rule_snapshot_json, error)
+    replacement_run = _persist_grading_run(
+        session, answer=task.attempt_answer, item=item, result=result
+    )
+    create_review_task_for_run(session, replacement_run)
 
 
 def batch_confirm_deterministic(
