@@ -236,7 +236,29 @@ def grade_mathjson_expression(
         student_ast = normalize_mathjson(student_mathjson, variables)
         expected_ast = normalize_mathjson(expected_mathjson, variables)
     except MathJsonValidationError as error:
-        return _mathjson_review_result(error, max_score)
+        return mathjson_review_result(error, max_score)
+
+    return grade_normalized_expression(
+        student_ast=student_ast,
+        expected_ast=expected_ast,
+        variables=variables,
+        required_form=required_form,
+        form_score=form_score,
+        max_score=max_score,
+    )
+
+
+def grade_normalized_expression(
+    *,
+    student_ast: dict[str, object],
+    expected_ast: dict[str, object],
+    variables: list[str],
+    required_form: Literal["expanded"] | None,
+    form_score: float,
+    max_score: float,
+) -> GradingResult:
+    if form_score > max_score:
+        raise ValueError("form_score cannot exceed max_score")
 
     student = build_expression(student_ast, variables)
     expected = build_expression(expected_ast, variables)
@@ -317,7 +339,7 @@ def is_expanded_ast(node: dict[str, object]) -> bool:
     raise ValueError(f"Unsupported AST node type: {kind!r}")
 
 
-def _mathjson_review_result(error: MathJsonValidationError, max_score: float) -> GradingResult:
+def mathjson_review_result(error: MathJsonValidationError, max_score: float) -> GradingResult:
     return GradingResult(
         decision="needs_review",
         score=0,
