@@ -8,6 +8,11 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://edu_grader:change-me@localhost:5432/edu_grader"
     redis_url: str = "redis://localhost:6379/0"
     grader_base_url: str = "http://localhost:8010"
+    oidc_issuer: str = "http://localhost:8080/realms/edu-grader"
+    oidc_audience: str = "edu-grader-api"
+    oidc_school_id_claim: str = "school_id"
+    bootstrap_admin_sub: str = ""
+    bootstrap_admin_tenant_slug: str = ""
 
 
 settings = Settings()
