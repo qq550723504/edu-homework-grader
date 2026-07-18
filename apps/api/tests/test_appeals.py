@@ -166,3 +166,51 @@ def test_correction_submission_targets_only_correction_attempt(database_session:
 
     assert correction.status.value == "submitted"
     assert original.status.value == "draft"
+
+
+def test_student_assignment_lists_published_correction_summary(
+    api_client, database_session: Session
+) -> None:
+    student, _, assignment, _, _ = published_assignment_for_student(database_session)
+    _, original = get_student_assignment(
+        database_session,
+        tenant_id=student.tenant_id,
+        student_id=student.id,
+        assignment_id=assignment.id,
+    )
+    correction = StudentAttempt(
+        tenant_id=student.tenant_id,
+        assignment_id=assignment.id,
+        student_id=student.id,
+        attempt_number=2,
+    )
+    appeal = ReviewAppeal(
+        original_attempt_id=original.id,
+        student_id=student.id,
+        reason="Please review.",
+        status=AppealStatus.APPROVED,
+    )
+    database_session.add_all([correction, appeal])
+    database_session.flush()
+    database_session.add_all(
+        [
+            CorrectionAttempt(
+                original_attempt_id=original.id,
+                correction_attempt_id=correction.id,
+                appeal_id=appeal.id,
+            ),
+            GradePublication(
+                attempt=correction, published_by_user_id=assignment.created_by_user_id
+            ),
+        ]
+    )
+    database_session.commit()
+
+    response = api_client.get(
+        f"/v1/student/assignments/{assignment.id}", headers=authorize(api_client, student)
+    )
+
+    assert response.status_code == 200
+    assert response.json()["corrections"] == [
+        {"attempt_id": str(correction.id), "status": "published"}
+    ]

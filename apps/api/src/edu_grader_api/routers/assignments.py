@@ -11,7 +11,15 @@ from sqlalchemy.orm import Session
 from ..auth import CurrentPrincipal
 from ..db import get_session
 from ..dependencies import require_role
-from ..models import AssignmentItem, AttemptAnswer, GradePublication, GradingRun, Role, StudentAttempt
+from ..models import (
+    AssignmentItem,
+    AttemptAnswer,
+    CorrectionAttempt,
+    GradePublication,
+    GradingRun,
+    Role,
+    StudentAttempt,
+)
 from ..services.reviews import published_student_grading
 from ..services.assignments import (
     AssignmentAccessError,
@@ -269,6 +277,21 @@ def get_student_assignment_route(
     }
     if session.scalar(select(GradePublication).where(GradePublication.attempt_id == attempt.id)):
         response["grading"] = published_student_grading(session, attempt_id=attempt.id)
+    corrections = list(
+        session.scalars(
+            select(CorrectionAttempt)
+            .join(
+                GradePublication,
+                GradePublication.attempt_id == CorrectionAttempt.correction_attempt_id,
+            )
+            .where(CorrectionAttempt.original_attempt_id == attempt.id)
+            .order_by(CorrectionAttempt.created_at, CorrectionAttempt.id)
+        )
+    )
+    response["corrections"] = [
+        {"attempt_id": str(correction.correction_attempt_id), "status": "published"}
+        for correction in corrections
+    ]
     return response
 
 
