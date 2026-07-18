@@ -39,9 +39,7 @@ def test_e4_requires_nonempty_scoring_points_and_rejects_unknown_fields() -> Non
         "E4",
         "2",
         {
-            "scoring_points": [
-                {"id": "cause", "evidence_phrases": ["bridge closed"], "score": 1}
-            ],
+            "scoring_points": [{"id": "cause", "evidence_phrases": ["bridge closed"], "score": 1}],
             "max_score": 1,
             "unexpected": True,
         },
