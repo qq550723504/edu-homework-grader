@@ -5,8 +5,10 @@ def test_settings_exposes_required_oidc_configuration() -> None:
     settings = Settings(
         oidc_issuer="http://keycloak:8080/realms/edu-grader",
         oidc_audience="edu-grader-api",
+        oidc_tenant_slug="pilot",
         bootstrap_admin_sub="admin-subject",
         bootstrap_admin_tenant_slug="pilot",
     )
 
     assert settings.oidc_school_id_claim == "school_id"
+    assert settings.oidc_tenant_slug == "pilot"

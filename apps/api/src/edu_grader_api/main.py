@@ -1,5 +1,6 @@
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
+from .auth import CurrentPrincipal, get_current_principal
 from .settings import settings
 
 app = FastAPI(
@@ -33,4 +34,15 @@ def capabilities() -> dict[str, object]:
         },
         "grading_policy": "deterministic-auto; ambiguous-review",
         "grader_base_url": settings.grader_base_url,
+    }
+
+
+@app.get("/v1/me", tags=["identity"])
+def me(principal: CurrentPrincipal = Depends(get_current_principal)) -> dict[str, str | None]:
+    return {
+        "id": principal.user_id,
+        "tenant_id": principal.tenant_id,
+        "role": principal.role.value,
+        "school_id": principal.school_id,
+        "display_name": principal.display_name,
     }

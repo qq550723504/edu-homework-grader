@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     oidc_issuer: str = "http://localhost:8080/realms/edu-grader"
     oidc_audience: str = "edu-grader-api"
     oidc_school_id_claim: str = "school_id"
+    oidc_tenant_slug: str = "pilot"
     bootstrap_admin_sub: str = ""
     bootstrap_admin_tenant_slug: str = ""
 

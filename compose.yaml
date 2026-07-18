@@ -80,6 +80,7 @@ services:
       OIDC_ISSUER: ${OIDC_ISSUER:-http://keycloak:8080/realms/edu-grader}
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:-edu-grader-api}
       OIDC_SCHOOL_ID_CLAIM: ${OIDC_SCHOOL_ID_CLAIM:-school_id}
+      OIDC_TENANT_SLUG: ${OIDC_TENANT_SLUG:-pilot}
       BOOTSTRAP_ADMIN_SUB: ${BOOTSTRAP_ADMIN_SUB:-}
       BOOTSTRAP_ADMIN_TENANT_SLUG: ${BOOTSTRAP_ADMIN_TENANT_SLUG:-}
     ports:
