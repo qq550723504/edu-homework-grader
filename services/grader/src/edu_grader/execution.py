@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import multiprocessing
+import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from multiprocessing.connection import Connection
 from .models import Criterion, Feedback, GradingResult
@@ -11,6 +13,15 @@ class MathExecutionLimits:
     cpu_seconds: int
     memory_bytes: int
     timeout_seconds: float
+
+
+def load_math_execution_limits(environment: Mapping[str, str] | None = None) -> MathExecutionLimits:
+    values = os.environ if environment is None else environment
+    return MathExecutionLimits(
+        cpu_seconds=int(values.get("GRADER_MATH_CPU_SECONDS", "1")),
+        memory_bytes=int(values.get("GRADER_MATH_MEMORY_BYTES", "134217728")),
+        timeout_seconds=float(values.get("GRADER_MATH_TIMEOUT_SECONDS", "1")),
+    )
 
 
 def run_math_expression(request: dict[str, object], limits: MathExecutionLimits) -> GradingResult:

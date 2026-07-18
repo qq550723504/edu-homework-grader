@@ -1,6 +1,10 @@
 import edu_grader.execution as execution
 import edu_grader.main as grader_main
-from edu_grader.execution import MathExecutionLimits, run_math_expression
+from edu_grader.execution import (
+    MathExecutionLimits,
+    load_math_execution_limits,
+    run_math_expression,
+)
 from edu_grader.main import app
 from fastapi.testclient import TestClient
 from edu_grader.models import GradingResult
@@ -32,6 +36,19 @@ def test_math_worker_returns_deterministic_result() -> None:
 
     assert result.decision == "auto_accepted"
     assert result.score == 1
+
+
+def test_execution_limits_have_safe_defaults_and_allow_environment_overrides() -> None:
+    assert load_math_execution_limits({}) == MathExecutionLimits(
+        cpu_seconds=1, memory_bytes=134_217_728, timeout_seconds=1.0
+    )
+    assert load_math_execution_limits(
+        {
+            "GRADER_MATH_CPU_SECONDS": "2",
+            "GRADER_MATH_MEMORY_BYTES": "268435456",
+            "GRADER_MATH_TIMEOUT_SECONDS": "3.5",
+        }
+    ) == MathExecutionLimits(cpu_seconds=2, memory_bytes=268_435_456, timeout_seconds=3.5)
 
 
 def test_timeout_becomes_review_result(monkeypatch) -> None:

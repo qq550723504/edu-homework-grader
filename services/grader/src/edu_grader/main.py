@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from .english import EnglishExactRequest, grade_exact
-from .execution import MathExecutionLimits, run_math_expression
+from .execution import load_math_execution_limits, run_math_expression
 from .math_ast import (
     ExpressionGradeRequest,
     NumericGradeRequest,
@@ -86,5 +86,5 @@ def math_expression_v2(body: MathJsonExpressionGradeRequest) -> GradingResult:
         return mathjson_review_result(error, body.max_score)
     return run_math_expression(
         request,
-        MathExecutionLimits(cpu_seconds=1, memory_bytes=134_217_728, timeout_seconds=1),
+        load_math_execution_limits(),
     )
