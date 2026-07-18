@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from ..auth import CurrentPrincipal
 from ..db import get_session
 from ..dependencies import require_role
-from ..models import AssignmentItem, AttemptAnswer, Role
+from ..models import AssignmentItem, AttemptAnswer, GradingRun, Role
 from ..services.assignments import (
     AssignmentAccessError,
     AnswerConflictError,
@@ -138,6 +138,70 @@ def publish_assignment_route(
     except AssignmentStateError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     return {"id": str(published.id), "status": published.status.value}
+
+
+@router.get("/{assignment_id}/attempts/{attempt_id}/grading-runs")
+def list_teacher_grading_runs_route(
+    assignment_id: UUID,
+    attempt_id: UUID,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, list[dict[str, object]]]:
+    try:
+        assignment = get_teacher_assignment(
+            session,
+            tenant_id=UUID(principal.tenant_id),
+            teacher_id=UUID(principal.user_id),
+            assignment_id=assignment_id,
+        )
+    except AssignmentAccessError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+        ) from None
+    runs = list(
+        session.scalars(
+            select(GradingRun)
+            .join(AttemptAnswer)
+            .join(AssignmentItem)
+            .where(
+                AttemptAnswer.attempt_id == attempt_id,
+                AssignmentItem.assignment_id == assignment.id,
+            )
+            .order_by(GradingRun.created_at, GradingRun.id)
+        )
+    )
+    return {
+        "grading_runs": [
+            {
+                "id": str(run.id),
+                "attempt_answer_id": str(run.attempt_answer_id),
+                "decision": run.decision,
+                "score": run.score,
+                "max_score": run.max_score,
+                "confidence": run.confidence,
+                "requires_review": run.requires_review,
+                "policy_version": run.policy_version,
+                "grader_version": run.grader_version,
+                "dependency_versions": run.dependency_versions_json,
+                "thresholds": run.thresholds_json,
+                "rule_snapshot": run.rule_snapshot_json,
+                "answer_snapshot": run.answer_snapshot_json,
+                "evidence": run.evidence_json,
+                "signals": [
+                    {
+                        "kind": signal.kind,
+                        "code": signal.code,
+                        "passed": signal.passed,
+                        "score": signal.score,
+                        "max_score": signal.max_score,
+                        "evidence": signal.evidence_json,
+                    }
+                    for signal in run.signals
+                ],
+            }
+            for run in runs
+        ]
+    }
 
 
 @student_router.get("/assignments")
