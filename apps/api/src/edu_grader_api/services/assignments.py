@@ -30,6 +30,7 @@ from ..models import (
 from ..settings import settings
 from .grader import HttpGraderClient, MathAnswerNormalizationError
 from .questions import GradeResult
+from .reviews import create_review_task_for_run
 
 
 class AssignmentAccessError(Exception):
@@ -473,6 +474,7 @@ def _grade_attempt(
         except Exception as error:  # Dependency errors must remain visible and reviewable.
             result = _dependency_review_result(version.rule_json, error)
         run = _persist_grading_run(session, answer=answer, item=item, result=result)
+        create_review_task_for_run(session, run)
         response.append(_student_grading_summary(item, run))
     return response
 
@@ -619,9 +621,6 @@ def _student_grading_summary(item: AssignmentItem, run: GradingRun) -> dict[str,
     feedback = run.evidence_json.get("feedback")
     return {
         "assignment_item_id": str(item.id),
-        "decision": run.decision,
-        "score": run.score,
-        "max_score": run.max_score,
         "requires_review": run.requires_review,
         "feedback": deepcopy(feedback) if isinstance(feedback, list) else [],
     }

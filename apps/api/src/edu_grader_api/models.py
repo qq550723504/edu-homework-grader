@@ -50,6 +50,26 @@ class AttemptStatus(StrEnum):
     SUBMITTED = "submitted"
 
 
+class ReviewTaskStatus(StrEnum):
+    OPEN = "open"
+    RESOLVED = "resolved"
+    SUPERSEDED = "superseded"
+
+
+class ReviewReason(StrEnum):
+    NEEDS_REVIEW = "needs_review"
+    AUTO_CONFIRMATION = "auto_confirmation"
+    REGRADE_REQUESTED = "regrade_requested"
+    RULE_PROBLEM = "rule_problem"
+
+
+class ReviewAction(StrEnum):
+    CONFIRM = "confirm"
+    ADJUST_SCORE = "adjust_score"
+    REQUEST_REGRADE = "request_regrade"
+    REPORT_RULE_PROBLEM = "report_rule_problem"
+
+
 def role_values(roles: type[Role]) -> list[str]:
     return [role.value for role in roles]
 
@@ -381,6 +401,7 @@ class StudentAttempt(Base):
     tenant: Mapped[Tenant] = relationship(back_populates="student_attempts")
     student: Mapped[User] = relationship(back_populates="student_attempts")
     answers: Mapped[list[AttemptAnswer]] = relationship(back_populates="attempt")
+    grade_publication: Mapped[GradePublication | None] = relationship(back_populates="attempt")
 
 
 class AttemptAnswer(Base):
@@ -404,6 +425,7 @@ class AttemptAnswer(Base):
     attempt: Mapped[StudentAttempt] = relationship(back_populates="answers")
     assignment_item: Mapped[AssignmentItem] = relationship(back_populates="answers")
     grading_runs: Mapped[list[GradingRun]] = relationship(back_populates="attempt_answer")
+    review_tasks: Mapped[list[ReviewTask]] = relationship(back_populates="attempt_answer")
 
 
 class GradingRun(Base):
@@ -447,6 +469,7 @@ class GradingRun(Base):
     question_version: Mapped[QuestionVersion] = relationship(back_populates="grading_runs")
     grading_policy: Mapped[GradingPolicy] = relationship(back_populates="grading_runs")
     signals: Mapped[list[GradingSignal]] = relationship(back_populates="grading_run")
+    review_tasks: Mapped[list[ReviewTask]] = relationship(back_populates="grading_run")
 
 
 class GradingSignal(Base):
@@ -469,6 +492,64 @@ class GradingSignal(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     grading_run: Mapped[GradingRun] = relationship(back_populates="signals")
+
+
+class ReviewTask(Base):
+    __tablename__ = "review_tasks"
+    __table_args__ = (
+        UniqueConstraint("attempt_answer_id", "active_key", name="uq_review_task_active_answer"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    attempt_answer_id: Mapped[UUID] = mapped_column(
+        ForeignKey("attempt_answers.id"), nullable=False
+    )
+    grading_run_id: Mapped[UUID] = mapped_column(ForeignKey("grading_runs.id"), nullable=False)
+    reason: Mapped[ReviewReason] = mapped_column(
+        Enum(ReviewReason, native_enum=False, values_callable=role_values), nullable=False
+    )
+    status: Mapped[ReviewTaskStatus] = mapped_column(
+        Enum(ReviewTaskStatus, native_enum=False, values_callable=role_values),
+        default=ReviewTaskStatus.OPEN,
+    )
+    active_key: Mapped[str | None] = mapped_column(String(10), default="open")
+    version: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    attempt_answer: Mapped[AttemptAnswer] = relationship(back_populates="review_tasks")
+    grading_run: Mapped[GradingRun] = relationship(back_populates="review_tasks")
+    decisions: Mapped[list[ReviewDecision]] = relationship(back_populates="review_task")
+
+
+class ReviewDecision(Base):
+    __tablename__ = "review_decisions"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    review_task_id: Mapped[UUID] = mapped_column(ForeignKey("review_tasks.id"), nullable=False)
+    actor_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    action: Mapped[ReviewAction] = mapped_column(
+        Enum(ReviewAction, native_enum=False, values_callable=role_values), nullable=False
+    )
+    original_score: Mapped[float] = mapped_column(Float, nullable=False)
+    final_score: Mapped[float | None] = mapped_column(Float)
+    reason: Mapped[str | None] = mapped_column(String(2_000))
+    task_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    review_task: Mapped[ReviewTask] = relationship(back_populates="decisions")
+
+
+class GradePublication(Base):
+    __tablename__ = "grade_publications"
+    __table_args__ = (UniqueConstraint("attempt_id", name="uq_grade_publication_attempt"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    attempt_id: Mapped[UUID] = mapped_column(ForeignKey("student_attempts.id"), nullable=False)
+    published_by_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    attempt: Mapped[StudentAttempt] = relationship(back_populates="grade_publication")
 
 
 class SubmissionReceipt(Base):
