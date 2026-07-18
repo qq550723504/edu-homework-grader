@@ -16,6 +16,7 @@ from ..models import (
     AttemptStatus,
     AuditLog,
     ClassTeacher,
+    CorrectionAttempt,
     Classroom,
     Enrollment,
     GradingRun,
@@ -375,11 +376,36 @@ def submit_attempt(
     student_id: UUID,
     assignment_id: UUID,
     idempotency_key: str,
+    attempt_id: UUID | None = None,
     grader_client: SubmissionGraderClient | None = None,
 ) -> tuple[int, dict[str, object]]:
-    assignment, attempt = get_student_assignment(
+    assignment, default_attempt = get_student_assignment(
         session, tenant_id=tenant_id, student_id=student_id, assignment_id=assignment_id
     )
+    attempt = default_attempt
+    if attempt_id is not None:
+        attempt = session.scalar(
+            select(StudentAttempt)
+            .join(Assignment, StudentAttempt.assignment_id == Assignment.id)
+            .join(Enrollment, Enrollment.class_id == Assignment.class_id)
+            .where(
+                StudentAttempt.id == attempt_id,
+                StudentAttempt.tenant_id == tenant_id,
+                StudentAttempt.assignment_id == assignment_id,
+                StudentAttempt.student_id == student_id,
+                Enrollment.student_id == student_id,
+            )
+        )
+        if (
+            attempt is None
+            or session.scalar(
+                select(CorrectionAttempt.id).where(
+                    CorrectionAttempt.correction_attempt_id == attempt.id
+                )
+            )
+            is None
+        ):
+            raise AssignmentAccessError()
     fingerprint = f"assignment:{assignment.id}:attempt:{attempt.id}"
     receipt = session.scalar(
         select(SubmissionReceipt).where(

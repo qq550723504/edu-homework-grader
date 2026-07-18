@@ -1,8 +1,14 @@
 import pytest
 from sqlalchemy.orm import Session
 
-from edu_grader_api.models import AppealStatus, GradePublication, ReviewAppeal
-from edu_grader_api.services.assignments import get_student_assignment
+from edu_grader_api.models import (
+    AppealStatus,
+    CorrectionAttempt,
+    GradePublication,
+    ReviewAppeal,
+    StudentAttempt,
+)
+from edu_grader_api.services.assignments import get_student_assignment, submit_attempt
 from test_assignments import authorize, published_assignment_for_student
 from test_assignments import client as _assignment_client
 from test_assignments import session as _assignment_session
@@ -117,3 +123,46 @@ def test_teacher_rejection_requires_reason(api_client, database_session: Session
     )
 
     assert response.status_code == 422
+
+
+def test_correction_submission_targets_only_correction_attempt(database_session: Session) -> None:
+    student, _, assignment, _, _ = published_assignment_for_student(database_session)
+    _, original = get_student_assignment(
+        database_session,
+        tenant_id=student.tenant_id,
+        student_id=student.id,
+        assignment_id=assignment.id,
+    )
+    correction = StudentAttempt(
+        tenant_id=student.tenant_id,
+        assignment_id=assignment.id,
+        student_id=student.id,
+        attempt_number=2,
+    )
+    appeal = ReviewAppeal(
+        original_attempt_id=original.id,
+        student_id=student.id,
+        reason="Please review.",
+        status=AppealStatus.APPROVED,
+    )
+    database_session.add_all([correction, appeal])
+    database_session.flush()
+    database_session.add(
+        CorrectionAttempt(
+            original_attempt_id=original.id,
+            correction_attempt_id=correction.id,
+            appeal_id=appeal.id,
+        )
+    )
+
+    submit_attempt(
+        database_session,
+        tenant_id=student.tenant_id,
+        student_id=student.id,
+        assignment_id=assignment.id,
+        attempt_id=correction.id,
+        idempotency_key=str(__import__("uuid").uuid4()),
+    )
+
+    assert correction.status.value == "submitted"
+    assert original.status.value == "draft"

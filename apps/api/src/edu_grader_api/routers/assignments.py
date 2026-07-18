@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from ..auth import CurrentPrincipal
 from ..db import get_session
 from ..dependencies import require_role
-from ..models import AssignmentItem, AttemptAnswer, GradePublication, GradingRun, Role
+from ..models import AssignmentItem, AttemptAnswer, GradePublication, GradingRun, Role, StudentAttempt
 from ..services.reviews import published_student_grading
 from ..services.assignments import (
     AssignmentAccessError,
@@ -338,6 +338,46 @@ def submit_assignment_route(
                 tenant_id=UUID(principal.tenant_id),
                 student_id=UUID(principal.user_id),
                 assignment_id=assignment_id,
+                idempotency_key=key,
+            )
+    except AssignmentAccessError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+        ) from None
+    except SubmissionConflictError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    return response
+
+
+@student_router.post("/attempts/{attempt_id}/submit")
+def submit_correction_attempt_route(
+    attempt_id: UUID,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    principal: CurrentPrincipal = Depends(require_role(Role.STUDENT)),
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    if idempotency_key is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Idempotency-Key is required"
+        )
+    try:
+        key = str(UUID(idempotency_key))
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Idempotency-Key is invalid"
+        ) from None
+    attempt = session.get(StudentAttempt, attempt_id)
+    if attempt is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
+    try:
+        session.rollback()
+        with session.begin():
+            _, response = submit_attempt(
+                session,
+                tenant_id=UUID(principal.tenant_id),
+                student_id=UUID(principal.user_id),
+                assignment_id=attempt.assignment_id,
+                attempt_id=attempt_id,
                 idempotency_key=key,
             )
     except AssignmentAccessError:
