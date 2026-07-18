@@ -136,3 +136,9 @@ docker compose exec api python -m alembic -c alembic.ini upgrade head
 ## 下一步
 
 见 [MVP 路线图](docs/roadmap.md) 和仓库 Issues。建议将仓库从 `fastapi` 重命名为 `edu-homework-grader`，以匹配产品范围。
+
+## 学生作答本地保存
+
+学生作答页把草稿和待同步操作保存在浏览器 IndexedDB 中；断网时继续保存，恢复网络后尝试同步。发生版本冲突时保留本地与服务端答案，必须由学生处理，绝不静默覆盖。
+
+学生页面依赖后续 Nuxt 登录层提供短期 `edu_access_token` cookie；该令牌只用于调用已受 OIDC 保护的 API，不在页面中实现登录或长期令牌存储。正式提交在本地队列清空后携带持久化的 `Idempotency-Key`，网络重试不会重复提交。

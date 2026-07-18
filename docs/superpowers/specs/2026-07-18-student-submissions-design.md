@@ -66,7 +66,7 @@ Teacher assignment lifecycle events and student submission events append privacy
 - `GET /v1/student/assignments` returns tenant-local assignments grouped as `pending`, `correction_required`, and `completed`. This slice returns an empty correction group until Issue #7 creates correction attempts.
 - `GET /v1/student/assignments/{assignment_id}` returns the frozen assignment metadata, ordered question snapshots required for answering, the draft attempt, answer versions, and summary progress.
 - `PUT /v1/student/attempts/{attempt_id}/answers/{assignment_item_id}` accepts `answer` and required `version`. It returns the persisted answer and next version, or `409` with the latest server answer and version.
-- `POST /v1/student/assignments/{assignment_id}/submit` requires the `Idempotency-Key` header. It returns the original `submitted` result for an identical retry, `400` for a missing or malformed key, and `409` when unsynchronized/conflicting state or a previously submitted attempt prevents submission.
+- `POST /v1/student/assignments/{assignment_id}/submit` requires the `Idempotency-Key` header. It returns the original `submitted` result for an identical retry, `400` for a missing or malformed key, and `409` when the server-side attempt is no longer a draft. The browser prevents a request while its local outbox or a visible conflict remains.
 
 No student endpoint returns grading policy internals, standard answers, test cases, unpublished content, or unissued grades.
 
