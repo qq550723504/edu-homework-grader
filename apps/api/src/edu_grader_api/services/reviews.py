@@ -7,14 +7,30 @@ from ..models import (
     Assignment,
     AssignmentItem,
     AttemptAnswer,
+    AuditLog,
     ClassTeacher,
     GradingRun,
     QuestionVersion,
     ReviewReason,
+    ReviewAction,
+    ReviewDecision,
     ReviewTask,
     ReviewTaskStatus,
     StudentAttempt,
+    utc_now,
 )
+
+
+class ReviewAccessError(Exception):
+    """Raised when a teacher cannot access a review task."""
+
+
+class ReviewConflictError(Exception):
+    """Raised when a review task no longer accepts a decision."""
+
+
+class ReviewValidationError(ValueError):
+    """Raised when a decision payload is incomplete or invalid."""
 
 
 def create_review_task_for_run(session: Session, run: GradingRun) -> ReviewTask:
@@ -70,3 +86,81 @@ def list_teacher_review_tasks(
     else:
         statement = statement.where(ReviewTask.reason == reason)
     return list(session.scalars(statement.order_by(ReviewTask.created_at, ReviewTask.id)))
+
+
+def get_teacher_review_task(
+    session: Session, *, tenant_id: UUID, teacher_id: UUID, task_id: UUID
+) -> ReviewTask:
+    task = session.scalar(
+        select(ReviewTask)
+        .join(AttemptAnswer, ReviewTask.attempt_answer_id == AttemptAnswer.id)
+        .join(StudentAttempt, AttemptAnswer.attempt_id == StudentAttempt.id)
+        .join(Assignment, StudentAttempt.assignment_id == Assignment.id)
+        .join(ClassTeacher, ClassTeacher.class_id == Assignment.class_id)
+        .where(
+            ReviewTask.id == task_id,
+            Assignment.tenant_id == tenant_id,
+            ClassTeacher.teacher_id == teacher_id,
+        )
+    )
+    if task is None:
+        raise ReviewAccessError()
+    return task
+
+
+def decide_review_task(
+    session: Session,
+    *,
+    tenant_id: UUID,
+    teacher_id: UUID,
+    task_id: UUID,
+    action: ReviewAction,
+    version: int,
+    score: float | None,
+    reason: str | None,
+) -> ReviewDecision:
+    task = get_teacher_review_task(
+        session, tenant_id=tenant_id, teacher_id=teacher_id, task_id=task_id
+    )
+    if task.status is not ReviewTaskStatus.OPEN or task.version != version:
+        raise ReviewConflictError()
+    normalized_reason = reason.strip() if reason is not None else ""
+    requires_reason = {
+        ReviewAction.ADJUST_SCORE,
+        ReviewAction.REQUEST_REGRADE,
+        ReviewAction.REPORT_RULE_PROBLEM,
+    }
+    if action in requires_reason and not normalized_reason:
+        raise ReviewValidationError("reason is required")
+    if action is ReviewAction.ADJUST_SCORE:
+        if score is None or not 0 <= score <= task.grading_run.max_score:
+            raise ReviewValidationError("score is outside the grading range")
+        final_score = score
+    else:
+        final_score = task.grading_run.score
+    decision = ReviewDecision(
+        review_task=task,
+        actor_user_id=teacher_id,
+        action=action,
+        original_score=task.grading_run.score,
+        final_score=final_score,
+        reason=normalized_reason or None,
+        task_version=version,
+    )
+    task.status = ReviewTaskStatus.RESOLVED
+    task.active_key = None
+    task.resolved_at = utc_now()
+    task.version += 1
+    session.add(decision)
+    session.add(
+        AuditLog(
+            tenant_id=tenant_id,
+            actor_user_id=teacher_id,
+            event_type="review.decision_recorded",
+            target_type="review_task",
+            target_id=task.id,
+            metadata_json={"action": action.value, "task_version": version},
+        )
+    )
+    session.flush()
+    return decision

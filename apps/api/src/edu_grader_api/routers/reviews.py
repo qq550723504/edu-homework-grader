@@ -1,17 +1,32 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..auth import CurrentPrincipal
 from ..db import get_session
 from ..dependencies import require_role
-from ..models import ReviewReason, Role
-from ..services.reviews import list_teacher_review_tasks
+from ..models import ReviewAction, ReviewReason, Role
+from ..services.reviews import (
+    ReviewAccessError,
+    ReviewConflictError,
+    ReviewValidationError,
+    decide_review_task,
+    get_teacher_review_task,
+    list_teacher_review_tasks,
+)
 
 
 router = APIRouter(prefix="/v1/review-tasks", tags=["teacher reviews"])
+
+
+class ReviewDecisionRequest(BaseModel):
+    action: ReviewAction
+    version: int = Field(ge=0)
+    score: float | None = None
+    reason: str | None = Field(default=None, max_length=2_000)
 
 
 @router.get("")
@@ -46,4 +61,103 @@ def list_review_tasks_route(
             }
             for task in tasks
         ]
+    }
+
+
+@router.get("/{task_id}")
+def get_review_task_route(
+    task_id: UUID,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    try:
+        task = get_teacher_review_task(
+            session,
+            tenant_id=UUID(principal.tenant_id),
+            teacher_id=UUID(principal.user_id),
+            task_id=task_id,
+        )
+    except ReviewAccessError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+        ) from None
+    run = task.grading_run
+    return {
+        "id": str(task.id),
+        "reason": task.reason.value,
+        "status": task.status.value,
+        "version": task.version,
+        "answer": task.attempt_answer.answer_json,
+        "rule_snapshot": run.rule_snapshot_json,
+        "grading": {
+            "decision": run.decision,
+            "score": run.score,
+            "max_score": run.max_score,
+            "confidence": run.confidence,
+            "requires_review": run.requires_review,
+            "evidence": run.evidence_json,
+        },
+        "signals": [
+            {
+                "kind": signal.kind,
+                "code": signal.code,
+                "passed": signal.passed,
+                "score": signal.score,
+                "max_score": signal.max_score,
+                "evidence": signal.evidence_json,
+            }
+            for signal in run.signals
+        ],
+        "decisions": [
+            {
+                "action": decision.action.value,
+                "original_score": decision.original_score,
+                "final_score": decision.final_score,
+                "reason": decision.reason,
+                "task_version": decision.task_version,
+                "created_at": decision.created_at.isoformat(),
+            }
+            for decision in task.decisions
+        ],
+    }
+
+
+@router.post("/{task_id}/decisions", status_code=status.HTTP_201_CREATED)
+def decide_review_task_route(
+    task_id: UUID,
+    body: ReviewDecisionRequest,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    try:
+        session.rollback()
+        with session.begin():
+            decision = decide_review_task(
+                session,
+                tenant_id=UUID(principal.tenant_id),
+                teacher_id=UUID(principal.user_id),
+                task_id=task_id,
+                action=body.action,
+                version=body.version,
+                score=body.score,
+                reason=body.reason,
+            )
+    except ReviewAccessError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+        ) from None
+    except ReviewConflictError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="review task changed"
+        ) from None
+    except ReviewValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from error
+    return {
+        "id": str(decision.id),
+        "action": decision.action.value,
+        "original_score": decision.original_score,
+        "final_score": decision.final_score,
+        "task_version": decision.task_version,
     }
