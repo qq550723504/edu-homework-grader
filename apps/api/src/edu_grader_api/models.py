@@ -18,6 +18,18 @@ class Role(StrEnum):
     STUDENT = "student"
 
 
+class VersionStatus(StrEnum):
+    DRAFT = "draft"
+    PUBLISHED = "published"
+    ARCHIVED = "archived"
+
+
+class TestRunStatus(StrEnum):
+    PASSED = "passed"
+    FAILED = "failed"
+    GRADING_ERROR = "grading_error"
+
+
 def role_values(roles: type[Role]) -> list[str]:
     return [role.value for role in roles]
 
@@ -126,3 +138,139 @@ class AuditLog(Base):
     metadata_json: Mapped[dict[str, object]] = mapped_column(
         JSON().with_variant(JSONB, "postgresql")
     )
+
+
+class GradingPolicy(Base):
+    __tablename__ = "grading_policies"
+    __table_args__ = (
+        UniqueConstraint("question_type", "policy_version", name="uq_grading_policy_version"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    question_type: Mapped[str] = mapped_column(String(20))
+    policy_version: Mapped[str] = mapped_column(String(20))
+    json_schema: Mapped[dict[str, object]] = mapped_column(JSON().with_variant(JSONB, "postgresql"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    question_versions: Mapped[list[QuestionVersion]] = relationship(back_populates="grading_policy")
+
+
+class Question(Base):
+    __tablename__ = "questions"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    created_by_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    title: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+    tenant: Mapped[Tenant] = relationship()
+    created_by_user: Mapped[User] = relationship()
+    versions: Mapped[list[QuestionVersion]] = relationship(back_populates="question")
+
+
+class QuestionVersion(Base):
+    __tablename__ = "question_versions"
+    __table_args__ = (
+        UniqueConstraint("question_id", "version_number", name="uq_question_version_number"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    question_id: Mapped[UUID] = mapped_column(ForeignKey("questions.id"), nullable=False)
+    version_number: Mapped[int] = mapped_column(nullable=False)
+    status: Mapped[VersionStatus] = mapped_column(
+        Enum(
+            VersionStatus,
+            native_enum=False,
+            values_callable=lambda values: [value.value for value in values],
+        ),
+        nullable=False,
+    )
+    prompt: Mapped[str] = mapped_column(String(10_000))
+    question_type: Mapped[str] = mapped_column(String(20))
+    grading_policy_id: Mapped[UUID] = mapped_column(
+        ForeignKey("grading_policies.id"), nullable=False
+    )
+    rule_json: Mapped[dict[str, object]] = mapped_column(JSON().with_variant(JSONB, "postgresql"))
+    created_by_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    published_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    question: Mapped[Question] = relationship(back_populates="versions")
+    grading_policy: Mapped[GradingPolicy] = relationship(back_populates="question_versions")
+    created_by_user: Mapped[User] = relationship(foreign_keys=[created_by_user_id])
+    test_cases: Mapped[list[QuestionTestCase]] = relationship(back_populates="question_version")
+    test_runs: Mapped[list[QuestionTestRun]] = relationship(back_populates="question_version")
+
+
+class QuestionTestCase(Base):
+    __tablename__ = "question_test_cases"
+    __table_args__ = (
+        UniqueConstraint("question_version_id", "category", name="uq_question_test_case_category"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    question_version_id: Mapped[UUID] = mapped_column(
+        ForeignKey("question_versions.id"), nullable=False
+    )
+    category: Mapped[str] = mapped_column(String(30))
+    answer_json: Mapped[dict[str, object]] = mapped_column(JSON().with_variant(JSONB, "postgresql"))
+    expected_decision: Mapped[str] = mapped_column(String(30))
+    expected_score: Mapped[float] = mapped_column(nullable=False)
+    expected_evidence_json: Mapped[dict[str, object]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    question_version: Mapped[QuestionVersion] = relationship(back_populates="test_cases")
+
+
+class QuestionTestRun(Base):
+    __tablename__ = "question_test_runs"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    question_version_id: Mapped[UUID] = mapped_column(
+        ForeignKey("question_versions.id"), nullable=False
+    )
+    grader_version: Mapped[str] = mapped_column(String(100))
+    trigger: Mapped[str] = mapped_column(String(30))
+    status: Mapped[TestRunStatus] = mapped_column(
+        Enum(
+            TestRunStatus,
+            native_enum=False,
+            values_callable=lambda values: [value.value for value in values],
+        ),
+        nullable=False,
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failure_summary: Mapped[str | None] = mapped_column(String(2_000))
+
+    question_version: Mapped[QuestionVersion] = relationship(back_populates="test_runs")
+    case_runs: Mapped[list[QuestionTestCaseRun]] = relationship(back_populates="test_run")
+
+
+class QuestionTestCaseRun(Base):
+    __tablename__ = "question_test_case_runs"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    question_test_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("question_test_runs.id"), nullable=False
+    )
+    question_test_case_id: Mapped[UUID] = mapped_column(
+        ForeignKey("question_test_cases.id"), nullable=False
+    )
+    decision: Mapped[str] = mapped_column(String(30))
+    score: Mapped[float] = mapped_column(nullable=False)
+    evidence_json: Mapped[dict[str, object]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql")
+    )
+    passed: Mapped[bool] = mapped_column(nullable=False)
+    error_detail: Mapped[str | None] = mapped_column(String(2_000))
+
+    test_run: Mapped[QuestionTestRun] = relationship(back_populates="case_runs")
