@@ -1,0 +1,43 @@
+import pytest
+from sqlalchemy.orm import Session
+
+from edu_grader_api.models import GradePublication
+from edu_grader_api.services.assignments import get_student_assignment
+from test_assignments import authorize, published_assignment_for_student
+from test_assignments import client as _assignment_client
+from test_assignments import session as _assignment_session
+
+
+@pytest.fixture
+def database_session() -> Session:
+    yield from _assignment_session.__wrapped__()
+
+
+@pytest.fixture
+def api_client(database_session: Session, monkeypatch: pytest.MonkeyPatch):
+    yield from _assignment_client.__wrapped__(database_session, monkeypatch)
+
+
+def test_student_creates_appeal_for_published_attempt(
+    api_client, database_session: Session
+) -> None:
+    student, _, assignment, _, _ = published_assignment_for_student(database_session)
+    _, attempt = get_student_assignment(
+        database_session,
+        tenant_id=student.tenant_id,
+        student_id=student.id,
+        assignment_id=assignment.id,
+    )
+    database_session.add(
+        GradePublication(attempt=attempt, published_by_user_id=assignment.created_by_user_id)
+    )
+    database_session.commit()
+
+    response = api_client.post(
+        f"/v1/student/attempts/{attempt.id}/appeals",
+        headers=authorize(api_client, student),
+        json={"reason": "Please review the score."},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["status"] == "open"
