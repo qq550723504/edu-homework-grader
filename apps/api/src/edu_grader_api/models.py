@@ -193,6 +193,19 @@ class AuditLog(Base):
     metadata_json: Mapped[dict[str, object]] = mapped_column(
         JSON().with_variant(JSONB, "postgresql")
     )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    previous_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    entry_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    signature: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    key_version: Mapped[str] = mapped_column(String(50), nullable=False, default="legacy-unsigned")
+
+
+class AuditChainHead(Base):
+    __tablename__ = "audit_chain_heads"
+
+    tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id"), primary_key=True)
+    next_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    latest_entry_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
 
 
 class GradingPolicy(Base):
