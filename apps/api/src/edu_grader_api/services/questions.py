@@ -7,8 +7,8 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from ..audit import append_audit_event
 from ..models import (
-    AuditLog,
     GradingPolicy,
     Question,
     QuestionTestCase,
@@ -108,15 +108,14 @@ def create_question(
         created_by_user_id=actor_user_id,
     )
     session.add(version)
-    session.add(
-        AuditLog(
-            tenant_id=tenant_id,
-            actor_user_id=actor_user_id,
-            event_type="question.created",
-            target_type="question",
-            target_id=question.id,
-            metadata_json={"title": title, "version_number": 1},
-        )
+    append_audit_event(
+        session,
+        tenant_id=tenant_id,
+        actor_user_id=actor_user_id,
+        event_type="question.created",
+        target_type="question",
+        target_id=question.id,
+        metadata={"version_number": 1},
     )
     return version
 
@@ -177,6 +176,7 @@ def update_draft(
     _require_author(session, draft, actor_user_id)
     if draft.status is not VersionStatus.DRAFT:
         raise QuestionVersionStateError("only draft versions can be edited")
+    changed_fields = ["prompt"]
     if rule_json is not None:
         policy = session.get(GradingPolicy, draft.grading_policy_id)
         if policy is None:
@@ -185,8 +185,20 @@ def update_draft(
         if errors:
             raise QuestionPolicyValidationError(errors)
         draft.rule_json = rule_json
+        changed_fields.append("rule")
     draft.prompt = prompt
     session.add(draft)
+    question = session.get(Question, draft.question_id)
+    if question is not None:
+        append_audit_event(
+            session,
+            tenant_id=question.tenant_id,
+            actor_user_id=actor_user_id,
+            event_type="question.rule_changed",
+            target_type="question_version",
+            target_id=draft.id,
+            metadata={"version_number": draft.version_number, "changed_fields": changed_fields},
+        )
 
 
 def run_question_tests(
@@ -282,15 +294,14 @@ def run_question_tests(
     session.add(test_run)
     question = session.get(Question, draft.question_id)
     if question is not None:
-        session.add(
-            AuditLog(
-                tenant_id=question.tenant_id,
-                actor_user_id=draft.created_by_user_id,
-                event_type="question.test_run",
-                target_type="question_version",
-                target_id=draft.id,
-                metadata_json={"test_run_id": str(test_run.id), "status": test_run.status.value},
-            )
+        append_audit_event(
+            session,
+            tenant_id=question.tenant_id,
+            actor_user_id=draft.created_by_user_id,
+            event_type="question.test_run",
+            target_type="question_version",
+            target_id=draft.id,
+            metadata={"test_run_id": str(test_run.id), "status": test_run.status.value},
         )
     return test_run
 
@@ -321,15 +332,14 @@ def publish_question_version(
     draft.published_at = utc_now()
     question = session.get(Question, draft.question_id)
     if question is not None:
-        session.add(
-            AuditLog(
-                tenant_id=question.tenant_id,
-                actor_user_id=actor_user_id,
-                event_type="question.published",
-                target_type="question_version",
-                target_id=draft.id,
-                metadata_json={"version_number": draft.version_number},
-            )
+        append_audit_event(
+            session,
+            tenant_id=question.tenant_id,
+            actor_user_id=actor_user_id,
+            event_type="question.published",
+            target_type="question_version",
+            target_id=draft.id,
+            metadata={"version_number": draft.version_number},
         )
     session.add(draft)
     return draft

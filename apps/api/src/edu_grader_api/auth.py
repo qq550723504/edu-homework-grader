@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .audit import append_audit_event
 from .db import get_session
 from .models import Role, Tenant, User
 from .settings import settings
@@ -136,6 +137,18 @@ def get_current_principal(
         user = bind_rostered_student(session, identity)
 
     if user is None:
+        tenant = session.scalar(select(Tenant).where(Tenant.slug == settings.oidc_tenant_slug))
+        if tenant is not None:
+            append_audit_event(
+                session,
+                tenant_id=tenant.id,
+                actor_user_id=None,
+                event_type="auth.login_denied",
+                target_type="tenant",
+                target_id=tenant.id,
+                metadata={"reason": "platform_membership_required"},
+            )
+            session.commit()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="platform membership required"
         )
@@ -173,6 +186,15 @@ def bind_rostered_student(session: Session, identity: VerifiedIdentity) -> User 
 
     user.oidc_issuer = identity.issuer
     user.oidc_subject = identity.subject
+    append_audit_event(
+        session,
+        tenant_id=user.tenant_id,
+        actor_user_id=user.id,
+        event_type="auth.login_succeeded",
+        target_type="user",
+        target_id=user.id,
+        metadata={"binding_created": True},
+    )
     try:
         session.commit()
     except IntegrityError:

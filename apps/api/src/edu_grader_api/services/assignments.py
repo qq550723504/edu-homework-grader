@@ -8,13 +8,13 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from ..audit import append_audit_event
 from ..models import (
     Assignment,
     AssignmentItem,
     AssignmentStatus,
     AttemptAnswer,
     AttemptStatus,
-    AuditLog,
     ClassTeacher,
     CorrectionAttempt,
     Classroom,
@@ -682,13 +682,12 @@ def _audit(
     target_id: UUID,
     metadata: dict[str, object],
 ) -> None:
-    session.add(
-        AuditLog(
-            tenant_id=tenant_id,
-            actor_user_id=actor_user_id,
-            event_type=event_type,
-            target_type=target_type,
-            target_id=target_id,
-            metadata_json=metadata,
-        )
+    append_audit_event(
+        session,
+        tenant_id=tenant_id,
+        actor_user_id=actor_user_id,
+        event_type=event_type,
+        target_type=target_type,
+        target_id=target_id,
+        metadata=metadata,
     )

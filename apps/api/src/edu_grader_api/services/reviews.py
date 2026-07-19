@@ -6,11 +6,11 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..audit import append_audit_event
 from ..models import (
     Assignment,
     AssignmentItem,
     AttemptAnswer,
-    AuditLog,
     ClassTeacher,
     GradingRun,
     GradePublication,
@@ -244,15 +244,22 @@ def decide_review_task(
         task.active_key = None
         task.resolved_at = utc_now()
     task.version += 1
-    session.add(
-        AuditLog(
-            tenant_id=tenant_id,
-            actor_user_id=teacher_id,
-            event_type="review.decision_recorded",
-            target_type="review_task",
-            target_id=task.id,
-            metadata_json={"action": action.value, "task_version": version},
-        )
+    event_type = (
+        "review.score_adjusted"
+        if action is ReviewAction.ADJUST_SCORE
+        else "review.decision_recorded"
+    )
+    metadata: dict[str, object] = {"action": action.value, "task_version": version}
+    if action is ReviewAction.ADJUST_SCORE:
+        metadata.update({"original_score": task.grading_run.score, "final_score": final_score})
+    append_audit_event(
+        session,
+        tenant_id=tenant_id,
+        actor_user_id=teacher_id,
+        event_type=event_type,
+        target_type="review_task",
+        target_id=task.id,
+        metadata=metadata,
     )
     session.flush()
     return decision
@@ -350,15 +357,14 @@ def publish_attempt_results(
         raise ReviewConflictError()
     publication = GradePublication(attempt=attempt, published_by_user_id=teacher_id)
     session.add(publication)
-    session.add(
-        AuditLog(
-            tenant_id=tenant_id,
-            actor_user_id=teacher_id,
-            event_type="attempt.grades_published",
-            target_type="student_attempt",
-            target_id=attempt.id,
-            metadata_json={"assignment_id": str(assignment_id)},
-        )
+    append_audit_event(
+        session,
+        tenant_id=tenant_id,
+        actor_user_id=teacher_id,
+        event_type="grade.published",
+        target_type="student_attempt",
+        target_id=attempt.id,
+        metadata={"assignment_id": str(assignment_id)},
     )
     return publication
 
