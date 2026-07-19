@@ -9,4 +9,12 @@ describe('student question workflow', () => {
     expect(nextQuestionIndex(0, 2)).toBe(1)
     expect(getUnansweredCount([{ answer: null }, { answer: { value: '5' } }, { answer: { value: '' } }])).toBe(2)
   })
+
+  it('counts a structured MathJSON response as answered', () => {
+    expect(getUnansweredCount([
+      { answer: { format: 'mathjson-v1', latex: 'x+1', mathjson: ['Add', 'x', 1] } },
+      { answer: { format: 'mathjson-v1', latex: ' ', mathjson: ['Add', 'x', 1] } },
+      { answer: { format: 'mathjson-v1', latex: 'x+1', mathjson: null } }
+    ])).toBe(2)
+  })
 })

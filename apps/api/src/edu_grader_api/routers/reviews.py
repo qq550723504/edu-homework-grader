@@ -87,6 +87,7 @@ def list_review_tasks_route(
     return {
         "review_tasks": [
             {
+                "id": str(task.id),
                 "assignment_id": str(task.attempt_answer.attempt.assignment_id),
                 "attempt_id": str(task.attempt_answer.attempt_id),
                 "assignment_item_id": str(task.attempt_answer.assignment_item_id),

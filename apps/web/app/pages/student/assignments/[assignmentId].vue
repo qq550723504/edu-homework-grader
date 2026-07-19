@@ -1,5 +1,7 @@
 <template>
   <main class="shell narrow"><NuxtLink class="back" to="/student">← 作业列表</NuxtLink><p class="eyebrow">作答中</p><h1>{{ detail?.title ?? '加载作业…' }}</h1>
+    <section v-if="feedback.length" aria-label="已发布反馈"><p v-for="(entry, index) in feedback" :key="index">{{ entry }}</p></section>
+    <p v-if="hasPublishedCorrection" role="status">可以查看订正结果</p>
     <p v-if="message" class="notice">{{ message }}</p>
     <section v-if="currentItem" class="card wide"><span class="tag">第 {{ currentItem.position }} 题</span><h2>{{ currentItem.prompt }}</h2><MathAnswerField v-if="currentItem.input?.kind === 'mathjson-v1'" v-model="mathAnswer" @update:model-value="saveMathDraft" /><textarea v-else v-model="answer" class="answer-input" rows="5" aria-label="答案" @input="saveDraft" /><p>同步状态：{{ syncStatus }}</p></section>
     <div class="actions"><button class="button secondary" :disabled="current === 0" @click="current = previousQuestionIndex(current)">上一题</button><button class="button secondary" :disabled="!detail || current >= detail.items.length - 1" @click="current = nextQuestionIndex(current, detail?.items.length ?? 0)">下一题</button><button class="button primary" :disabled="!online || unanswered > 0 || !canSubmit" @click="submit">提交作业</button></div><p v-if="unanswered > 0" class="notice">还有 {{ unanswered }} 题未作答</p>
@@ -7,13 +9,13 @@
 </template>
 <script setup lang="ts">
 import { canSubmitAttempt, flushAttempt, getSubmissionKey, queueAnswer } from '../../../lib/drafts'
-import { fetchCurrentPrincipal, type CurrentPrincipal } from '../../../lib/student-api'
+import { correctionAvailable, fetchCurrentPrincipal, publishedFeedback, type CurrentPrincipal } from '../../../lib/student-api'
 import { getUnansweredCount, nextQuestionIndex, previousQuestionIndex } from '../../../lib/student-workflow'
 import type { MathAnswer } from '../../../lib/math-answer'
 interface Item { id: string; position: number; prompt: string; input: { kind: string }; answer: Record<string, unknown> | null; version: number }
-interface Detail { id: string; title: string; attempt: { id: string }; items: Item[] }
+interface Detail { id: string; title: string; attempt: { id: string }; items: Item[]; grading?: Array<{ feedback?: Array<{ message?: string }> }>; corrections?: Array<{ status?: string }> }
 const config = useRuntimeConfig(); const token = useCookie<string | null>('edu_access_token'); const route = useRoute(); const detail = ref<Detail | null>(null); const principal = ref<CurrentPrincipal | null>(null); const current = ref(0); const answer = ref(''); const mathAnswer = ref<MathAnswer | null>(null); const syncStatus = ref('未保存'); const message = ref(''); const online = ref(process.client ? navigator.onLine : false)
-const currentItem = computed(() => detail.value?.items[current.value]); const unanswered = computed(() => detail.value ? getUnansweredCount(detail.value.items) : 0)
+const currentItem = computed(() => detail.value?.items[current.value]); const unanswered = computed(() => detail.value ? getUnansweredCount(detail.value.items) : 0); const feedback = computed(() => detail.value ? publishedFeedback(detail.value) : []); const hasPublishedCorrection = computed(() => detail.value ? correctionAvailable(detail.value) : false)
 async function sync() { if (!detail.value || !token.value || !online.value) return; await flushAttempt(detail.value.attempt.id, { saveAnswer: async (record) => { try { const saved = await $fetch<{ version: number }>(`${config.public.apiBase}/v1/student/attempts/${record.attemptId}/answers/${record.itemId}`, { method: 'PUT', headers: { Authorization: `Bearer ${token.value}` }, body: { answer: record.answer, version: record.version } }); return { kind: 'saved' as const, version: saved.version } } catch (error: any) { if (error?.response?.status === 409) return { kind: 'conflict' as const, current: error.data.current }; return { kind: 'offline' as const } } } }); await refreshSubmit(); syncStatus.value = canSubmit.value ? '已同步' : '需要处理同步冲突' }
 async function refreshSubmit() { canSubmit.value = detail.value ? await canSubmitAttempt(detail.value.attempt.id) : false }
 const canSubmit = ref(false)
