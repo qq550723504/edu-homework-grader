@@ -31,7 +31,9 @@ class Settings(BaseSettings):
     @property
     def allowed_processor_hosts(self) -> frozenset[str]:
         return frozenset(
-            item.strip().casefold() for item in self.processor_allowed_hosts.split(",") if item.strip()
+            item.strip().casefold()
+            for item in self.processor_allowed_hosts.split(",")
+            if item.strip()
         )
 
 

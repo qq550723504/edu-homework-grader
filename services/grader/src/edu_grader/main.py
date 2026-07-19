@@ -95,7 +95,9 @@ def english_grade(request: EnglishGradeRequest) -> GradingResult:
 def _processor_allowed_hosts() -> frozenset[str]:
     return frozenset(
         item.strip().casefold()
-        for item in os.environ.get("PROCESSOR_ALLOWED_HOSTS", "grader,languagetool,localhost").split(",")
+        for item in os.environ.get(
+            "PROCESSOR_ALLOWED_HOSTS", "grader,languagetool,localhost"
+        ).split(",")
         if item.strip()
     )
 

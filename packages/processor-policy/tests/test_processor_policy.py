@@ -9,12 +9,16 @@ from edu_grader_processor_policy import (
 
 def test_rejects_processor_host_not_in_allowlist() -> None:
     with pytest.raises(ProcessorPolicyError, match="not allowlisted"):
-        assert_allowed_processor_url("https://model.example/check", frozenset({"languagetool"}))
+        assert_allowed_processor_url(
+            "https://model.example/check", frozenset({"languagetool"})
+        )
 
 
 def test_rejects_identity_field_in_nested_payload() -> None:
     with pytest.raises(ProcessorPolicyError, match="student_id"):
-        assert_deidentified_payload({"answer": {"text": "x", "student_id": "forbidden"}})
+        assert_deidentified_payload(
+            {"answer": {"text": "x", "student_id": "forbidden"}}
+        )
 
 
 def test_allows_a_minimal_grading_payload() -> None:

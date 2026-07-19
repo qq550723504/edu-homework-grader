@@ -76,12 +76,12 @@ def teacher_review_metrics(
     durations = [_duration_seconds(task.created_at, decision.created_at) for task, decision in rows]
     task_reasons = Counter(task.reason.value for task, _ in rows)
     decision_reasons = Counter(
-        decision.reason.strip() for _, decision in rows if decision.reason and decision.reason.strip()
+        decision.reason.strip()
+        for _, decision in rows
+        if decision.reason and decision.reason.strip()
     )
     handled_tasks = len(rows)
-    adjustments = sum(
-        decision.action is ReviewAction.ADJUST_SCORE for _, decision in rows
-    )
+    adjustments = sum(decision.action is ReviewAction.ADJUST_SCORE for _, decision in rows)
     return {
         "handled_tasks": handled_tasks,
         "average_duration_seconds": _rounded_average(durations),

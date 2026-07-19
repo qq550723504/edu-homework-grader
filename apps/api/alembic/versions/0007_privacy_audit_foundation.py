@@ -23,11 +23,15 @@ def upgrade() -> None:
     )
     with op.batch_alter_table("audit_logs") as batch:
         batch.add_column(sa.Column("sequence", sa.Integer(), nullable=False, server_default="0"))
-        batch.add_column(sa.Column("previous_hash", sa.String(64), nullable=False, server_default=""))
+        batch.add_column(
+            sa.Column("previous_hash", sa.String(64), nullable=False, server_default="")
+        )
         batch.add_column(sa.Column("entry_hash", sa.String(64), nullable=False, server_default=""))
         batch.add_column(sa.Column("signature", sa.String(64), nullable=False, server_default=""))
         batch.add_column(
-            sa.Column("key_version", sa.String(50), nullable=False, server_default="legacy-unsigned")
+            sa.Column(
+                "key_version", sa.String(50), nullable=False, server_default="legacy-unsigned"
+            )
         )
     if op.get_bind().dialect.name == "postgresql":
         op.execute(

@@ -20,10 +20,10 @@ def test_settings_exposes_required_oidc_configuration() -> None:
 
 
 def test_web_client_requests_no_email_or_profile_scope() -> None:
-    realm = json.loads(
-        Path("infra/keycloak/edu-grader-realm.json").read_text(encoding="utf-8")
+    realm = json.loads(Path("infra/keycloak/edu-grader-realm.json").read_text(encoding="utf-8"))
+    web_client = next(
+        client for client in realm["clients"] if client["clientId"] == "edu-grader-web"
     )
-    web_client = next(client for client in realm["clients"] if client["clientId"] == "edu-grader-web")
 
     assert "email" not in web_client["defaultClientScopes"]
     assert "profile" not in web_client["defaultClientScopes"]
