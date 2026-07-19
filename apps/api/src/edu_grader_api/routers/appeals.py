@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from ..auth import CurrentPrincipal
 from ..db import get_session
-from ..dependencies import require_role, require_student_consent
+from ..dependencies import require_role, require_student_processing_allowed
 from ..models import ReviewAppeal, Role
 from ..services.appeals import (
     AppealAccessError,
@@ -35,7 +35,7 @@ class DecideAppealRequest(BaseModel):
 def create_appeal_route(
     attempt_id: UUID,
     body: CreateAppealRequest,
-    principal: Annotated[CurrentPrincipal, Depends(require_student_consent)],
+    principal: Annotated[CurrentPrincipal, Depends(require_student_processing_allowed)],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, str]:
     try:
@@ -57,7 +57,7 @@ def create_appeal_route(
 
 @router.get("/appeals")
 def list_student_appeals(
-    principal: Annotated[CurrentPrincipal, Depends(require_student_consent)],
+    principal: Annotated[CurrentPrincipal, Depends(require_student_processing_allowed)],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, list[dict[str, str]]]:
     appeals = list(
