@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import CurrentPrincipal
 from ..db import get_session
-from ..dependencies import require_role
+from ..dependencies import require_role, require_student_consent
 from ..models import (
     AssignmentItem,
     AttemptAnswer,
@@ -215,7 +215,7 @@ def list_teacher_grading_runs_route(
 
 @student_router.get("/assignments")
 def list_student_assignments_route(
-    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.STUDENT))],
+    principal: Annotated[CurrentPrincipal, Depends(require_student_consent)],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, list[dict[str, str]]]:
     grouped = list_student_assignments(
@@ -230,7 +230,7 @@ def list_student_assignments_route(
 @student_router.get("/assignments/{assignment_id}")
 def get_student_assignment_route(
     assignment_id: UUID,
-    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.STUDENT))],
+    principal: Annotated[CurrentPrincipal, Depends(require_student_consent)],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, object]:
     try:
@@ -300,7 +300,7 @@ def save_answer_route(
     attempt_id: UUID,
     assignment_item_id: UUID,
     body: SaveAnswerRequest,
-    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.STUDENT))],
+    principal: Annotated[CurrentPrincipal, Depends(require_student_consent)],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, object]:
     try:
@@ -340,7 +340,7 @@ def save_answer_route(
 def submit_assignment_route(
     assignment_id: UUID,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
-    principal: CurrentPrincipal = Depends(require_role(Role.STUDENT)),
+    principal: CurrentPrincipal = Depends(require_student_consent),
     session: Session = Depends(get_session),
 ) -> dict[str, object]:
     if idempotency_key is None:
@@ -376,7 +376,7 @@ def submit_assignment_route(
 def submit_correction_attempt_route(
     attempt_id: UUID,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
-    principal: CurrentPrincipal = Depends(require_role(Role.STUDENT)),
+    principal: CurrentPrincipal = Depends(require_student_consent),
     session: Session = Depends(get_session),
 ) -> dict[str, object]:
     if idempotency_key is None:
