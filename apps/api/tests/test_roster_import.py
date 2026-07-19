@@ -10,7 +10,16 @@ from sqlalchemy.pool import StaticPool
 from edu_grader_api.auth import VerifiedIdentity, get_token_verifier
 from edu_grader_api.db import Base, get_session
 from edu_grader_api.main import app
-from edu_grader_api.models import AuditLog, ClassTeacher, Enrollment, Role, Tenant, User
+from edu_grader_api.models import (
+    AuditLog,
+    ClassTeacher,
+    Enrollment,
+    GuardianConsentStatus,
+    Role,
+    StudentGuardianConsent,
+    Tenant,
+    User,
+)
 from edu_grader_api.settings import settings
 
 
@@ -81,8 +90,13 @@ def test_invalid_csv_rolls_back_every_row(admin_client: TestClient, session: Ses
 def test_reimport_updates_name_without_duplicate_enrollment(
     admin_client: TestClient, session: Session
 ) -> None:
-    first = "class_code,class_name,student_school_id,student_display_name\n7A,Year 7 A,S-001,Ada\n"
-    second = "class_code,class_name,student_school_id,student_display_name\n7A,Year 7 A,S-001,Ada Lovelace\n"
+    header = (
+        "class_code,class_name,student_school_id,student_display_name,"
+        "student_under_14,guardian_consent_status,guardian_consent_notice_version,"
+        "guardian_consent_evidence_reference\n"
+    )
+    first = header + "7A,Year 7 A,S-001,Ada,false,not_required,,\n"
+    second = header + "7A,Year 7 A,S-001,Ada Lovelace,false,not_required,,\n"
 
     assert (
         admin_client.post(
@@ -101,6 +115,53 @@ def test_reimport_updates_name_without_duplicate_enrollment(
         == 200
     )
     assert session.scalar(select(func.count(Enrollment.class_id))) == 1
+
+
+def test_roster_import_records_school_verified_guardian_consent(
+    admin_client: TestClient, session: Session
+) -> None:
+    csv_body = (
+        "class_code,class_name,student_school_id,student_display_name,"
+        "student_under_14,guardian_consent_status,guardian_consent_notice_version,"
+        "guardian_consent_evidence_reference\n"
+        "7A,Year 7 A,S-001,Ada,true,granted,2026-07,school-consent-0001\n"
+    )
+
+    response = admin_client.post(
+        "/v1/admin/students/import",
+        files={"file": ("roster.csv", csv_body, "text/csv")},
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert response.status_code == 200
+    student = session.scalar(select(User).where(User.school_id == "S-001"))
+    assert student is not None
+    consent = session.get(StudentGuardianConsent, student.id)
+    assert consent is not None
+    assert consent.requires_guardian_consent is True
+    assert consent.status == GuardianConsentStatus.GRANTED
+    assert consent.notice_version == "2026-07"
+    assert consent.evidence_reference == "school-consent-0001"
+
+
+def test_invalid_under_fourteen_consent_rolls_back_import(
+    admin_client: TestClient, session: Session
+) -> None:
+    csv_body = (
+        "class_code,class_name,student_school_id,student_display_name,"
+        "student_under_14,guardian_consent_status,guardian_consent_notice_version,"
+        "guardian_consent_evidence_reference\n"
+        "7A,Year 7 A,S-001,Ada,true,not_required,,\n"
+    )
+
+    response = admin_client.post(
+        "/v1/admin/students/import",
+        files={"file": ("roster.csv", csv_body, "text/csv")},
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert response.status_code == 422
+    assert session.scalar(select(func.count(User.id))) == 1
 
 
 def test_admin_can_create_class_and_assign_tenant_teacher(
