@@ -5,8 +5,8 @@ const webBaseUrl = 'http://127.0.0.1:13000'
 
 export default defineConfig({
   testDir: './e2e',
+  testMatch: '**/*.spec.ts',
   outputDir: './test-results',
-  globalTeardown: './e2e/stop-e2e-api.mjs',
   use: {
     baseURL: webBaseUrl,
     trace: 'retain-on-failure',

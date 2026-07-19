@@ -6,7 +6,8 @@
     "dev": "nuxt dev",
     "build": "nuxt build",
     "test": "vitest run",
-    "test:e2e": "playwright test",
+    "test:e2e-runtime": "node --test e2e/e2e-api-supervisor.test.mjs",
+    "test:e2e": "npm run test:e2e-runtime && playwright test",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare"
   },

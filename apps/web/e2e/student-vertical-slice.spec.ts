@@ -151,6 +151,8 @@ test('student submits an algebra answer and sees published feedback and correcti
     '表达式等价。',
   )
 
+  // Appeal/correction screens do not exist yet. Prepare those states through
+  // the same public APIs used by future UI surfaces, then assert student UI copy.
   await publishCorrection(request, assignmentId, originalDetail.attempt.id)
   await page.reload()
   await expect(page.getByRole('status')).toHaveText('可以查看订正结果')
