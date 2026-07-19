@@ -110,7 +110,9 @@ def complete_privacy_request(
     session.execute(delete(SubmissionReceipt).where(SubmissionReceipt.student_id == student.id))
     session.execute(delete(StudentAttempt).where(StudentAttempt.id.in_(attempt_ids)))
     session.execute(delete(Enrollment).where(Enrollment.student_id == student.id))
-    session.execute(delete(StudentGuardianConsent).where(StudentGuardianConsent.student_id == student.id))
+    session.execute(
+        delete(StudentGuardianConsent).where(StudentGuardianConsent.student_id == student.id)
+    )
 
     student.oidc_issuer = None
     student.oidc_subject = None

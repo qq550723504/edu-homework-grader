@@ -151,7 +151,9 @@ def test_hold_blocks_approval_and_rejection_releases_processing(
 
     assert rejected.status_code == 200
     assert rejected.json() == {"status": "rejected", "version": 2}
-    assert client.get("/v1/student/assignments", headers=authorize(client, student)).status_code == 200
+    assert (
+        client.get("/v1/student/assignments", headers=authorize(client, student)).status_code == 200
+    )
     assert session.scalars(select(AuditLog.event_type).order_by(AuditLog.sequence)).all() == [
         "privacy_request.created",
         "privacy_request.held",

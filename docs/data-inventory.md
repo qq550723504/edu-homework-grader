@@ -6,6 +6,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 身份与花名册 | `users`、`classes`、`class_teachers`、`enrollments` | 建立租户成员、班级和任课关系 | restricted | 租户管理员；对应班级教师 | Core API、Keycloak | 在读期间加 2 年 | 经过保全检查的已验证删除请求 |
 | 监护人同意状态 | `student_guardian_consents` | 保存学校核验的未满 14 周岁学生同意状态与不透明凭证引用 | restricted | 租户管理员；事件响应人员 | Core API | 在读期间加 2 年 | 经过保全检查的已验证删除请求 |
+| 删除请求与保全状态 | `privacy_requests` | 记录学校管理员登记的删除请求、保全状态与清理资格时间 | restricted | 租户管理员；事件响应人员 | Core API | 请求完成后按适用学校政策保留 | 适用保存期届满 |
 | 学生作答与成绩 | `student_attempts`、`attempt_answers`、`grading_runs`、`grading_signals`、`grade_publications` | 提交、评分、反馈和发布 | restricted | 本人；对应班级教师；租户管理员 | Core API、Grader | 成绩发布后 2 年 | 保存期届满或批准的删除请求 |
 | 草稿作答 | 草稿状态的 `student_attempts`、`attempt_answers` | 自动保存和断网恢复 | restricted | 本人；对应班级教师 | Core API | 提交或放弃后 30 天 | 定时清理 |
 | 申诉与订正 | `review_appeals`、`correction_attempts`、`review_decisions`、`review_tasks` | 人工复核、订正和理由留存 | restricted | 本人；对应班级教师；租户管理员 | Core API | 决定后 2 年 | 保存期届满或批准的删除请求 |
@@ -22,3 +23,5 @@
 ## 删除限制
 
 当法律、学校制度或安全事件保全义务要求继续保存时，记录进入删除待处理状态；此时只允许存储和必要安全保护，不能继续用于评分、展示、分析或训练。
+
+受控清理会删除学生作答、评分、申诉、回执、选课和监护人同意记录，并移除 OIDC 绑定。为保持不可变审计账本的外键完整性，`users` 仅保留去标识化的内部 UUID 壳，不得保留原姓名、学校编号或 OIDC 身份。

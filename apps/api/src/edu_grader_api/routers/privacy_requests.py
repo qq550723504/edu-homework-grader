@@ -61,11 +61,15 @@ def create_privacy_request_route(
                 reason=body.reason,
             )
     except PrivacyRequestNotFoundError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found") from None
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+        ) from None
     except PrivacyRequestConflictError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     except PrivacyRequestError as error:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from error
     return {"id": str(request.id), "status": request.status.value, "version": request.version}
 
 
@@ -135,9 +139,13 @@ def _transition_response(session: Session, *, operation) -> dict[str, object]:
         with session.begin():
             request = operation()
     except PrivacyRequestNotFoundError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found") from None
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+        ) from None
     except PrivacyRequestConflictError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     except PrivacyRequestError as error:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from error
     return {"status": request.status.value, "version": request.version}
