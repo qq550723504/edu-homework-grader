@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { access, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { access, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
@@ -41,9 +41,9 @@ async function databaseFamilyIsGone(databasePath) {
 
 test('normal stop removes every nonce-scoped SQLite artifact after API close', async (t) => {
   await access(supervisorPath)
-  const runDirectory = await mkdtemp(join(tmpdir(), 'edu-homework-grader-supervisor-test-'))
-  const databasePath = join(runDirectory, `edu-homework-grader-e2e-${randomUUID()}.sqlite`)
-  const statePath = join(runDirectory, 'runtime.json')
+  const nonce = randomUUID()
+  const databasePath = join(tmpdir(), `edu-homework-grader-e2e-${nonce}.sqlite`)
+  const statePath = join(tmpdir(), `edu-homework-grader-e2e-${nonce}.json`)
   const startedPath = `${statePath}.started`
   const owner = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
     stdio: 'ignore',
@@ -53,7 +53,10 @@ test('normal stop removes every nonce-scoped SQLite artifact after API close', a
   t.after(async () => {
     owner.kill()
     supervisor?.kill()
-    await rm(runDirectory, { force: true, recursive: true })
+    await Promise.all([
+      ...databaseFamilyPaths(databasePath).map((path) => rm(path, { force: true })),
+      ...['', '.started', '.stop'].map((suffix) => rm(`${statePath}${suffix}`, { force: true })),
+    ])
   })
 
   await writeFile(
@@ -61,7 +64,7 @@ test('normal stop removes every nonce-scoped SQLite artifact after API close', a
     JSON.stringify({
       api: { args: [fakeApiPath, databasePath], command: process.execPath },
       databasePath,
-      nonce: randomUUID(),
+      nonce,
       ownerPid: owner.pid,
     }),
     'utf8',
@@ -91,14 +94,69 @@ test('normal stop removes every nonce-scoped SQLite artifact after API close', a
   assert.equal(await pathExists(startedPath), false)
 })
 
-test('launcher force-exit during setup still removes its temporary SQLite', {
+test('nonce mismatches refuse cleanup without deleting either target', {
+  timeout: 20_000,
+}, async (t) => {
+  const cases = [
+    {
+      databaseNonce: randomUUID(),
+      runtimeNonce: randomUUID(),
+      stateNonce: undefined,
+    },
+    {
+      databaseNonce: undefined,
+      runtimeNonce: randomUUID(),
+      stateNonce: randomUUID(),
+    },
+  ]
+
+  for (const mismatch of cases) {
+    const databaseNonce = mismatch.databaseNonce ?? mismatch.runtimeNonce
+    const stateNonce = mismatch.stateNonce ?? mismatch.runtimeNonce
+    const databasePath = join(tmpdir(), `edu-homework-grader-e2e-${databaseNonce}.sqlite`)
+    const statePath = join(tmpdir(), `edu-homework-grader-e2e-${stateNonce}.json`)
+    await writeFile(databasePath, 'must survive rejected cleanup', 'utf8')
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        api: { args: [fakeApiPath, databasePath], command: process.execPath },
+        databasePath,
+        nonce: mismatch.runtimeNonce,
+        ownerPid: 2_147_483_647,
+      }),
+      'utf8',
+    )
+    t.after(async () => {
+      await Promise.all([
+        ...databaseFamilyPaths(databasePath).map((path) => rm(path, { force: true })),
+        ...['', '.started', '.stop'].map((suffix) => rm(`${statePath}${suffix}`, { force: true })),
+      ])
+    })
+
+    const supervisor = spawn(process.execPath, [supervisorPath, statePath], { stdio: 'ignore' })
+    const exitCode = await new Promise((resolveExit) => supervisor.once('exit', resolveExit))
+
+    assert.notEqual(exitCode, 0)
+    assert.equal(await readFile(databasePath, 'utf8'), 'must survive rejected cleanup')
+  }
+})
+
+test('polluted parent identity environment cannot change the real E2E identity', {
   timeout: 30_000,
 }, async (t) => {
   const statePrefix = 'edu-homework-grader-e2e-'
   const statesBefore = new Set(
     (await readdir(tmpdir())).filter((name) => name.startsWith(statePrefix) && name.endsWith('.json')),
   )
-  const launcher = spawn(process.execPath, [launcherPath], { stdio: 'ignore' })
+  const launcher = spawn(process.execPath, [launcherPath], {
+    env: {
+      ...process.env,
+      APP_ENV: 'production',
+      OIDC_ISSUER: 'https://conflicting-issuer.example.test/realms/wrong',
+      OIDC_TENANT_SLUG: 'wrong-tenant',
+    },
+    stdio: 'ignore',
+  })
   let statePath
 
   t.after(() => launcher.kill('SIGKILL'))
@@ -116,6 +174,16 @@ test('launcher force-exit during setup still removes its temporary SQLite', {
 
   const { databasePath } = JSON.parse(await readFile(statePath, 'utf8'))
   await waitUntil(() => pathExists(databasePath), 'E2E API did not create its SQLite database')
+  await waitUntil(async () => {
+    try {
+      const response = await fetch('http://127.0.0.1:18000/v1/student/assignments', {
+        headers: { Authorization: 'Bearer e2e-student-token' },
+      })
+      return response.status === 200
+    } catch {
+      return false
+    }
+  }, 'fixed E2E student identity did not survive polluted parent OIDC settings')
 
   launcher.kill('SIGKILL')
 

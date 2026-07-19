@@ -19,9 +19,19 @@ const pythonPath = [
   resolve(repositoryRoot, 'packages/processor-policy/src'),
 ].join(delimiter)
 
+const inheritedEnvironment = Object.fromEntries(
+  Object.entries(process.env).filter(
+    ([name]) => name !== 'APP_ENV' && !name.startsWith('OIDC_'),
+  ),
+)
 const supervisorEnvironment = {
-  ...process.env,
+  ...inheritedEnvironment,
+  APP_ENV: 'test',
   E2E_DATABASE_URL: databaseUrl,
+  OIDC_AUDIENCE: 'edu-grader-api',
+  OIDC_ISSUER: 'http://localhost:8080/realms/edu-grader',
+  OIDC_SCHOOL_ID_CLAIM: 'school_id',
+  OIDC_TENANT_SLUG: 'pilot',
   PYTHONPATH: pythonPath,
 }
 await writeFile(

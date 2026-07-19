@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { access, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, isAbsolute, relative, resolve } from 'node:path'
+import { resolve } from 'node:path'
 
 const statePath = resolve(process.argv[2])
 const startedPath = `${statePath}.started`
@@ -11,18 +11,21 @@ const shutdownGraceMs = Number(process.env.E2E_SUPERVISOR_SHUTDOWN_GRACE_MS ?? 2
 
 const runtime = JSON.parse(await readFile(statePath, 'utf8'))
 const databasePath = resolve(runtime.databasePath)
-const stateRelativeToTemp = relative(resolve(tmpdir()), statePath)
-const databaseRelativeToTemp = relative(resolve(tmpdir()), databasePath)
+const expectedDatabasePath = resolve(
+  tmpdir(),
+  `edu-homework-grader-e2e-${runtime.nonce}.sqlite`,
+)
+const expectedStatePath = resolve(
+  tmpdir(),
+  `edu-homework-grader-e2e-${runtime.nonce}.json`,
+)
 if (
   !Number.isInteger(runtime.ownerPid)
   || runtime.ownerPid <= 0
   || typeof runtime.nonce !== 'string'
   || !/^[0-9a-f-]+$/.test(runtime.nonce)
-  || stateRelativeToTemp.startsWith('..')
-  || isAbsolute(stateRelativeToTemp)
-  || databaseRelativeToTemp.startsWith('..')
-  || isAbsolute(databaseRelativeToTemp)
-  || !/^edu-homework-grader-e2e-[0-9a-f-]+\.sqlite$/.test(basename(databasePath))
+  || statePath !== expectedStatePath
+  || databasePath !== expectedDatabasePath
   || typeof runtime.api?.command !== 'string'
   || !Array.isArray(runtime.api.args)
 ) {
