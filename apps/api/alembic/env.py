@@ -3,9 +3,11 @@ from __future__ import annotations
 from logging.config import fileConfig
 from pathlib import Path
 import sys
+from typing import Any
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+import sqlalchemy as sa
+from sqlalchemy import engine_from_config, inspect, pool, text
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -22,6 +24,19 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+def configure_version_table_capacity(connection: Any | None) -> None:
+    """Allow revision identifiers longer than Alembic's legacy 32-character default."""
+    migration_context = context.get_context()
+    migration_context._version.c.version_num.type = sa.String(128)
+    if connection is None or connection.dialect.name != "postgresql":
+        return
+    if "alembic_version" not in inspect(connection).get_table_names():
+        return
+    connection.execute(
+        text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(128)")
+    )
+
+
 def run_migrations_offline() -> None:
     context.configure(
         url=settings.database_url,
@@ -29,6 +44,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
+    configure_version_table_capacity(None)
 
     with context.begin_transaction():
         context.run_migrations()
@@ -43,6 +59,7 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)
+        configure_version_table_capacity(connection)
 
         with context.begin_transaction():
             context.run_migrations()

@@ -11,6 +11,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
@@ -75,6 +76,13 @@ class AppealStatus(StrEnum):
     APPROVED = "approved"
     REJECTED = "rejected"
     SUPERSEDED = "superseded"
+
+
+class GuardianConsentStatus(StrEnum):
+    NOT_REQUIRED = "not_required"
+    PENDING = "pending"
+    GRANTED = "granted"
+    WITHDRAWN = "withdrawn"
 
 
 def role_values(roles: type[Role]) -> list[str]:
@@ -206,6 +214,38 @@ class AuditChainHead(Base):
     tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id"), primary_key=True)
     next_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     latest_entry_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+
+
+class StudentGuardianConsent(Base):
+    __tablename__ = "student_guardian_consents"
+    __table_args__ = (
+        CheckConstraint(
+            "(requires_guardian_consent = false AND status = 'not_required') "
+            "OR requires_guardian_consent = true",
+            name="ck_guardian_consent_status_matches_requirement",
+        ),
+        CheckConstraint(
+            "status != 'granted' OR (notice_version IS NOT NULL "
+            "AND evidence_reference IS NOT NULL AND verified_by_user_id IS NOT NULL "
+            "AND granted_at IS NOT NULL)",
+            name="ck_granted_guardian_consent_has_verification",
+        ),
+        Index("ix_student_guardian_consents_status", "status"),
+    )
+
+    student_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    requires_guardian_consent: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    status: Mapped[GuardianConsentStatus] = mapped_column(
+        Enum(GuardianConsentStatus, native_enum=False, values_callable=role_values),
+        nullable=False,
+    )
+    notice_version: Mapped[str | None] = mapped_column(String(50))
+    evidence_reference: Mapped[str | None] = mapped_column(String(100))
+    verified_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    granted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    withdrawal_reason: Mapped[str | None] = mapped_column(String(500))
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class GradingPolicy(Base):
