@@ -93,6 +93,20 @@ uvicorn edu_grader_api.main:app --app-dir apps/api/src --reload --port 8000
 uvicorn edu_grader.main:app --app-dir services/grader/src --reload --port 8010
 ```
 
+### 浏览器验收测试
+
+首次运行先安装 Playwright 的 Chromium：
+
+```bash
+cd apps/web
+npx playwright install chromium
+npm run test:e2e
+```
+
+后续在 `apps/web` 目录运行 `npm run test:e2e` 即可。该命令会启动仅监听本机回环地址的
+临时 API 和 Nuxt，使用虚构的种子数据，并在结束后删除临时 SQLite 数据库。此验收测试使用
+固定的测试令牌，不验证生产 Keycloak 登录。
+
 ## 已实现的验证性接口
 
 ```http

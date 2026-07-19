@@ -60,6 +60,8 @@ def test_assigned_teacher_lists_manual_review_tasks(api_client, database_session
         idempotency_key=str(uuid4()),
         grader_client=FakeEnglishGraderClient(),
     )
+    task = database_session.scalar(select(ReviewTask))
+    assert task is not None
 
     response = api_client.get(
         "/v1/review-tasks", headers=authorize(api_client, assignment.created_by_user)
@@ -68,6 +70,7 @@ def test_assigned_teacher_lists_manual_review_tasks(api_client, database_session
     assert response.status_code == 200
     assert response.json()["review_tasks"] == [
         {
+            "id": str(task.id),
             "assignment_id": str(assignment.id),
             "attempt_id": str(attempt.id),
             "assignment_item_id": str(item.id),

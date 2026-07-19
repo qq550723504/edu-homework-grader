@@ -1,6 +1,6 @@
 export default defineNuxtConfig({
   compatibilityDate: '2026-07-01',
-  devtools: { enabled: true },
+  devtools: { enabled: process.env.NUXT_DEVTOOLS_ENABLED !== 'false' },
   css: ['~/assets/css/main.css'],
   app: {
     head: {
@@ -16,6 +16,11 @@ export default defineNuxtConfig({
   runtimeConfig: {
     public: {
       apiBase: process.env.NUXT_PUBLIC_API_BASE ?? 'http://localhost:8000'
+    }
+  },
+  vite: {
+    optimizeDeps: {
+      include: ['mathlive', '@cortex-js/compute-engine', 'dexie']
     }
   }
 })

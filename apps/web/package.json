@@ -6,6 +6,7 @@
     "dev": "nuxt dev",
     "build": "nuxt build",
     "test": "vitest run",
+    "test:e2e": "playwright test",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare"
   },
@@ -16,6 +17,7 @@
     "nuxt": "4.4.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "fake-indexeddb": "6.2.5",
     "vitest": "4.1.10"
   }

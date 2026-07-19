@@ -13,6 +13,7 @@ node_modules/
 .nuxt/
 .output/
 .nitro/
+apps/web/test-results/
 
 # Environment
 .env

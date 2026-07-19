@@ -14,17 +14,20 @@ const host = ref<HTMLElement | null>(null)
 let field: { value: string; getValue(format: 'math-json'): string; addEventListener(type: string, listener: () => void): void } | null = null
 
 onMounted(async () => {
-  const [{ mathVirtualKeyboard }] = await Promise.all([
+  await Promise.all([
     import('mathlive'),
     import('@cortex-js/compute-engine')
   ])
-  mathVirtualKeyboard.layouts = ['numeric', 'symbols', 'alphabetic']
+  window.mathVirtualKeyboard.layouts = ['numeric', 'symbols', 'alphabetic']
   const element = document.createElement('math-field') as unknown as typeof field
   if (!element || !host.value) return
   field = element
   field.value = props.modelValue?.latex ?? ''
   ;(element as unknown as { mathVirtualKeyboardPolicy: string }).mathVirtualKeyboardPolicy = 'auto'
-  element.addEventListener('input', () => emit('update:modelValue', toMathAnswer(element)))
+  ;(element as unknown as Element).setAttribute('aria-label', '数学答案')
+  element.addEventListener('input', () => {
+    queueMicrotask(() => emit('update:modelValue', toMathAnswer(element)))
+  })
   host.value.append(element as unknown as Node)
 })
 

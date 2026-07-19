@@ -78,6 +78,37 @@ def test_e2e_app_accepts_only_its_static_fictional_tokens(
         assert submitted.status_code == 200
 
 
+def test_e2e_app_allows_only_the_loopback_web_origin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with e2e_client(tmp_path, monkeypatch) as client:
+        allowed = client.options(
+            "/v1/student/assignments",
+            headers={
+                "Origin": "http://127.0.0.1:13000",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "authorization",
+            },
+        )
+
+        assert allowed.status_code == 200
+        assert (
+            allowed.headers["access-control-allow-origin"]
+            == "http://127.0.0.1:13000"
+        )
+
+        rejected = client.options(
+            "/v1/student/assignments",
+            headers={
+                "Origin": "http://localhost:13000",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+
+        assert rejected.status_code == 400
+        assert "access-control-allow-origin" not in rejected.headers
+
+
 def test_production_app_does_not_accept_e2e_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
