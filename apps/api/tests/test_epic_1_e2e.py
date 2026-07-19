@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
@@ -140,7 +140,7 @@ def create_and_publish_assignment(
             "class_id": str(classroom.id),
             "title": "Expression equivalence",
             "subject": "mathematics",
-            "due_at": datetime(2026, 7, 20, tzinfo=timezone.utc).isoformat(),
+            "due_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
             "submission_rule": {"allow_late": False},
         },
     )
