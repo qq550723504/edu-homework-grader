@@ -6,8 +6,9 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..audit import append_audit_event
 from ..auth import CurrentPrincipal
-from ..models import AuditLog, Classroom, Enrollment, Role, User
+from ..models import Classroom, Enrollment, Role, User
 
 
 EXPECTED_HEADERS = {"class_code", "class_name", "student_school_id", "student_display_name"}
@@ -91,17 +92,13 @@ def import_roster(session: Session, actor: CurrentPrincipal, rows: list[RosterRo
             enrollment = session.get(Enrollment, (classroom.id, student.id))
             if enrollment is None:
                 session.add(Enrollment(class_id=classroom.id, student_id=student.id))
-            session.add(
-                AuditLog(
-                    tenant_id=UUID(actor.tenant_id),
-                    actor_user_id=UUID(actor.user_id),
-                    event_type="roster.imported",
-                    target_type="student",
-                    target_id=student.id,
-                    metadata_json={
-                        "class_code": row.class_code,
-                        "school_id": row.student_school_id,
-                    },
-                )
+            append_audit_event(
+                session,
+                tenant_id=UUID(actor.tenant_id),
+                actor_user_id=UUID(actor.user_id),
+                event_type="roster.imported",
+                target_type="student",
+                target_id=student.id,
+                metadata={"class_id": str(classroom.id)},
             )
     return len(rows)

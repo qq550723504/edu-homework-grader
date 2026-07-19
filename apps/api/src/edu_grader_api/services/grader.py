@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
+from edu_grader_processor_policy import assert_allowed_processor_url, assert_deidentified_payload
+
+from ..settings import settings
 
 from .questions import GradeResult
 
@@ -33,6 +36,7 @@ class HttpGraderClient:
             answer_json,
             policy_version=policy_version,
         )
+        self._validate_request(payload)
         response = httpx.post(f"{self.base_url}{path}", json=payload, timeout=10)
         response.raise_for_status()
         data = response.json()
@@ -59,6 +63,7 @@ class HttpGraderClient:
         ):
             raise MathAnswerNormalizationError("invalid_variables", "数学答案变量列表无效。")
         try:
+            self._validate_request({"mathjson": mathjson, "variables": variables})
             response = httpx.post(
                 f"{self.base_url}/v1/normalize/mathjson",
                 json={"mathjson": mathjson, "variables": variables},
@@ -78,6 +83,10 @@ class HttpGraderClient:
                 "invalid_normalizer_response", "数学规范化服务响应无效。"
             )
         return ast
+
+    def _validate_request(self, payload: dict[str, object]) -> None:
+        assert_allowed_processor_url(self.base_url, settings.allowed_processor_hosts)
+        assert_deidentified_payload(payload)
 
     def _request(
         self,

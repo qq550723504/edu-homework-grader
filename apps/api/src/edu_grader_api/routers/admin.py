@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..audit import append_audit_event
 from ..auth import CurrentPrincipal
 from ..db import get_session
 from ..dependencies import require_role
@@ -47,15 +48,14 @@ def create_class(
         classroom = Classroom(tenant_id=UUID(principal.tenant_id), code=body.code, name=body.name)
         session.add(classroom)
         session.flush()
-        session.add(
-            AuditLog(
-                tenant_id=UUID(principal.tenant_id),
-                actor_user_id=UUID(principal.user_id),
-                event_type="class.created",
-                target_type="class",
-                target_id=classroom.id,
-                metadata_json={"code": classroom.code},
-            )
+        append_audit_event(
+            session,
+            tenant_id=UUID(principal.tenant_id),
+            actor_user_id=UUID(principal.user_id),
+            event_type="class.created",
+            target_type="class",
+            target_id=classroom.id,
+            metadata={},
         )
     return {"id": str(classroom.id), "code": classroom.code, "name": classroom.name}
 
@@ -85,15 +85,14 @@ def assign_teacher(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
         if session.get(ClassTeacher, (classroom.id, teacher.id)) is None:
             session.add(ClassTeacher(class_id=classroom.id, teacher_id=teacher.id))
-        session.add(
-            AuditLog(
-                tenant_id=UUID(principal.tenant_id),
-                actor_user_id=UUID(principal.user_id),
-                event_type="class.teacher_assigned",
-                target_type="class",
-                target_id=classroom.id,
-                metadata_json={"teacher_id": str(teacher.id)},
-            )
+        append_audit_event(
+            session,
+            tenant_id=UUID(principal.tenant_id),
+            actor_user_id=UUID(principal.user_id),
+            event_type="class.teacher_assigned",
+            target_type="class",
+            target_id=classroom.id,
+            metadata={"teacher_id": str(teacher.id)},
         )
     return {"class_id": str(classroom.id), "teacher_id": str(teacher.id)}
 

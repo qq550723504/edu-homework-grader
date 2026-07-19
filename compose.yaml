@@ -67,7 +67,8 @@ services:
 
   grader:
     build:
-      context: ./services/grader
+      context: .
+      dockerfile: ./services/grader/Dockerfile
     environment:
       APP_ENV: ${APP_ENV:-development}
       GRADER_MATH_CPU_SECONDS: ${GRADER_MATH_CPU_SECONDS:-1}
@@ -79,6 +80,7 @@ services:
       ENGLISH_EMBEDDING_MODEL_ID: ${ENGLISH_EMBEDDING_MODEL_ID:-sentence-transformers/all-MiniLM-L6-v2}
       ENGLISH_EMBEDDING_MODEL_REVISION: ${ENGLISH_EMBEDDING_MODEL_REVISION:-unconfigured}
       ENGLISH_EMBEDDING_MODEL_DIGEST: ${ENGLISH_EMBEDDING_MODEL_DIGEST:-unconfigured}
+      PROCESSOR_ALLOWED_HOSTS: ${PROCESSOR_ALLOWED_HOSTS:-grader,languagetool,localhost}
     cpus: 0.50
     mem_limit: 256m
     pids_limit: 64
@@ -95,7 +97,8 @@ services:
 
   api:
     build:
-      context: ./apps/api
+      context: .
+      dockerfile: ./apps/api/Dockerfile
     environment:
       APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://edu_grader:change-me@postgres:5432/edu_grader}
@@ -107,6 +110,9 @@ services:
       OIDC_TENANT_SLUG: ${OIDC_TENANT_SLUG:-pilot}
       BOOTSTRAP_ADMIN_SUB: ${BOOTSTRAP_ADMIN_SUB:-}
       BOOTSTRAP_ADMIN_TENANT_SLUG: ${BOOTSTRAP_ADMIN_TENANT_SLUG:-}
+      AUDIT_HMAC_KEY: ${AUDIT_HMAC_KEY:-development-only-change-me-32-bytes-minimum}
+      AUDIT_HMAC_KEY_VERSION: ${AUDIT_HMAC_KEY_VERSION:-dev-1}
+      PROCESSOR_ALLOWED_HOSTS: ${PROCESSOR_ALLOWED_HOSTS:-grader,languagetool,localhost}
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:

@@ -132,6 +132,7 @@ docker compose exec api python -m alembic -c alembic.ini upgrade head
 - 每次评分保存题目版本、规则版本和批改器版本。
 - 所有教师改分记录原分、改后分和理由。
 - 学生正式提交使用幂等键，答案保存使用乐观锁。
+- 试点数据处理字段、访问角色和保存期限见 [数据清单](docs/data-inventory.md)。
 
 ## 下一步
 

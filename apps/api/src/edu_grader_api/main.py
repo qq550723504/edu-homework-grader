@@ -1,6 +1,9 @@
+import logging
+
 from fastapi import Depends, FastAPI
 
 from .auth import CurrentPrincipal, get_current_principal
+from .logging import get_secure_logger
 from .routers.admin import router as admin_router
 from .routers.appeals import router as appeals_router
 from .routers.appeals import teacher_router as teacher_appeals_router
@@ -19,6 +22,8 @@ app = FastAPI(
     version="0.1.0",
     description="Core API for assignments, submissions, reviews, corrections and audit trails.",
 )
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = get_secure_logger(__name__)
 app.include_router(admin_router)
 app.include_router(appeals_router)
 app.include_router(teacher_appeals_router)

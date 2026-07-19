@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from edu_grader_api.audit import verify_audit_chain
 from edu_grader_api.models import (
     AuditLog,
     GradingPolicy,
@@ -166,9 +167,17 @@ def test_teacher_adjusts_score_with_reason_and_resolves_task(
     assert task.version == 1
     assert task.decisions[0].original_score == 0
     assert task.decisions[0].reason == "Equivalent answer."
-    assert database_session.scalar(
-        select(AuditLog).where(AuditLog.event_type == "review.decision_recorded")
+    entry = database_session.scalar(
+        select(AuditLog).where(AuditLog.event_type == "review.score_adjusted")
     )
+    assert entry is not None
+    assert entry.metadata_json == {
+        "action": "adjust_score",
+        "original_score": 0.0,
+        "final_score": 1.0,
+        "task_version": 0,
+    }
+    assert verify_audit_chain(database_session, tenant_id=entry.tenant_id).valid is True
 
     duplicate = api_client.post(
         f"/v1/review-tasks/{task.id}/decisions",
