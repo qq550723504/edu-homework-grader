@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from edu_grader_processor_policy import assert_allowed_processor_url, assert_deidentified_payload
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -65,8 +66,12 @@ def english_exact(request: EnglishExactRequest) -> GradingResult:
 
 @app.post("/v1/grade/english", response_model=GradingResult, tags=["english"])
 def english_grade(request: EnglishGradeRequest) -> GradingResult:
+    payload = request.model_dump()
+    assert_deidentified_payload(payload)
+    languagetool_base_url = os.environ.get("LANGUAGETOOL_BASE_URL", "http://languagetool:8010/v2")
+    assert_allowed_processor_url(languagetool_base_url, _processor_allowed_hosts())
     grammar_checker = LanguageToolClient(
-        os.environ.get("LANGUAGETOOL_BASE_URL", "http://languagetool:8010/v2"),
+        languagetool_base_url,
         timeout_seconds=float(os.environ.get("LANGUAGETOOL_TIMEOUT_SECONDS", "2")),
     )
     try:
@@ -81,9 +86,17 @@ def english_grade(request: EnglishGradeRequest) -> GradingResult:
     except EnglishDependencyError as error:
         similarity = UnavailableSimilarity(str(error))
     return grade_english(
-        request.model_dump(),
+        payload,
         grammar_checker=grammar_checker,
         similarity=similarity,
+    )
+
+
+def _processor_allowed_hosts() -> frozenset[str]:
+    return frozenset(
+        item.strip().casefold()
+        for item in os.environ.get("PROCESSOR_ALLOWED_HOSTS", "grader,languagetool,localhost").split(",")
+        if item.strip()
     )
 
 

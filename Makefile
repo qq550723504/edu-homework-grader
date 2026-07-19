@@ -1,7 +1,7 @@
 .PHONY: install-python test lint format api-test api-lint api-migrate question-test calibration-report web-install web-build dev down
 
 install-python:
-	python -m pip install -e "apps/api[dev]" -e "services/grader[dev]"
+	python -m pip install -e packages/processor-policy -e "apps/api[dev]" -e "services/grader[dev]"
 
 test:
 	python -m pytest apps/api/tests services/grader/tests

@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from edu_grader_api.settings import Settings
 
 
@@ -26,3 +28,18 @@ def test_web_client_requests_no_email_or_profile_scope() -> None:
     assert "email" not in web_client["defaultClientScopes"]
     assert "profile" not in web_client["defaultClientScopes"]
     assert "school-id" in web_client["defaultClientScopes"]
+
+
+@pytest.mark.parametrize(
+    ("audit_hmac_key", "processor_allowed_hosts"),
+    [("", "grader"), ("x" * 32, "")],
+)
+def test_production_settings_require_audit_key_and_processor_allowlist(
+    audit_hmac_key: str, processor_allowed_hosts: str
+) -> None:
+    with pytest.raises(ValueError):
+        Settings(
+            app_env="production",
+            audit_hmac_key=audit_hmac_key,
+            processor_allowed_hosts=processor_allowed_hosts,
+        )
