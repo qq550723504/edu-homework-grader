@@ -67,3 +67,26 @@ def test_verification_detects_modified_metadata() -> None:
 
     assert result.valid is False
     assert result.first_invalid_sequence == entry.sequence
+
+
+def test_verification_preserves_utc_hashes_after_sqlite_round_trip() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        tenant = Tenant(slug="round-trip", name="Round trip")
+        session.add(tenant)
+        session.flush()
+        append_audit_event(
+            session,
+            tenant_id=tenant.id,
+            actor_user_id=None,
+            event_type="auth.login_denied",
+            target_type="identity",
+            target_id=uuid4(),
+            metadata={"reason": "membership_required"},
+        )
+        tenant_id = tenant.id
+        session.commit()
+
+    with Session(engine) as session:
+        assert verify_audit_chain(session, tenant_id=tenant_id).valid is True

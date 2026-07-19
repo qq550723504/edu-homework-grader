@@ -163,12 +163,17 @@ def _entry_hash(
     previous_hash: str,
     key_version: str,
 ) -> str:
+    occurred_at_utc = (
+        occurred_at.replace(tzinfo=timezone.utc)
+        if occurred_at.tzinfo is None
+        else occurred_at.astimezone(timezone.utc)
+    )
     payload = {
         "actor_user_id": str(actor_user_id) if actor_user_id else None,
         "event_type": event_type,
         "key_version": key_version,
         "metadata": _safe_metadata(metadata),
-        "occurred_at": occurred_at.astimezone(timezone.utc).isoformat(),
+        "occurred_at": occurred_at_utc.isoformat(),
         "previous_hash": previous_hash,
         "sequence": sequence,
         "target_id": str(target_id),
