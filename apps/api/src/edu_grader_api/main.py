@@ -11,6 +11,7 @@ from .routers.questions import router as questions_router
 from .routers.questions import version_router as question_versions_router
 from .routers.reviews import router as reviews_router
 from .routers.reviews import publication_router
+from .routers.reviews import metrics_router
 from .settings import settings
 
 app = FastAPI(
@@ -28,6 +29,7 @@ app.include_router(questions_router)
 app.include_router(question_versions_router)
 app.include_router(reviews_router)
 app.include_router(publication_router)
+app.include_router(metrics_router)
 
 
 @app.get("/health", tags=["system"])

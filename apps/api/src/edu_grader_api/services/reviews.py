@@ -1,3 +1,6 @@
+from collections import Counter
+from datetime import datetime, timezone
+from statistics import median
 from uuid import UUID
 
 from sqlalchemy import select
@@ -34,6 +37,82 @@ class ReviewConflictError(Exception):
 
 class ReviewValidationError(ValueError):
     """Raised when a decision payload is incomplete or invalid."""
+
+
+def teacher_review_metrics(
+    session: Session,
+    *,
+    tenant_id: UUID,
+    teacher_id: UUID,
+    from_at: datetime | None = None,
+    to_at: datetime | None = None,
+    class_id: UUID | None = None,
+    assignment_id: UUID | None = None,
+) -> dict[str, object]:
+    statement = (
+        select(ReviewTask, ReviewDecision)
+        .join(ReviewDecision, ReviewDecision.review_task_id == ReviewTask.id)
+        .join(AttemptAnswer, ReviewTask.attempt_answer_id == AttemptAnswer.id)
+        .join(StudentAttempt, AttemptAnswer.attempt_id == StudentAttempt.id)
+        .join(Assignment, StudentAttempt.assignment_id == Assignment.id)
+        .join(ClassTeacher, ClassTeacher.class_id == Assignment.class_id)
+        .where(
+            Assignment.tenant_id == tenant_id,
+            ClassTeacher.teacher_id == teacher_id,
+            ReviewDecision.actor_user_id == teacher_id,
+            ReviewTask.status == ReviewTaskStatus.RESOLVED,
+        )
+    )
+    if from_at is not None:
+        statement = statement.where(ReviewDecision.created_at >= from_at)
+    if to_at is not None:
+        statement = statement.where(ReviewDecision.created_at <= to_at)
+    if class_id is not None:
+        statement = statement.where(Assignment.class_id == class_id)
+    if assignment_id is not None:
+        statement = statement.where(Assignment.id == assignment_id)
+
+    rows = list(session.execute(statement))
+    durations = [_duration_seconds(task.created_at, decision.created_at) for task, decision in rows]
+    task_reasons = Counter(task.reason.value for task, _ in rows)
+    decision_reasons = Counter(
+        decision.reason.strip() for _, decision in rows if decision.reason and decision.reason.strip()
+    )
+    handled_tasks = len(rows)
+    adjustments = sum(
+        decision.action is ReviewAction.ADJUST_SCORE for _, decision in rows
+    )
+    return {
+        "handled_tasks": handled_tasks,
+        "average_duration_seconds": _rounded_average(durations),
+        "median_duration_seconds": _rounded_median(durations),
+        "score_adjustment_rate": adjustments / handled_tasks if handled_tasks else 0,
+        "task_reasons": _reason_counts(task_reasons),
+        "decision_reasons": _reason_counts(decision_reasons),
+    }
+
+
+def _duration_seconds(created_at: datetime, decided_at: datetime) -> float:
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    if decided_at.tzinfo is None:
+        decided_at = decided_at.replace(tzinfo=timezone.utc)
+    return max(0, (decided_at - created_at).total_seconds())
+
+
+def _rounded_average(values: list[float]) -> float:
+    return round(sum(values) / len(values), 3) if values else 0
+
+
+def _rounded_median(values: list[float]) -> float:
+    return round(float(median(values)), 3) if values else 0
+
+
+def _reason_counts(counts: Counter[str]) -> list[dict[str, object]]:
+    return [
+        {"reason": reason, "count": count}
+        for reason, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
 
 
 def create_review_task_for_run(session: Session, run: GradingRun) -> ReviewTask:

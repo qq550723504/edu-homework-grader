@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -18,11 +19,13 @@ from ..services.reviews import (
     get_teacher_review_task,
     list_teacher_review_tasks,
     publish_attempt_results,
+    teacher_review_metrics,
 )
 
 
 router = APIRouter(prefix="/v1/review-tasks", tags=["teacher reviews"])
 publication_router = APIRouter(prefix="/v1/assignments", tags=["grade publication"])
+metrics_router = APIRouter(prefix="/v1/review-metrics", tags=["teacher review metrics"])
 
 
 class ReviewDecisionRequest(BaseModel):
@@ -34,6 +37,31 @@ class ReviewDecisionRequest(BaseModel):
 
 class BatchConfirmRequest(BaseModel):
     task_ids: list[UUID] = Field(min_length=1)
+
+
+@metrics_router.get("")
+def teacher_review_metrics_route(
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+    from_at: Annotated[datetime | None, Query(alias="from")] = None,
+    to_at: Annotated[datetime | None, Query(alias="to")] = None,
+    class_id: UUID | None = None,
+    assignment_id: UUID | None = None,
+) -> dict[str, object]:
+    if from_at is not None and to_at is not None and from_at > to_at:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="from must not be later than to",
+        )
+    return teacher_review_metrics(
+        session,
+        tenant_id=UUID(principal.tenant_id),
+        teacher_id=UUID(principal.user_id),
+        from_at=from_at,
+        to_at=to_at,
+        class_id=class_id,
+        assignment_id=assignment_id,
+    )
 
 
 @router.get("")
