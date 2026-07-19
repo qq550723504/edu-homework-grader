@@ -30,7 +30,16 @@ async function pathExists(path) {
   }
 }
 
-test('supervisor stops its owned API and removes SQLite when its owner disappears', async (t) => {
+function databaseFamilyPaths(databasePath) {
+  return ['', '-journal', '-wal', '-shm'].map((suffix) => `${databasePath}${suffix}`)
+}
+
+async function databaseFamilyIsGone(databasePath) {
+  const existence = await Promise.all(databaseFamilyPaths(databasePath).map(pathExists))
+  return existence.every((exists) => !exists)
+}
+
+test('normal stop removes every nonce-scoped SQLite artifact after API close', async (t) => {
   await access(supervisorPath)
   const runDirectory = await mkdtemp(join(tmpdir(), 'edu-homework-grader-supervisor-test-'))
   const databasePath = join(runDirectory, `edu-homework-grader-e2e-${randomUUID()}.sqlite`)
@@ -73,11 +82,11 @@ test('supervisor stops its owned API and removes SQLite when its owner disappear
   const { apiPid } = JSON.parse(await readFile(startedPath, 'utf8'))
   assert.equal(Number.isInteger(apiPid), true)
 
-  owner.kill()
+  await writeFile(`${statePath}.stop`, 'SIGTERM', 'utf8')
   const exitCode = await new Promise((resolveExit) => supervisor.once('exit', resolveExit))
 
   assert.equal(exitCode, 0)
-  assert.equal(await pathExists(databasePath), false)
+  assert.equal(await databaseFamilyIsGone(databasePath), true)
   assert.equal(await pathExists(statePath), false)
   assert.equal(await pathExists(startedPath), false)
 })
@@ -111,11 +120,11 @@ test('launcher force-exit during setup still removes its temporary SQLite', {
   launcher.kill('SIGKILL')
 
   await waitUntil(
-    async () => !(await pathExists(databasePath))
+    async () => (await databaseFamilyIsGone(databasePath))
       && !(await pathExists(statePath))
       && !(await pathExists(`${statePath}.started`)),
     'supervisor did not clean runtime files after forced launcher exit',
   )
 
-  assert.equal(await pathExists(databasePath), false)
+  assert.equal(await databaseFamilyIsGone(databasePath), true)
 })

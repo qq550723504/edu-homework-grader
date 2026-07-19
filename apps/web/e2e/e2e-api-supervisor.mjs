@@ -68,16 +68,22 @@ async function pathExists(path) {
   }
 }
 
-async function removeRuntimeFiles() {
+async function removeWithWindowsRetry(path) {
   const deadline = Date.now() + 5_000
   while (true) {
     try {
-      await rm(databasePath, { force: true })
-      break
+      await rm(path, { force: true })
+      return
     } catch (error) {
       if (!['EBUSY', 'EPERM'].includes(error?.code) || Date.now() >= deadline) throw error
       await new Promise((resolveWait) => setTimeout(resolveWait, 100))
     }
+  }
+}
+
+async function removeRuntimeFiles() {
+  for (const suffix of ['', '-journal', '-wal', '-shm']) {
+    await removeWithWindowsRetry(`${databasePath}${suffix}`)
   }
   await rm(statePath, { force: true })
   await rm(startedPath, { force: true })

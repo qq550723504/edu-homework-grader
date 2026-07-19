@@ -159,7 +159,9 @@ def create_and_publish_assignment(
     return assignment_id
 
 
-def open_assignment(client: TestClient, student: User, assignment_id: str) -> tuple[str, str, dict[str, object]]:
+def open_assignment(
+    client: TestClient, student: User, assignment_id: str
+) -> tuple[str, str, dict[str, object]]:
     detail = client.get(
         f"/v1/student/assignments/{assignment_id}", headers=authorize(client, student)
     )
@@ -168,9 +170,7 @@ def open_assignment(client: TestClient, student: User, assignment_id: str) -> tu
     return body["attempt"]["id"], body["items"][0]["id"], body
 
 
-def save_mathjson_answer(
-    client: TestClient, student: User, attempt_id: str, item_id: str
-):
+def save_mathjson_answer(client: TestClient, student: User, attempt_id: str, item_id: str):
     return client.put(
         f"/v1/student/attempts/{attempt_id}/answers/{item_id}",
         headers=authorize(client, student),
@@ -194,9 +194,7 @@ def publish_after_teacher_confirmation(
     assert tasks.status_code == 200
     assert any(task["attempt_id"] == attempt_id for task in tasks.json()["review_tasks"])
     task = session.scalar(
-        select(ReviewTask)
-        .join(AttemptAnswer)
-        .where(AttemptAnswer.attempt_id == UUID(attempt_id))
+        select(ReviewTask).join(AttemptAnswer).where(AttemptAnswer.attempt_id == UUID(attempt_id))
     )
     assert task is not None
     confirmed = client.post(
@@ -311,7 +309,9 @@ def test_teacher_to_student_correction_vertical_slice(client, session, monkeypat
     assert run.evidence_json["criteria"] == M2_EVIDENCE["criteria"]
 
     assert (
-        publish_after_teacher_confirmation(client, session, teacher, assignment_id, attempt_id).status_code
+        publish_after_teacher_confirmation(
+            client, session, teacher, assignment_id, attempt_id
+        ).status_code
         == 201
     )
     published_detail = client.get(
@@ -329,7 +329,9 @@ def test_teacher_to_student_correction_vertical_slice(client, session, monkeypat
     assert "rule_snapshot" not in published_detail.json()
     assert "expected" not in published_detail.json()["items"][0]
     assert (
-        correction_round_trip(client, session, teacher, student, assignment_id, attempt_id).status_code
+        correction_round_trip(
+            client, session, teacher, student, assignment_id, attempt_id
+        ).status_code
         == 201
     )
     correction_detail = client.get(

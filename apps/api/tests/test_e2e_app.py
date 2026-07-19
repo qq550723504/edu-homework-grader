@@ -92,10 +92,7 @@ def test_e2e_app_allows_only_the_loopback_web_origin(
         )
 
         assert allowed.status_code == 200
-        assert (
-            allowed.headers["access-control-allow-origin"]
-            == "http://127.0.0.1:13000"
-        )
+        assert allowed.headers["access-control-allow-origin"] == "http://127.0.0.1:13000"
 
         rejected = client.options(
             "/v1/student/assignments",
