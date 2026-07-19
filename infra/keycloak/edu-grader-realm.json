@@ -31,10 +31,8 @@
       "defaultClientScopes": [
         "web-origins",
         "acr",
-        "profile",
         "roles",
         "basic",
-        "email",
         "edu-grader-api-audience",
         "school-id"
       ]
