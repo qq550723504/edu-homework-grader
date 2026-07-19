@@ -15,6 +15,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -83,6 +84,25 @@ class GuardianConsentStatus(StrEnum):
     PENDING = "pending"
     GRANTED = "granted"
     WITHDRAWN = "withdrawn"
+
+
+class PrivacyRequestType(StrEnum):
+    ERASURE = "erasure"
+
+
+class PrivacyRequestStatus(StrEnum):
+    REQUESTED = "requested"
+    LEGAL_HOLD = "legal_hold"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    COMPLETED = "completed"
+
+
+ACTIVE_PRIVACY_REQUEST_STATUSES = (
+    PrivacyRequestStatus.REQUESTED.value,
+    PrivacyRequestStatus.LEGAL_HOLD.value,
+    PrivacyRequestStatus.APPROVED.value,
+)
 
 
 def role_values(roles: type[Role]) -> list[str]:
@@ -245,6 +265,38 @@ class StudentGuardianConsent(Base):
     granted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     withdrawal_reason: Mapped[str | None] = mapped_column(String(500))
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class PrivacyRequest(Base):
+    __tablename__ = "privacy_requests"
+    __table_args__ = (
+        Index(
+            "uq_privacy_requests_active_student",
+            "student_id",
+            unique=True,
+            postgresql_where=text("status IN ('requested', 'legal_hold', 'approved')"),
+            sqlite_where=text("status IN ('requested', 'legal_hold', 'approved')"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    student_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    request_type: Mapped[PrivacyRequestType] = mapped_column(
+        Enum(PrivacyRequestType, native_enum=False, values_callable=role_values), nullable=False
+    )
+    status: Mapped[PrivacyRequestStatus] = mapped_column(
+        Enum(PrivacyRequestStatus, native_enum=False, values_callable=role_values), nullable=False
+    )
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)
+    hold_reason: Mapped[str | None] = mapped_column(String(500))
+    requested_by_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    decided_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    eligible_for_deletion_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
