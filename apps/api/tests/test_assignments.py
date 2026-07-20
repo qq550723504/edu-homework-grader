@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -267,7 +267,7 @@ def published_assignment_for_student(
         created_by_user=teacher,
         title="Published algebra",
         subject="mathematics",
-        due_at=datetime(2026, 7, 20, tzinfo=timezone.utc),
+        due_at=datetime.now(timezone.utc) + timedelta(days=1),
         submission_rule_json={"allow_late": False},
         status=AssignmentStatus.PUBLISHED,
         published_at=datetime(2026, 7, 18, tzinfo=timezone.utc),
@@ -276,6 +276,12 @@ def published_assignment_for_student(
     session.add_all([assignment, item])
     session.commit()
     return student, classroom, assignment, item, published
+
+
+def test_published_assignment_fixture_uses_a_future_deadline(session: Session) -> None:
+    _, _, assignment, _, _ = published_assignment_for_student(session)
+
+    assert assignment.due_at.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc)
 
 
 def test_enrolled_student_lists_pending_and_opens_frozen_assignment(
@@ -319,7 +325,7 @@ def test_submitted_unpublished_assignment_remains_pending_review(
             "id": str(assignment.id),
             "title": "Published algebra",
             "subject": "mathematics",
-            "due_at": "2026-07-20T00:00:00+00:00",
+            "due_at": assignment.due_at.replace(tzinfo=timezone.utc).isoformat(),
             "status": "submitted_pending_review",
         }
     ]

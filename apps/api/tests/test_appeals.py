@@ -1,3 +1,5 @@
+from datetime import timezone
+
 import pytest
 from sqlalchemy.orm import Session
 
@@ -293,7 +295,7 @@ def test_approved_unfinished_correction_moves_original_assignment_to_correction_
             "id": str(assignment.id),
             "title": "Published algebra",
             "subject": "mathematics",
-            "due_at": "2026-07-20T00:00:00+00:00",
+            "due_at": assignment.due_at.replace(tzinfo=timezone.utc).isoformat(),
             "status": "correction_required",
         }
     ]

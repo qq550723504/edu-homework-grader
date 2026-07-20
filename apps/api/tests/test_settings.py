@@ -28,6 +28,43 @@ def test_web_client_requests_no_email_or_profile_scope() -> None:
     assert "email" not in web_client["defaultClientScopes"]
     assert "profile" not in web_client["defaultClientScopes"]
     assert "school-id" in web_client["defaultClientScopes"]
+    assert "offline_access" in web_client["defaultClientScopes"]
+    assert "edu-grader-subject" in web_client["defaultClientScopes"]
+    assert {
+        "http://localhost:3000/*",
+        "http://localhost:13000/*",
+    }.issubset(web_client["redirectUris"])
+
+    subject_scope = next(
+        scope for scope in realm["clientScopes"] if scope["name"] == "edu-grader-subject"
+    )
+    assert subject_scope["protocolMappers"] == [
+        {
+            "name": "subject",
+            "protocol": "openid-connect",
+            "protocolMapper": "oidc-sub-mapper",
+            "consentRequired": False,
+            "config": {
+                "access.token.claim": "true",
+                "id.token.claim": "true",
+                "userinfo.token.claim": "true",
+                "introspection.token.claim": "true",
+            },
+        }
+    ]
+
+
+def test_development_realm_users_do_not_require_profile_completion() -> None:
+    realm = json.loads(Path("infra/keycloak/edu-grader-realm.json").read_text(encoding="utf-8"))
+    users = {user["username"]: user for user in realm["users"]}
+
+    for username in ("pilot-admin", "pilot-teacher", "pilot-student"):
+        user = users[username]
+        assert user["email"].endswith("@example.invalid")
+        assert user["emailVerified"] is True
+        assert user["firstName"]
+        assert user["lastName"]
+        assert "offline_access" in user["realmRoles"]
 
 
 def test_compose_requires_sensitive_development_values_instead_of_embedding_defaults() -> None:
