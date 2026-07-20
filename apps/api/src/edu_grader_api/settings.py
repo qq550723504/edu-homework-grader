@@ -46,6 +46,11 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "PROCESSOR_ALLOWED_HOSTS contains hosts not approved for production"
                 )
+            grader_host = urlparse(self.grader_base_url).hostname
+            if grader_host not in self.allowed_processor_hosts:
+                raise ValueError(
+                    "GRADER_BASE_URL must use a host in PROCESSOR_ALLOWED_HOSTS in production"
+                )
         return self
 
     @property

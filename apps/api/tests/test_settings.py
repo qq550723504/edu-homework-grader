@@ -130,6 +130,8 @@ def test_development_settings_allow_localhost_processor_host() -> None:
         ("database_url", "postgresql://edu_grader:change-me@db/edu_grader", "DATABASE_URL"),
         ("oidc_issuer", "http://localhost:8080/realms/edu-grader", "OIDC_ISSUER"),
         ("processor_allowed_hosts", "grader,*", "PROCESSOR_ALLOWED_HOSTS"),
+        ("grader_base_url", "http://external.example:8010", "GRADER_BASE_URL"),
+        ("grader_base_url", "http://localhost:8010", "GRADER_BASE_URL"),
     ],
 )
 def test_production_settings_reject_insecure_dependency_configuration(
