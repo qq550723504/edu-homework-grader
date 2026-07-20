@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 2 seconds
-Output:
 import edu_grader.execution as execution
 import edu_grader.main as grader_main
 from edu_grader.execution import (
