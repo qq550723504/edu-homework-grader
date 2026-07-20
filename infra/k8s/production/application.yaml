@@ -1,0 +1,214 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: languagetool
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: languagetool
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: languagetool
+    spec:
+      containers:
+        - name: languagetool
+          image: ghcr.io/qq550723504/edu-homework-grader-languagetool:sha-not-published
+          ports:
+            - name: http
+              containerPort: 8010
+          readinessProbe:
+            httpGet:
+              path: /v2/languages
+              port: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grader
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grader
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: grader
+    spec:
+      containers:
+        - name: grader
+          image: ghcr.io/qq550723504/edu-homework-grader-grader:sha-not-published
+          ports:
+            - name: http
+              containerPort: 8010
+          env:
+            - name: APP_ENV
+              value: production
+            - name: GRADER_MATH_MEMORY_BYTES
+              value: "536870912"
+            - name: GRADER_MATH_CPU_SECONDS
+              value: "2"
+            - name: GRADER_MATH_TIMEOUT_SECONDS
+              value: "5"
+            - name: LANGUAGETOOL_BASE_URL
+              value: http://languagetool:8010/v2
+            - name: PROCESSOR_ALLOWED_HOSTS
+              valueFrom:
+                secretKeyRef:
+                  name: edu-grader-runtime
+                  key: PROCESSOR_ALLOWED_HOSTS
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+          resources:
+            requests:
+              cpu: 500m
+              memory: 768Mi
+            limits:
+              cpu: "1"
+              memory: 1536Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api
+    spec:
+      initContainers:
+        - name: migrate
+          image: ghcr.io/qq550723504/edu-homework-grader-api:sha-not-published
+          command: ["python", "-m", "alembic", "-c", "alembic.ini", "upgrade", "head"]
+          envFrom:
+            - secretRef:
+                name: edu-grader-runtime
+      containers:
+        - name: api
+          image: ghcr.io/qq550723504/edu-homework-grader-api:sha-not-published
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - secretRef:
+                name: edu-grader-runtime
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: keycloak
+    spec:
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:26.4.7
+          args: ["start", "--import-realm"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: edu-grader-runtime
+                  key: KEYCLOAK_ADMIN_USERNAME
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: edu-grader-runtime
+                  key: KEYCLOAK_ADMIN_PASSWORD
+            - name: KC_DB
+              value: postgres
+            - name: KC_DB_URL_HOST
+              value: keycloak-postgres
+            - name: KC_DB_URL_DATABASE
+              value: keycloak
+            - name: KC_DB_USERNAME
+              value: keycloak
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: edu-grader-runtime
+                  key: KEYCLOAK_POSTGRES_PASSWORD
+            - name: KC_HOSTNAME
+              value: https://edu.getkr.com
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_PROXY_HEADERS
+              value: xforwarded
+          volumeMounts:
+            - name: realm-import
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /realms/edu-grader
+              port: http
+      volumes:
+        - name: realm-import
+          configMap:
+            name: edu-grader-production-realm
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: web
+    spec:
+      containers:
+        - name: web
+          image: ghcr.io/qq550723504/edu-homework-grader-web:sha-not-published
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: NUXT_APP_ENV
+              value: production
+            - name: NUXT_CORE_API_BASE
+              value: http://api:8000
+            - name: NUXT_OIDC_ISSUER
+              valueFrom:
+                secretKeyRef:
+                  name: edu-grader-runtime
+                  key: OIDC_ISSUER
+            - name: NUXT_SESSION_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: edu-grader-runtime
+                  key: NUXT_SESSION_PASSWORD
+            - name: NUXT_PUBLIC_API_BASE
+              value: https://edu.getkr.com
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+

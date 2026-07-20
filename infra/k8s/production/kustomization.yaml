@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: edu-homework-grader
+labels:
+  - includeSelectors: true
+    pairs:
+      app.kubernetes.io/part-of: edu-homework-grader
+resources:
+  - namespace.yaml
+  - services.yaml
+  - datastore.yaml
+  - application.yaml
+  - ingress.yaml
+configMapGenerator:
+  - name: edu-grader-production-realm
+    files:
+      - realm.json=realm.json

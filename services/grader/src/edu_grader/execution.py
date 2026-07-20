@@ -18,9 +18,9 @@ class MathExecutionLimits:
 def load_math_execution_limits(environment: Mapping[str, str] | None = None) -> MathExecutionLimits:
     values = os.environ if environment is None else environment
     return MathExecutionLimits(
-        cpu_seconds=int(values.get("GRADER_MATH_CPU_SECONDS", "1")),
-        memory_bytes=int(values.get("GRADER_MATH_MEMORY_BYTES", "134217728")),
-        timeout_seconds=float(values.get("GRADER_MATH_TIMEOUT_SECONDS", "1")),
+        cpu_seconds=int(values.get("GRADER_MATH_CPU_SECONDS", "2")),
+        memory_bytes=int(values.get("GRADER_MATH_MEMORY_BYTES", "536870912")),
+        timeout_seconds=float(values.get("GRADER_MATH_TIMEOUT_SECONDS", "5")),
     )
 
 

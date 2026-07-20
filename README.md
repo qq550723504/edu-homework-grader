@@ -153,7 +153,7 @@ docker compose exec api python -m alembic -c alembic.ini upgrade head
 英语 E4 使用 `sentence-transformers/all-MiniLM-L6-v2`（Apache-2.0），固定为提交 `1110a243fdf4706b3f48f1d95db1a4f5529b4d41` 和 tree digest `sha256:709383867deb097dbd130f792d5f60065aa34d33d17a14033fdceeb7a6a1c10b`。Grader 镜像构建时下载并校验该制品；运行时以 `local_files_only=True` 加载，绝不联网下载。升级必须同时更新 revision、digest、校准样例和部署验证。
 
 数学表达式接口只接受受控 JSON AST，不接受未经清洗的 Python、LaTeX 或 SymPy 字符串。当前原型对节点类型、变量、深度、节点数、数字长度和指数范围做白名单限制。
-学生端以 MathLive 同时保存展示用 LaTeX 和 MathJSON，服务端会再次验证并只将规范化 AST 交给隔离 worker。默认 worker 限制为 1 CPU 秒、128 MiB 地址空间和 1 秒墙钟；可用 `GRADER_MATH_CPU_SECONDS`、`GRADER_MATH_MEMORY_BYTES` 与 `GRADER_MATH_TIMEOUT_SECONDS` 调整。Compose 还对 Grader 设定 0.5 CPU、256 MiB 和 64 PID 上限。超时或资源耗尽会进入教师复核，绝不自动判零。
+学生端以 MathLive 同时保存展示用 LaTeX 和 MathJSON，服务端会再次验证并只将规范化 AST 交给隔离 worker。默认 worker 限制为 1 CPU 秒、512 MiB 地址空间和 1 秒墙钟；可用 `GRADER_MATH_CPU_SECONDS`、`GRADER_MATH_MEMORY_BYTES` 与 `GRADER_MATH_TIMEOUT_SECONDS` 调整。Compose 还对 Grader 设定 0.5 CPU、1536 MiB 和 64 PID 上限。超时或资源耗尽会进入教师复核，绝不自动判零。
 
 ## 质量门槛
 
@@ -173,3 +173,4 @@ docker compose exec api python -m alembic -c alembic.ini upgrade head
 学生作答页把草稿和待同步操作保存在浏览器 IndexedDB 中；断网时继续保存，恢复网络后尝试同步。发生版本冲突时保留本地与服务端答案，必须由学生处理，绝不静默覆盖。
 
 Nuxt 通过 OIDC Authorization Code + PKCE 建立服务端 BFF 会话。访问令牌只保存在加密、HttpOnly 会话中；浏览器代码不读取令牌，Core API 调用经 `/api/core/*` 代理并使用 CSRF 保护。正式提交在本地队列清空后携带持久化的 `Idempotency-Key`，网络重试不会重复提交。
+
