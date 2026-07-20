@@ -4,6 +4,7 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_AUDIT_HMAC_KEY = "development-only-change-me-32-bytes-minimum"
+PRODUCTION_PROCESSOR_HOSTS: frozenset[str] = frozenset({"grader", "languagetool"})
 
 
 class Settings(BaseSettings):
@@ -41,6 +42,15 @@ class Settings(BaseSettings):
                 raise ValueError("PROCESSOR_ALLOWED_HOSTS is required in production")
             if any("*" in host for host in self.allowed_processor_hosts):
                 raise ValueError("PROCESSOR_ALLOWED_HOSTS must not contain wildcards in production")
+            if not self.allowed_processor_hosts.issubset(PRODUCTION_PROCESSOR_HOSTS):
+                raise ValueError(
+                    "PROCESSOR_ALLOWED_HOSTS contains hosts not approved for production"
+                )
+            grader_host = urlparse(self.grader_base_url).hostname
+            if grader_host not in self.allowed_processor_hosts:
+                raise ValueError(
+                    "GRADER_BASE_URL must use a host in PROCESSOR_ALLOWED_HOSTS in production"
+                )
         return self
 
     @property

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import logging
 from uuid import uuid4
 
 import pytest
@@ -135,7 +136,7 @@ def test_pending_guardian_consent_blocks_student_assignment_access(
 
 
 def test_missing_guardian_consent_blocks_student_assignment_access(
-    client: TestClient, session: Session
+    client: TestClient, session: Session, caplog: pytest.LogCaptureFixture
 ) -> None:
     _, student = student_and_admin(session)
     consent = session.get(StudentGuardianConsent, student.id)
@@ -143,10 +144,15 @@ def test_missing_guardian_consent_blocks_student_assignment_access(
     session.delete(consent)
     session.commit()
 
-    response = client.get("/v1/student/assignments", headers=authorize(client, student))
+    with caplog.at_level(logging.WARNING):
+        response = client.get("/v1/student/assignments", headers=authorize(client, student))
 
     assert response.status_code == 403
     assert response.json() == {"detail": "guardian consent required"}
+    assert "guardian_consent.missing_record" in caplog.text
+    assert '"reason": "missing_record"' in caplog.text
+    assert str(student.id) not in caplog.text
+    assert student.school_id not in caplog.text
 
 
 def test_contradictory_not_required_consent_is_fail_closed_at_runtime() -> None:

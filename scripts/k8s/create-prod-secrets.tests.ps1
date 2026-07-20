@@ -16,5 +16,8 @@ Describe 'create-prod-secrets' {
         $source | Should Match 'REDIS_PASSWORD'
         $source | Should Match 'REDIS_URL'
         $source | Should Match 'NUXT_SESSION_PASSWORD'
+        $source | Should Not Match 'change-me'
+        $source | Should Not Match 'development-only-change-me'
+        $source | Should Not Match 'pilot-(admin|teacher|student)'
     }
 }
