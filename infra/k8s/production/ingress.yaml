@@ -15,6 +15,13 @@ spec:
     - host: edu.getkr.com
       http:
         paths:
+          - path: /admin
+            pathType: Prefix
+            backend:
+              service:
+                name: keycloak
+                port:
+                  name: http
           - path: /realms
             pathType: Prefix
             backend:
