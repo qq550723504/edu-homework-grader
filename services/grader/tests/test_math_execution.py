@@ -40,7 +40,7 @@ def test_math_worker_returns_deterministic_result() -> None:
 
 def test_execution_limits_have_safe_defaults_and_allow_environment_overrides() -> None:
     assert load_math_execution_limits({}) == MathExecutionLimits(
-        cpu_seconds=1, memory_bytes=536_870_912, timeout_seconds=1.0
+        cpu_seconds=2, memory_bytes=536_870_912, timeout_seconds=5.0
     )
     assert load_math_execution_limits(
         {
