@@ -12,11 +12,18 @@ import {
 describe('teacher workbench UI contract', () => {
   it('mounts the workbench navigation and live workspace modules on the teacher route', () => {
     const teacherPage = readFileSync(new URL('../app/pages/teacher/index.vue', import.meta.url), 'utf8')
+    const overview = readFileSync(new URL('../app/components/teacher/TeacherOverview.vue', import.meta.url), 'utf8')
+    const navigation = readFileSync(new URL('../app/components/teacher/TeacherWorkbenchNav.vue', import.meta.url), 'utf8')
 
     expect(teacherPage).toContain('<TeacherWorkbenchNav')
     expect(teacherPage).toContain('<TeacherOverview')
     expect(teacherPage).toContain('<TeacherQuestionWorkspace')
     expect(teacherPage).toContain('<TeacherAssignmentWorkspace')
+    expect(teacherPage).toContain(':review-count="reviewCount"')
+    expect(overview).toContain('reviewCount: number')
+    expect(overview).not.toContain("value: '36'")
+    expect(navigation).toContain("module === 'reviews'")
+    expect(navigation).toContain("return '/teacher/reviews'")
   })
 
   it('exposes the five stable teacher modules in navigation order', () => {

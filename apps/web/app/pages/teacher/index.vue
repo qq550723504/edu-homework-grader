@@ -3,14 +3,13 @@
     <NuxtLink class="back" to="/">← 返回</NuxtLink><LogoutButton />
     <TeacherWorkbenchNav :active-module="activeModule" />
     <p v-if="message" class="notice" role="status">{{ message }}</p>
-    <TeacherOverview v-if="activeModule === 'overview'" @open-module="selectModule" />
-
-    <section v-if="activeModule === 'overview'" class="metrics" aria-label="工作台指标">
-      <article class="metric"><strong>{{ reviewCount }}</strong><span>待复核答案</span></article>
-      <article class="metric"><strong>{{ completionRate }}%</strong><span>作业完成率</span></article>
-      <article class="metric"><strong>{{ publishedAssignments }}</strong><span>已发布作业</span></article>
-    </section>
-    <div v-if="activeModule === 'overview'" class="actions"><NuxtLink class="button secondary" to="/teacher/reviews">处理复核队列（{{ reviewCount }}）</NuxtLink><NuxtLink class="button secondary" to="/teacher/appeals">处理学生申诉</NuxtLink></div>
+    <TeacherOverview
+      v-if="activeModule === 'overview'"
+      :review-count="reviewCount"
+      :completion-rate="completionRate"
+      :published-assignments="publishedAssignments"
+      @open-module="selectModule"
+    />
 
     <TeacherQuestionWorkspace v-if="activeModule === 'questions'">
     <section class="card wide" aria-labelledby="create-question-heading">

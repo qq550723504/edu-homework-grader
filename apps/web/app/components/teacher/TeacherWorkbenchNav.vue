@@ -5,7 +5,7 @@
       :key="module.id"
       class="teacher-nav__item"
       :class="{ 'teacher-nav__item--active': activeModule === module.id }"
-      :to="{ hash: `#${module.id}` }"
+      :to="destination(module.id)"
       :aria-current="activeModule === module.id ? 'page' : undefined"
     >
       <span>{{ module.label }}</span>
@@ -18,4 +18,10 @@
 import { teacherModules, type TeacherModule } from '../../lib/teacher-workbench'
 
 defineProps<{ activeModule: TeacherModule }>()
+
+function destination(module: TeacherModule) {
+  if (module === 'reviews') return '/teacher/reviews'
+  if (module === 'requests') return '/teacher/appeals'
+  return { hash: `#${module}` }
+}
 </script>

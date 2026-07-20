@@ -66,11 +66,17 @@
 <script setup lang="ts">
 import type { TeacherModule } from '../../lib/teacher-workbench'
 
+const props = defineProps<{
+  reviewCount: number
+  completionRate: number
+  publishedAssignments: number
+}>()
+
 const emit = defineEmits<{ 'open-module': [module: TeacherModule] }>()
 
-const metrics = [
-  { value: '36', label: '待复核答案' },
-  { value: '82%', label: '今日完成率' },
-  { value: '4', label: '进行中作业' }
-]
+const metrics = computed(() => [
+  { value: props.reviewCount, label: '待复核答案' },
+  { value: `${props.completionRate}%`, label: '作业完成率' },
+  { value: props.publishedAssignments, label: '已发布作业' }
+])
 </script>
