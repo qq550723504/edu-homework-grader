@@ -126,4 +126,3 @@ def test_v2_endpoint_maps_worker_timeout_to_review(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["decision"] == "needs_review"
     assert response.json()["criteria"][0]["code"] == "execution_timeout"
-
