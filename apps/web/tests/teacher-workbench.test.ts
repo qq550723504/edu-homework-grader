@@ -19,16 +19,18 @@ describe('teacher workbench UI contract', () => {
     expect(teacherPage).toContain('<TeacherOverview')
     expect(teacherPage).toContain('<TeacherQuestionWorkspace')
     expect(teacherPage).toContain('<TeacherAssignmentWorkspace')
+    expect(teacherPage).toContain("activeModule === 'roster'")
     expect(teacherPage).toContain(':review-count="reviewCount"')
     expect(overview).toContain('reviewCount: number')
+    expect(overview).toContain("emit('open-module', 'roster')")
     expect(overview).not.toContain("value: '36'")
     expect(navigation).toContain("module === 'reviews'")
     expect(navigation).toContain("return '/teacher/reviews'")
   })
 
-  it('exposes the five stable teacher modules in navigation order', () => {
+  it('exposes the six stable teacher modules in navigation order', () => {
     expect(teacherModules.map((module) => module.id)).toEqual([
-      'overview', 'reviews', 'questions', 'assignments', 'requests'
+      'overview', 'reviews', 'questions', 'assignments', 'roster', 'requests'
     ])
   })
 

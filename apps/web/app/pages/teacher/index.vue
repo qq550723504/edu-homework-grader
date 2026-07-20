@@ -78,8 +78,9 @@
       </article>
       <p v-if="workspace.assignments.length === 0" class="notice">暂无作业。</p>
     </section>
+    </TeacherAssignmentWorkspace>
 
-    <section class="card wide" aria-labelledby="roster-heading">
+    <section v-if="activeModule === 'roster'" class="card wide" aria-labelledby="roster-heading">
       <span class="tag">班级名册</span>
       <h2 id="roster-heading">创建班级与录入学生</h2>
       <form class="stack" @submit.prevent="submitRosterClass">
@@ -111,7 +112,6 @@
         <button class="button secondary" :disabled="saving" type="submit">导入 CSV</button>
       </form>
     </section>
-    </TeacherAssignmentWorkspace>
   </main>
 </template>
 
