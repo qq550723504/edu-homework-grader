@@ -1,5 +1,5 @@
 <template>
-  <main class="shell">
+  <main class="shell teacher-page">
     <NuxtLink class="back" to="/">← 返回</NuxtLink><LogoutButton />
     <p class="eyebrow">教师端</p>
     <h1>教学工作台</h1>

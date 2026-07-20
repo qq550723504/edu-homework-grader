@@ -119,6 +119,27 @@ h2 { margin: 12px 0 8px; font-size: 1.2rem; }
 .teacher-checkbox input { width: 18px; height: 18px; accent-color: #2459c4; }
 .teacher-workbench :focus-visible { outline: 3px solid rgba(45, 99, 216, .4); outline-offset: 2px; }
 
+/* The production teacher route keeps its existing API-driven flows; this layer
+   only gives their dense forms a predictable responsive layout. */
+.teacher-page { width: min(1200px, calc(100% - 40px)); padding-top: 48px; }
+.teacher-page > .card.wide { padding: clamp(20px, 3vw, 32px); }
+.teacher-page form.stack { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.teacher-page form.stack > label { display: grid; gap: 8px; color: #34445d; font-size: .9rem; font-weight: 750; }
+.teacher-page form.stack > label:has(textarea), .teacher-page form.stack > button, .teacher-page form.stack > .actions { grid-column: 1 / -1; }
+.teacher-page form.stack input, .teacher-page form.stack select, .teacher-page form.stack textarea, .teacher-page .actions input, .teacher-page .actions select { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid #cfd8e6; border-radius: 9px; background: #fff; color: #17243b; font: inherit; }
+.teacher-page form.stack textarea { resize: vertical; }
+.teacher-page > .stack { gap: 18px; margin-top: 32px; }
+.teacher-page > .stack > h2 { margin: 0; }
+.teacher-page .actions { align-items: end; margin-top: 18px; }
+.teacher-page .actions > label { display: grid; gap: 8px; min-width: min(260px, 100%); color: #34445d; font-size: .9rem; font-weight: 750; }
+
+@media (max-width: 760px) {
+  .teacher-page { width: min(100% - 32px, 1200px); padding-top: 32px; }
+  .teacher-page form.stack { grid-template-columns: 1fr; }
+  .teacher-page form.stack > label:has(textarea), .teacher-page form.stack > button, .teacher-page form.stack > .actions { grid-column: auto; }
+  .teacher-page .actions > label, .teacher-page .actions > .button { width: 100%; }
+}
+
 @media (max-width: 860px) {
   .teacher-overview-grid { grid-template-columns: 1fr; }
 }
