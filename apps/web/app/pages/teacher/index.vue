@@ -1,7 +1,7 @@
 <template>
   <main class="shell teacher-page">
     <NuxtLink class="back" to="/">← 返回</NuxtLink><LogoutButton />
-    <TeacherWorkbenchNav :active-module="activeModule" @select="selectModule" />
+    <TeacherWorkbenchNav :active-module="activeModule" />
     <p v-if="message" class="notice" role="status">{{ message }}</p>
     <TeacherOverview v-if="activeModule === 'overview'" @open-module="selectModule" />
 
@@ -119,7 +119,7 @@
 <script setup lang="ts">
 import { fetchCurrentPrincipal } from '../../lib/student-api'
 import { addAssignmentItem, createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, fetchTeacherRosterClasses, fetchTeacherWorkspace, importTeacherRoster, publishAssignment, publishQuestionVersion, runQuestionTests, type CreateQuestionInput, type QuestionTestRun, type TeacherAssignment, type TeacherQuestionVersion, type TeacherRosterClass } from '../../lib/teacher-api'
-import { type TeacherModule } from '../../lib/teacher-workbench'
+import { teacherModules, type TeacherModule } from '../../lib/teacher-workbench'
 import { clearGuardianConsentEvidence, guardianConsentFieldsRequired, teacherErrorMessage } from '../../lib/teacher-workflow'
 
 const workspace = ref<{ classes: Array<{ id: string; code: string; name: string }>; questionVersions: TeacherQuestionVersion[]; assignments: TeacherAssignment[]; reviewMetrics: Record<string, unknown>; reviewTasks: Array<{ id: string }> }>({ classes: [], questionVersions: [], assignments: [], reviewMetrics: {}, reviewTasks: [] })
@@ -134,6 +134,17 @@ const selectedVersionId = ref<string | null>(null)
 const latestTestRun = ref<QuestionTestRun | null>(null)
 const pendingAssignmentId = ref<string | null>(null)
 const activeModule = ref<TeacherModule>('overview')
+
+function moduleFromHash(hash: string): TeacherModule {
+  const requestedModule = hash.slice(1)
+  return teacherModules.some((module) => module.id === requestedModule)
+    ? requestedModule as TeacherModule
+    : 'overview'
+}
+
+function syncModuleFromHash() {
+  activeModule.value = moduleFromHash(window.location.hash)
+}
 const questionTypes = [
   { value: 'M1', label: 'M1 数值题', policy: '1', rule: '{"expected": 0}' },
   { value: 'M2', label: 'M2 表达式题', policy: '2', rule: '{"expected": ["Add", "x", 1], "variables": ["x"], "required_form": "expanded", "max_score": 1}' },
@@ -164,6 +175,7 @@ function selectModule(module: TeacherModule) {
   if (module === 'reviews') return navigateTo('/teacher/reviews')
   if (module === 'requests') return navigateTo('/teacher/appeals')
   activeModule.value = module
+  window.location.hash = module
 }
 
 async function loadWorkspace() {
@@ -345,7 +357,13 @@ async function publishPendingAssignment() {
 }
 
 onMounted(async () => {
+  syncModuleFromHash()
+  window.addEventListener('hashchange', syncModuleFromHash)
   try { await loadWorkspace() }
   catch { message.value = '暂时无法读取教师工作台。' }
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('hashchange', syncModuleFromHash)
 })
 </script>

@@ -148,6 +148,8 @@ test('student submits, teacher reviews and publishes, then teacher approves the 
 test('teacher creates an M1 draft question through the browser', async ({ page }) => {
   await establishTeacherSession(page)
   await page.goto(`${webBaseUrl}/teacher`)
+  await page.getByRole('link', { name: '题库' }).click()
+  await expect(page).toHaveURL(`${webBaseUrl}/teacher#questions`)
   await expect(page.getByRole('heading', { name: 'Expand x plus one' })).toBeVisible()
 
   await page.getByLabel('题目标题').fill('Browser addition')
@@ -165,6 +167,7 @@ test('teacher creates an M1 draft question through the browser', async ({ page }
 test('teacher tests and publishes an M1 question through the browser', async ({ page }) => {
   await establishTeacherSession(page)
   await page.goto(`${webBaseUrl}/teacher`)
+  await page.getByRole('link', { name: '题库' }).click()
   await expect(page.getByRole('heading', { name: 'Expand x plus one' })).toBeVisible()
 
   await page.getByLabel('题目标题').fill('Browser publishable addition')
@@ -212,7 +215,9 @@ test('teacher tests and publishes an M1 question through the browser', async ({ 
 test('teacher creates and publishes an assignment through the browser', async ({ page }) => {
   await establishTeacherSession(page)
   await page.goto(`${webBaseUrl}/teacher`)
-  await expect(page.getByRole('heading', { name: 'Expand x plus one' })).toBeVisible()
+  await page.getByRole('navigation', { name: '教师工作区' }).getByRole('link', { name: '作业' }).click()
+  await expect(page).toHaveURL(`${webBaseUrl}/teacher#assignments`)
+  await expect(page.getByRole('heading', { name: '创建作业', exact: true })).toBeVisible()
 
   await page.getByLabel('作业标题').fill('Browser published assignment')
   await page
