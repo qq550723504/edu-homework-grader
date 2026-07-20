@@ -55,6 +55,12 @@
         <p>选择班级、题目版本与截止时间，完成课堂安排。</p>
         <button class="button secondary" type="button" @click="emit('open-module', 'assignments')">创建作业</button>
       </article>
+      <article class="teacher-quick-start__card">
+        <span class="tag">班级名册</span>
+        <h2>创建班级与学生</h2>
+        <p>管理班级，并录入或批量导入学生。</p>
+        <button class="button secondary" type="button" @click="emit('open-module', 'roster')">管理名册</button>
+      </article>
     </section>
   </section>
 </template>

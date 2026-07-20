@@ -78,8 +78,9 @@
       </article>
       <p v-if="workspace.assignments.length === 0" class="notice">暂无作业。</p>
     </section>
+    </TeacherAssignmentWorkspace>
 
-    <section class="card wide" aria-labelledby="roster-heading">
+    <section v-if="activeModule === 'roster'" class="card wide" aria-labelledby="roster-heading">
       <span class="tag">班级名册</span>
       <h2 id="roster-heading">创建班级与录入学生</h2>
       <form class="stack" @submit.prevent="submitRosterClass">
@@ -111,7 +112,6 @@
         <button class="button secondary" :disabled="saving" type="submit">导入 CSV</button>
       </form>
     </section>
-    </TeacherAssignmentWorkspace>
   </main>
 </template>
 
@@ -133,6 +133,7 @@ const selectedVersionId = ref<string | null>(null)
 const latestTestRun = ref<QuestionTestRun | null>(null)
 const pendingAssignmentId = ref<string | null>(null)
 const activeModule = ref<TeacherModule>('overview')
+const route = useRoute()
 
 function moduleFromHash(hash: string): TeacherModule {
   const requestedModule = hash.slice(1)
@@ -141,8 +142,8 @@ function moduleFromHash(hash: string): TeacherModule {
     : 'overview'
 }
 
-function syncModuleFromHash() {
-  activeModule.value = moduleFromHash(window.location.hash)
+function syncModuleFromHash(hash = route.hash) {
+  activeModule.value = moduleFromHash(hash)
 }
 const questionTypes = [
   { value: 'M1', label: 'M1 数值题', policy: '1', rule: '{"expected": 0}' },
@@ -174,7 +175,7 @@ function selectModule(module: TeacherModule) {
   if (module === 'reviews') return navigateTo('/teacher/reviews')
   if (module === 'requests') return navigateTo('/teacher/appeals')
   activeModule.value = module
-  window.location.hash = module
+  return navigateTo({ hash: `#${module}` })
 }
 
 async function loadWorkspace() {
@@ -355,14 +356,10 @@ async function publishPendingAssignment() {
   finally { saving.value = false }
 }
 
+watch(() => route.hash, syncModuleFromHash, { immediate: true })
+
 onMounted(async () => {
-  syncModuleFromHash()
-  window.addEventListener('hashchange', syncModuleFromHash)
   try { await loadWorkspace() }
   catch { message.value = '暂时无法读取教师工作台。' }
-})
-
-onBeforeUnmount(() => {
-  window.removeEventListener('hashchange', syncModuleFromHash)
 })
 </script>

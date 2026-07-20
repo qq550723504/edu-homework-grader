@@ -1,4 +1,4 @@
-export type TeacherModule = 'overview' | 'reviews' | 'questions' | 'assignments' | 'requests'
+export type TeacherModule = 'overview' | 'reviews' | 'questions' | 'assignments' | 'roster' | 'requests'
 
 export interface QuestionDraft {
   title: string
@@ -19,6 +19,7 @@ export const teacherModules: ReadonlyArray<{ id: TeacherModule; label: string; b
   { id: 'reviews', label: '复核队列' },
   { id: 'questions', label: '题库' },
   { id: 'assignments', label: '作业' },
+  { id: 'roster', label: '班级名册' },
   { id: 'requests', label: '学生申请' }
 ]
 
