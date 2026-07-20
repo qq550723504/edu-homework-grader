@@ -42,7 +42,7 @@ Create `namespace.yaml` with `metadata.name: edu-homework-grader` and `kustomiza
 
 - [ ] **Step 3: Create ClusterIP Services**
 
-Define named ports for `api` (8000), `grader` (8010), `web` (3000), `keycloak` (8080), and `languagetool` (8011). Do not expose database or Grader externally.
+Define named ports for `api` (8000), `grader` (8010), `web` (3000), `keycloak` (8080), `languagetool` (8011), and `redis` (6379). Do not expose database, Redis, or Grader externally.
 
 - [ ] **Step 4: Verify rendering**
 
@@ -82,7 +82,7 @@ Expected: FAIL because the command does not exist.
 
 - [ ] **Step 3: Implement the secret command**
 
-Use `[System.Security.Cryptography.RandomNumberGenerator]::GetBytes()` with Base64 conversion for every generated value. Validate an `https://` issuer and invoke `kubectl create secret generic edu-grader-runtime --dry-run=client -o yaml | kubectl apply -f -`; never use `Write-Output` for secret values.
+Use `[System.Security.Cryptography.RandomNumberGenerator]::GetBytes()` with Base64 conversion for every generated value, including `REDIS_PASSWORD`. Validate an `https://` issuer and invoke `kubectl create secret generic edu-grader-runtime --dry-run=client -o yaml | kubectl apply -f -`; never use `Write-Output` for secret values.
 
 - [ ] **Step 4: Implement rotation**
 
@@ -103,6 +103,7 @@ Run: `git add scripts/k8s && git commit -m "feat: add Kubernetes secret rotation
 **Files:**
 - Create: `infra/k8s/production/postgres.yaml`
 - Create: `infra/k8s/production/keycloak.yaml`
+- Create: `infra/keycloak/edu-grader-production-realm.json`
 - Create: `infra/k8s/production/application.yaml`
 - Create: `infra/k8s/production/ingress.yaml`
 - Modify: `infra/k8s/production/kustomization.yaml`
@@ -119,7 +120,7 @@ Expected: FAIL before workloads exist.
 
 - [ ] **Step 2: Implement database and Keycloak manifests**
 
-Use a PostgreSQL 16 StatefulSet with a `local-path` PVC and a Keycloak Deployment initialized from the committed realm import ConfigMap. Reference all passwords only through `secretKeyRef`.
+Use PostgreSQL 16 and Redis StatefulSets with `local-path` PVCs; configure Redis with `--requirepass` from `secretKeyRef`. Use a Keycloak Deployment initialized from a production-only Realm import that contains no `pilot-*` users and allows only `https://edu.getkr.com/*` callbacks. Reference all passwords only through `secretKeyRef`.
 
 - [ ] **Step 3: Implement application Deployments**
 

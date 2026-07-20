@@ -13,9 +13,11 @@ Deploy edu-homework-grader to the current Kubernetes cluster at `https://edu.get
 
 ## Architecture
 
-Create an isolated `edu-homework-grader` namespace with PostgreSQL, Keycloak, LanguageTool, Grader, Core API, and Web workloads. PostgreSQL uses a `local-path` PVC; all sensitive values are created by a local `kubectl create secret` command and are never placed in Git.
+Create an isolated `edu-homework-grader` namespace with PostgreSQL, Redis, Keycloak, LanguageTool, Grader, Core API, and Web workloads. PostgreSQL uses a `local-path` PVC and Redis requires a generated password; all sensitive values are created by a local `kubectl create secret` command and are never placed in Git.
 
-The public entry point is one Traefik Ingress for `edu.getkr.com`, annotated with `letsencrypt-prod`. Web serves `/`; API is exposed only within the namespace and receives the OIDC issuer, database URL, audit HMAC key, and permitted processor origins from `edu-grader-runtime` Secret. The Keycloak hostname uses the same TLS host so OIDC discovery and callback URLs remain HTTPS in production.
+The public entry point is one Traefik Ingress for `edu.getkr.com`, annotated with `letsencrypt-prod`. Web serves `/`; API is exposed only within the namespace and receives the OIDC issuer, database URL, Redis URL, audit HMAC key, and permitted processor origins from `edu-grader-runtime` Secret. The Keycloak hostname uses the same TLS host so OIDC discovery and callback URLs remain HTTPS in production.
+
+The production Keycloak import is generated from the development Realm by removing all `pilot-*` users, replacing localhost redirect URIs with `https://edu.getkr.com/*`, and setting the exact HTTPS web origin. The generated Realm is reviewed as a non-secret artifact before being mounted into Keycloak.
 
 Images are published by a dedicated GitHub Actions workflow after a protected `main` build succeeds. The deployment manifest pins image digests or immutable commit tags; it never uses `latest`.
 

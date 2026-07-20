@@ -13,5 +13,7 @@ Describe 'create-prod-secrets' {
         $source | Should Not Match 'Write-(Host|Output).*?(KEY|PASSWORD|TOKEN)'
         $source | Should Match 'RandomNumberGenerator'
         $source | Should Match 'kubectl create secret generic'
+        $source | Should Match 'REDIS_PASSWORD'
+        $source | Should Match 'REDIS_URL'
     }
 }

@@ -32,16 +32,20 @@ if ($existingSecret -and -not $Replace) {
 }
 
 $postgresPassword = New-RandomSecret
+$redisPassword = New-RandomSecret
 $keycloakPostgresPassword = New-RandomSecret
 $keycloakAdminPassword = New-RandomSecret
 $auditHmacKey = New-RandomSecret
 $postgresPasswordForUrl = [Uri]::EscapeDataString($postgresPassword)
+$redisPasswordForUrl = [Uri]::EscapeDataString($redisPassword)
 
 $secretArguments = @(
     'create', 'secret', 'generic', $SecretName,
     '--namespace', $Namespace,
     "--from-literal=POSTGRES_PASSWORD=$postgresPassword",
     "--from-literal=DATABASE_URL=postgresql+psycopg://edu_grader:$postgresPasswordForUrl@postgres:5432/edu_grader",
+    "--from-literal=REDIS_PASSWORD=$redisPassword",
+    "--from-literal=REDIS_URL=redis://:$redisPasswordForUrl@redis:6379/0",
     "--from-literal=KEYCLOAK_POSTGRES_PASSWORD=$keycloakPostgresPassword",
     "--from-literal=KEYCLOAK_ADMIN_USERNAME=admin",
     "--from-literal=KEYCLOAK_ADMIN_PASSWORD=$keycloakAdminPassword",
