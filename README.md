@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 1.9 seconds
-Output:
 # Edu Homework Grader
 
 面向英语与数学课程的作业提交、自动批改、教师复核和学生订正平台。
