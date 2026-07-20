@@ -20,6 +20,8 @@ describe('teacher workbench UI contract', () => {
     expect(teacherPage).toContain('<TeacherQuestionWorkspace')
     expect(teacherPage).toContain('<TeacherAssignmentWorkspace')
     expect(teacherPage).toContain("activeModule === 'roster'")
+    expect(teacherPage).toContain("watch(() => route.hash, syncModuleFromHash, { immediate: true })")
+    expect(teacherPage).not.toContain("addEventListener('hashchange'")
     expect(teacherPage).toContain(':review-count="reviewCount"')
     expect(overview).toContain('reviewCount: number')
     expect(overview).toContain("emit('open-module', 'roster')")
