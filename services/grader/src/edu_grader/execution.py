@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 1.8 seconds
-Output:
 from __future__ import annotations
 
 import multiprocessing
