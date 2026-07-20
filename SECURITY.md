@@ -17,3 +17,4 @@
 - 数据删除由租户管理员在平台外完成学校核验后登记；如存在法定保存、安全事件或争议，应先设置保全状态，不能批准或清理。
 - 批准请求时设定适用的最早清理时间；先运行 `python -m edu_grader_api.privacy_cleanup` 审阅候选项。仅在复核无保全后，使用 `--execute --request-id <UUID> --actor-user-id <admin UUID>` 一次处理一个请求。
 - 不得用直接 SQL 删除学生记录。受控清理会去标识化身份并保留不可变审计关联；审计账本继续按三年规则保存。
+- 生产部署只运行 `scripts/k8s/create-prod-secrets.ps1` 生成的 Secret；不得使用 `.env.example`、Compose 开发 Keycloak 或 `pilot-*` 演示身份。轮换后确认 API `/ready` 与 Keycloak Realm 探针均成功，再删除旧 Secret。
