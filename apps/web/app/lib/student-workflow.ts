@@ -15,7 +15,24 @@ export function getUnansweredCount(items: Array<{ answer: Record<string, unknown
         || item.answer.mathjson === null
         || item.answer.mathjson === undefined
     }
-    const value = item.answer.value
-    return value === null || value === undefined || value === ''
+    if (item.answer.format !== 'text-v1') return true
+    const text = item.answer.text
+    return typeof text !== 'string' || text === ''
   }).length
+}
+
+export function isAssignmentWritable(status: string | undefined): boolean {
+  return !['overdue', 'submitted_pending_review', 'completed', 'correction_required'].includes(status ?? '')
+}
+
+export function editorStateForItem(item: { answer: Record<string, unknown> | null } | undefined): {
+  text: string
+  mathAnswer: Record<string, unknown> | null
+} {
+  const answer = item?.answer
+  if (answer?.format === 'mathjson-v1') return { text: '', mathAnswer: answer }
+  return {
+    text: answer?.format === 'text-v1' && typeof answer.text === 'string' ? answer.text : '',
+    mathAnswer: null
+  }
 }

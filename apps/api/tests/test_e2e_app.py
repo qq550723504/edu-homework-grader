@@ -48,7 +48,8 @@ def test_e2e_app_accepts_only_its_static_fictional_tokens(
         assert client.get("/v1/me", headers=bearer("production-token")).status_code == 401
         assert assignments.status_code == 200
         assert [item["title"] for item in assignments.json()["pending"]] == [
-            "Expression equivalence"
+            "Expression equivalence",
+            "Draft isolation",
         ]
         assignment_id = assignments.json()["pending"][0]["id"]
         detail = client.get(

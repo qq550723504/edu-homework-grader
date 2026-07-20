@@ -9,7 +9,7 @@ from sqlalchemy import select
 from ..auth import CurrentPrincipal
 from ..db import get_session
 from ..dependencies import require_role, require_student_processing_allowed
-from ..models import ReviewAppeal, Role
+from ..models import Assignment, ClassTeacher, ReviewAppeal, Role, StudentAttempt, User
 from ..services.appeals import (
     AppealAccessError,
     AppealConflictError,
@@ -75,6 +75,48 @@ def list_student_appeals(
                 "status": appeal.status.value,
             }
             for appeal in appeals
+        ]
+    }
+
+
+@teacher_router.get("")
+def list_teacher_appeals(
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+    class_id: UUID | None = None,
+    assignment_id: UUID | None = None,
+) -> dict[str, list[dict[str, str | int | None]]]:
+    statement = (
+        select(ReviewAppeal, StudentAttempt, Assignment, User)
+        .join(StudentAttempt, ReviewAppeal.original_attempt_id == StudentAttempt.id)
+        .join(Assignment, StudentAttempt.assignment_id == Assignment.id)
+        .join(ClassTeacher, ClassTeacher.class_id == Assignment.class_id)
+        .join(User, ReviewAppeal.student_id == User.id)
+        .where(
+            Assignment.tenant_id == UUID(principal.tenant_id),
+            ClassTeacher.teacher_id == UUID(principal.user_id),
+        )
+    )
+    if class_id is not None:
+        statement = statement.where(Assignment.class_id == class_id)
+    if assignment_id is not None:
+        statement = statement.where(Assignment.id == assignment_id)
+    rows = session.execute(statement.order_by(ReviewAppeal.created_at, ReviewAppeal.id)).all()
+    return {
+        "appeals": [
+            {
+                "id": str(appeal.id),
+                "assignment_id": str(assignment.id),
+                "assignment_title": assignment.title,
+                "attempt_id": str(attempt.id),
+                "student_id": str(student.id),
+                "student_name": student.display_name,
+                "reason": appeal.reason,
+                "status": appeal.status.value,
+                "version": appeal.version,
+                "decision_reason": appeal.decision_reason,
+            }
+            for appeal, attempt, assignment, student in rows
         ]
     }
 

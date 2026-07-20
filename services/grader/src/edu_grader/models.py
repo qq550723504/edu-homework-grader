@@ -39,5 +39,6 @@ class GradingResult(BaseModel):
     criteria: list[Criterion]
     feedback: list[Feedback] = Field(default_factory=list)
     signals: list[dict[str, object]] = Field(default_factory=list)
+    dependency_versions: dict[str, object] = Field(default_factory=dict)
     requires_review: bool = False
     grader_version: str = "grader-0.1.0"

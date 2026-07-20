@@ -10,7 +10,14 @@ from sqlalchemy.pool import StaticPool
 from edu_grader_api.auth import VerifiedIdentity, get_token_verifier
 from edu_grader_api.db import Base, get_session
 from edu_grader_api.main import app
-from edu_grader_api.models import AuditLog, Role, Tenant, User
+from edu_grader_api.models import (
+    AuditLog,
+    GuardianConsentStatus,
+    Role,
+    StudentGuardianConsent,
+    Tenant,
+    User,
+)
 from edu_grader_api.settings import settings
 
 
@@ -73,6 +80,14 @@ def student_and_admin(session: Session) -> tuple[User, User]:
         display_name="Student",
     )
     session.add_all([tenant, admin, student])
+    session.flush()
+    session.add(
+        StudentGuardianConsent(
+            student_id=student.id,
+            requires_guardian_consent=False,
+            status=GuardianConsentStatus.NOT_REQUIRED,
+        )
+    )
     session.commit()
     return admin, student
 

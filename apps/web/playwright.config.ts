@@ -25,6 +25,8 @@ export default defineConfig({
       url: webBaseUrl,
       env: {
         NUXT_HOST: '127.0.0.1',
+        NUXT_APP_ENV: 'e2e',
+        NUXT_CORE_API_BASE: apiBaseUrl,
         NUXT_DEVTOOLS_ENABLED: 'false',
         NUXT_PUBLIC_API_BASE: apiBaseUrl,
       },

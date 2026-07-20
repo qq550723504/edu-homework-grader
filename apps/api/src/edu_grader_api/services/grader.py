@@ -102,9 +102,7 @@ class HttpGraderClient:
             return _english_request(question_type, rule_json, answer_json, policy_version)
         if question_type != "M1":
             raise ValueError(f"question type {question_type} has no HTTP grader adapter")
-        answer = answer_json.get("answer")
-        if not isinstance(answer, str):
-            raise ValueError("M1 test answers require an answer string")
+        answer = _text_answer(answer_json)
         expected = rule_json.get("expected")
         if not isinstance(expected, int | float):
             raise ValueError("M1 rules require a numeric expected value")
@@ -127,9 +125,7 @@ def _english_request(
     answer_json: dict[str, object],
     policy_version: str | None,
 ) -> tuple[str, dict[str, Any]]:
-    answer = answer_json.get("answer")
-    if not isinstance(answer, str):
-        raise ValueError("English answers require an answer string")
+    answer = _text_answer(answer_json)
     if not policy_version:
         raise ValueError(f"{question_type} rules require a grading policy version")
     return (
@@ -149,8 +145,7 @@ def _mathjson_request(
     expected = rule_json.get("expected")
     if isinstance(expected, bool) or not isinstance(expected, list | str | int | float):
         raise ValueError("M2@2 rules require a MathJSON expected value")
-    answer = answer_json.get("answer")
-    student_mathjson = answer.get("mathjson") if isinstance(answer, dict) else answer
+    student_mathjson = answer_json.get("mathjson")
     if student_mathjson is None:
         raise ValueError("M2@2 answers require MathJSON")
     variables = rule_json.get("variables", [])
@@ -186,3 +181,12 @@ def _error_payload(error: httpx.HTTPStatusError) -> dict[str, object]:
     except ValueError:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _text_answer(answer_json: dict[str, object]) -> str:
+    if answer_json.get("format") != "text-v1":
+        raise ValueError("text answers require the text-v1 answer envelope")
+    text = answer_json.get("text")
+    if not isinstance(text, str):
+        raise ValueError("text answers require a text string")
+    return text

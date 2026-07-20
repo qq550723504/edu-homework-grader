@@ -93,3 +93,47 @@ def test_teacher_can_create_a_tenant_scoped_question(client: TestClient, session
         headers=authorize(client, teacher),
     )
     assert publish_response.status_code == 409
+
+
+def test_teacher_lists_and_filters_question_versions(client: TestClient, session: Session) -> None:
+    tenant = Tenant(slug="pilot", name="Pilot")
+    teacher = User(
+        tenant=tenant,
+        role=Role.TEACHER,
+        oidc_issuer=ISSUER,
+        oidc_subject="teacher",
+        display_name="Teacher",
+    )
+    session.add_all([tenant, teacher])
+    session.commit()
+    headers = authorize(client, teacher)
+    created = client.post(
+        "/v1/questions",
+        headers=headers,
+        json={
+            "title": "Algebra addition",
+            "prompt": "What is 2 + 3?",
+            "question_type": "M1",
+            "policy_version": "1",
+            "rule": {"expected": 5},
+        },
+    )
+
+    response = client.get(
+        "/v1/questions?query=algebra&question_type=M1&status=draft", headers=headers
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "question_versions": [
+            {
+                "id": created.json()["id"],
+                "question_id": response.json()["question_versions"][0]["question_id"],
+                "title": "Algebra addition",
+                "prompt": "What is 2 + 3?",
+                "question_type": "M1",
+                "policy_version": "1",
+                "status": "draft",
+            }
+        ]
+    }

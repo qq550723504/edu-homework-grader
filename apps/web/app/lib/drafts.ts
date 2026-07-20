@@ -54,6 +54,10 @@ export interface DraftSyncApi {
   saveAnswer(record: DraftRecord): Promise<SaveAnswerResult>
 }
 
+export interface FlushAttemptOptions {
+  onSaved?(record: DraftRecord, version: number): void
+}
+
 export async function queueAnswer(input: Omit<DraftRecord, 'status' | 'updatedAt'>): Promise<void> {
   const record: DraftRecord = { ...input, status: 'saved_locally', updatedAt: Date.now() }
   const id = [input.tenantId, input.userId, input.attemptId, input.itemId].join(':')
@@ -87,7 +91,11 @@ export async function getSubmissionKey(
   return key
 }
 
-export async function flushAttempt(attemptId: string, api: DraftSyncApi): Promise<void> {
+export async function flushAttempt(
+  attemptId: string,
+  api: DraftSyncApi,
+  options: FlushAttemptOptions = {}
+): Promise<void> {
   const records = await draftDatabase.outbox.where('attemptId').equals(attemptId).sortBy('updatedAt')
   for (const record of records) {
     const result = await api.saveAnswer(record)
@@ -114,5 +122,6 @@ export async function flushAttempt(attemptId: string, api: DraftSyncApi): Promis
       )
       await draftDatabase.outbox.delete(record.id)
     })
+    options.onSaved?.(record, result.version)
   }
 }

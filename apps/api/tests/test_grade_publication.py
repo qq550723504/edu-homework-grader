@@ -38,7 +38,7 @@ def test_student_sees_final_score_only_after_teacher_publishes(
         student_id=student.id,
         attempt_id=attempt.id,
         assignment_item_id=item.id,
-        answer_json={"value": "5"},
+        answer_json={"format": "text-v1", "text": "5"},
         expected_version=0,
     )
     submit_attempt(

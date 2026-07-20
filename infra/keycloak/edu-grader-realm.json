@@ -83,6 +83,22 @@
       "attributes": {"school_id": ["ADMIN-001"]},
       "realmRoles": ["admin"],
       "credentials": [{"type": "password", "value": "admin-change-me", "temporary": false}]
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "username": "pilot-teacher",
+      "enabled": true,
+      "attributes": {"school_id": ["TEACHER-001"]},
+      "realmRoles": ["teacher"],
+      "credentials": [{"type": "password", "value": "teacher-change-me", "temporary": false}]
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000003",
+      "username": "pilot-student",
+      "enabled": true,
+      "attributes": {"school_id": ["STUDENT-001"]},
+      "realmRoles": ["student"],
+      "credentials": [{"type": "password", "value": "student-change-me", "temporary": false}]
     }
   ]
 }

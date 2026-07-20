@@ -7,10 +7,35 @@ from sqlalchemy.orm import Session
 
 from ..auth import CurrentPrincipal, get_current_principal
 from ..db import get_session
+from ..dependencies import require_role
 from ..models import ClassTeacher, Classroom, Enrollment, Role
 
 
 router = APIRouter(prefix="/v1/classes", tags=["classes"])
+
+
+@router.get("")
+def list_teacher_classes(
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, list[dict[str, str]]]:
+    classrooms = list(
+        session.scalars(
+            select(Classroom)
+            .join(ClassTeacher)
+            .where(
+                Classroom.tenant_id == UUID(principal.tenant_id),
+                ClassTeacher.teacher_id == UUID(principal.user_id),
+            )
+            .order_by(Classroom.code, Classroom.id)
+        )
+    )
+    return {
+        "classes": [
+            {"id": str(classroom.id), "code": classroom.code, "name": classroom.name}
+            for classroom in classrooms
+        ]
+    }
 
 
 @router.get("/{class_id}")

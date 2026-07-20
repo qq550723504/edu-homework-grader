@@ -4,12 +4,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..auth import CurrentPrincipal
 from ..db import get_session
 from ..dependencies import require_role
-from ..models import ReviewAction, ReviewReason, Role
+from ..models import AuditLog, ReviewAction, ReviewReason, Role
 from ..services.reviews import (
     ReviewAccessError,
     ReviewConflictError,
@@ -94,10 +95,26 @@ def list_review_tasks_route(
                 "reason": task.reason.value,
                 "question_type": task.attempt_answer.assignment_item.question_version.question_type,
                 "version": task.version,
+                "submitted_late": _attempt_was_submitted_late(
+                    session, task.attempt_answer.attempt_id
+                ),
             }
             for task in tasks
         ]
     }
+
+
+def _attempt_was_submitted_late(session: Session, attempt_id: UUID) -> bool:
+    audit = session.scalar(
+        select(AuditLog)
+        .where(
+            AuditLog.event_type == "student_attempt.submitted",
+            AuditLog.target_id == attempt_id,
+        )
+        .order_by(AuditLog.occurred_at.desc())
+        .limit(1)
+    )
+    return bool(audit and audit.metadata_json.get("submitted_late") is True)
 
 
 @router.get("/{task_id}")

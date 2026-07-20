@@ -18,12 +18,98 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - name: Install packages
-        run: python -m pip install -e "apps/api[dev]" -e "services/grader[dev]"
-      - name: Lint
-        run: python -m ruff check apps/api services/grader
-      - name: Test
-        run: python -m pytest apps/api/tests services/grader/tests
+      - name: Install Python packages
+        run: make install-python
+      - name: Check Python formatting
+        run: python -m ruff format --check packages/processor-policy apps/api services/grader
+      - name: Lint Python
+        run: python -m ruff check packages/processor-policy apps/api services/grader
+      - name: Test Python packages
+        run: make test
+
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: edu_grader
+          POSTGRES_USER: edu_grader
+          POSTGRES_PASSWORD: ci-postgres-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U edu_grader -d edu_grader"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://edu_grader:ci-postgres-password@localhost:5432/edu_grader
+      POSTGRES_PASSWORD: ci-postgres-password
+      AUDIT_HMAC_KEY: ci-only-audit-key-at-least-thirty-two-bytes
+      KEYCLOAK_ADMIN_USERNAME: ci-keycloak-admin
+      KEYCLOAK_ADMIN_PASSWORD: ci-keycloak-admin-password
+      KEYCLOAK_POSTGRES_PASSWORD: ci-keycloak-postgres-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install Python packages
+        run: make install-python
+      - name: Upgrade, downgrade, and re-upgrade migrations
+        run: |
+          python -m alembic -c apps/api/alembic.ini upgrade head
+          python -m alembic -c apps/api/alembic.ini downgrade base
+          python -m alembic -c apps/api/alembic.ini upgrade head
+
+  compose:
+    runs-on: ubuntu-latest
+    env:
+      POSTGRES_PASSWORD: ci-postgres-password
+      DATABASE_URL: postgresql+psycopg://edu_grader:ci-postgres-password@postgres:5432/edu_grader
+      AUDIT_HMAC_KEY: ci-only-audit-key-at-least-thirty-two-bytes
+      KEYCLOAK_ADMIN_USERNAME: ci-keycloak-admin
+      KEYCLOAK_ADMIN_PASSWORD: ci-keycloak-admin-password
+      KEYCLOAK_POSTGRES_PASSWORD: ci-keycloak-postgres-password
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+      - name: Build application images
+        run: docker compose build api grader web languagetool
+
+  live-grader-integration:
+    runs-on: ubuntu-latest
+    env:
+      POSTGRES_PASSWORD: ci-postgres-password
+      DATABASE_URL: postgresql+psycopg://edu_grader:ci-postgres-password@postgres:5432/edu_grader
+      AUDIT_HMAC_KEY: ci-only-audit-key-at-least-thirty-two-bytes
+      KEYCLOAK_ADMIN_USERNAME: ci-keycloak-admin
+      KEYCLOAK_ADMIN_PASSWORD: ci-keycloak-admin-password
+      KEYCLOAK_POSTGRES_PASSWORD: ci-keycloak-postgres-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install Core API and Grader packages
+        run: make install-python
+      - name: Start real Grader dependencies
+        run: docker compose up --build --detach --wait languagetool grader
+      - name: Exercise Core API HTTP Grader adapter
+        env:
+          LIVE_GRADER_INTEGRATION: "1"
+          GRADER_BASE_URL: http://localhost:8010
+        run: python -m pytest apps/api/tests/test_live_grader_integration.py -q
+      - name: Collect Grader logs
+        if: always()
+        run: docker compose logs grader languagetool
+      - name: Stop Grader dependencies
+        if: always()
+        run: docker compose down --volumes --remove-orphans
 
   web:
     runs-on: ubuntu-latest
@@ -35,7 +121,41 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Install
-        run: npm install
-      - name: Build
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install web dependencies
+        run: npm ci
+      - name: Run unit tests
+        run: npm test
+      - name: Build web application
         run: npm run build
+      - name: Test E2E process supervisor
+        run: npm run test:e2e-runtime
+
+  browser-e2e:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install web dependencies
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run student vertical-slice browser acceptance
+        run: npm run test:e2e
+      - name: Upload browser artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-e2e-artifacts
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+          if-no-files-found: ignore

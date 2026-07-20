@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta, timezone
 
 from jwt.exceptions import InvalidTokenError
@@ -14,10 +15,12 @@ from .models import (
     ClassTeacher,
     Classroom,
     Enrollment,
+    GuardianConsentStatus,
     GradingPolicy,
     Question,
     QuestionVersion,
     Role,
+    StudentGuardianConsent,
     Tenant,
     User,
     VersionStatus,
@@ -88,13 +91,44 @@ class DeterministicM2Client:
         *,
         policy_version: str | None = None,
     ) -> GradeResult:
+        if question_type == "M1" and policy_version == "1":
+            return self._grade_m1(rule_json, answer_json)
         if question_type != "M2" or policy_version != "2":
-            raise ValueError("the E2E grader only supports M2 policy version 2")
+            raise ValueError("the E2E grader only supports M1@1 and M2@2")
         return GradeResult(
             decision="correct",
             score=4.0,
             grader_version="e2e-m2@1",
             evidence=M2_EVIDENCE,
+        )
+
+    @staticmethod
+    def _grade_m1(rule_json: dict[str, object], answer_json: dict[str, object]) -> GradeResult:
+        expected = rule_json.get("expected")
+        text = answer_json.get("text")
+        if answer_json.get("format") != "text-v1" or not isinstance(text, str):
+            raise ValueError("M1 answers require a text-v1 envelope")
+        if isinstance(expected, bool) or not isinstance(expected, int | float):
+            raise ValueError("M1 rules require a numeric expected value")
+        try:
+            matched = Decimal(text.strip()) == Decimal(str(expected))
+        except InvalidOperation:
+            matched = False
+        score = 1.0 if matched else 0.0
+        return GradeResult(
+            decision="auto_accepted" if matched else "auto_rejected",
+            score=score,
+            grader_version="e2e-m1@1",
+            evidence={
+                "max_score": 1.0,
+                "confidence": 1.0,
+                "requires_review": False,
+                "criteria": [
+                    {"code": "numeric_value", "passed": matched, "score": score, "max_score": 1.0}
+                ],
+                "feedback": [],
+                "dependency_versions": {"grader": "e2e-m1@1"},
+            },
         )
 
 
@@ -137,6 +171,11 @@ def seed_demo_assignment(session: Session) -> None:
         policy_version="2",
         json_schema={},
     )
+    text_policy = GradingPolicy(
+        question_type="M1",
+        policy_version="1",
+        json_schema={},
+    )
     question = Question(
         tenant=tenant,
         created_by_user=teacher,
@@ -154,11 +193,39 @@ def seed_demo_assignment(session: Session) -> None:
         published_by_user_id=None,
         published_at=now,
     )
+    text_question = Question(
+        tenant=tenant,
+        created_by_user=teacher,
+        title="Explain your reasoning",
+    )
+    text_version = QuestionVersion(
+        question=text_question,
+        version_number=1,
+        status=VersionStatus.PUBLISHED,
+        prompt="Explain how you simplified the expression.",
+        question_type="M1",
+        grading_policy=text_policy,
+        rule_json={"expected": 1},
+        created_by_user=teacher,
+        published_by_user_id=None,
+        published_at=now,
+    )
     assignment = Assignment(
         tenant=tenant,
         classroom=classroom,
         created_by_user=teacher,
         title="Expression equivalence",
+        subject="mathematics",
+        due_at=now + timedelta(days=7),
+        submission_rule_json={"allow_late": False},
+        status=AssignmentStatus.PUBLISHED,
+        published_at=now,
+    )
+    draft_assignment = Assignment(
+        tenant=tenant,
+        classroom=classroom,
+        created_by_user=teacher,
+        title="Draft isolation",
         subject="mathematics",
         due_at=now + timedelta(days=7),
         submission_rule_json={"allow_late": False},
@@ -172,21 +239,41 @@ def seed_demo_assignment(session: Session) -> None:
             student,
             classroom,
             policy,
+            text_policy,
             question,
             version,
+            text_question,
+            text_version,
             assignment,
+            draft_assignment,
         ]
     )
     session.flush()
     version.published_by_user_id = teacher.id
+    text_version.published_by_user_id = teacher.id
     session.add_all(
         [
             ClassTeacher(class_id=classroom.id, teacher_id=teacher.id),
             Enrollment(class_id=classroom.id, student_id=student.id),
+            StudentGuardianConsent(
+                student_id=student.id,
+                requires_guardian_consent=False,
+                status=GuardianConsentStatus.NOT_REQUIRED,
+            ),
             AssignmentItem(
                 assignment_id=assignment.id,
                 question_version_id=version.id,
                 position=1,
+            ),
+            AssignmentItem(
+                assignment_id=draft_assignment.id,
+                question_version_id=version.id,
+                position=1,
+            ),
+            AssignmentItem(
+                assignment_id=draft_assignment.id,
+                question_version_id=text_version.id,
+                position=2,
             ),
         ]
     )

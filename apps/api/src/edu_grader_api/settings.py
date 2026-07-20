@@ -1,5 +1,9 @@
+from urllib.parse import urlparse
+
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEFAULT_AUDIT_HMAC_KEY = "development-only-change-me-32-bytes-minimum"
 
 
 class Settings(BaseSettings):
@@ -15,17 +19,28 @@ class Settings(BaseSettings):
     oidc_tenant_slug: str = "pilot"
     bootstrap_admin_sub: str = ""
     bootstrap_admin_tenant_slug: str = ""
-    audit_hmac_key: str = "development-only-change-me-32-bytes-minimum"
+    audit_hmac_key: str = DEFAULT_AUDIT_HMAC_KEY
     audit_hmac_key_version: str = "dev-1"
     processor_allowed_hosts: str = "grader,languagetool,localhost"
 
     @model_validator(mode="after")
     def require_production_security_controls(self) -> "Settings":
         if self.app_env == "production":
+            if self.audit_hmac_key == DEFAULT_AUDIT_HMAC_KEY:
+                raise ValueError(
+                    "AUDIT_HMAC_KEY must not use the development default in production"
+                )
             if len(self.audit_hmac_key.encode("utf-8")) < 32:
                 raise ValueError("AUDIT_HMAC_KEY must be at least 32 bytes in production")
+            if "change-me" in self.database_url:
+                raise ValueError("DATABASE_URL must not use a development password in production")
+            issuer = urlparse(self.oidc_issuer)
+            if issuer.scheme != "https" or issuer.hostname in {None, "localhost", "127.0.0.1"}:
+                raise ValueError("OIDC_ISSUER must use a non-local HTTPS issuer in production")
             if not self.allowed_processor_hosts:
                 raise ValueError("PROCESSOR_ALLOWED_HOSTS is required in production")
+            if any("*" in host for host in self.allowed_processor_hosts):
+                raise ValueError("PROCESSOR_ALLOWED_HOSTS must not contain wildcards in production")
         return self
 
     @property

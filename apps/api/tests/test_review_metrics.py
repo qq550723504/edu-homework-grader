@@ -22,7 +22,9 @@ pytest_plugins = ("test_reviews",)
 
 
 def _resolved_review_task(api_client, database_session: Session):
-    student, classroom, assignment, item, version = published_assignment_for_student(database_session)
+    student, classroom, assignment, item, version = published_assignment_for_student(
+        database_session
+    )
     version.question_type = "E4"
     version.grading_policy = GradingPolicy(question_type="E4", policy_version="2", json_schema={})
     version.rule_json = {"max_score": 1, "scoring_points": []}
@@ -38,7 +40,7 @@ def _resolved_review_task(api_client, database_session: Session):
         student_id=student.id,
         attempt_id=attempt.id,
         assignment_item_id=item.id,
-        answer_json={"answer": "A concise answer."},
+        answer_json={"format": "text-v1", "text": "A concise answer."},
         expected_version=0,
     )
     submit_attempt(
@@ -72,7 +74,9 @@ def _resolved_review_task(api_client, database_session: Session):
     return assignment, classroom, task
 
 
-def test_teacher_review_metrics_summarize_resolved_tasks(api_client, database_session: Session) -> None:
+def test_teacher_review_metrics_summarize_resolved_tasks(
+    api_client, database_session: Session
+) -> None:
     assignment, classroom, task = _resolved_review_task(api_client, database_session)
     second_task = ReviewTask(
         attempt_answer=task.attempt_answer,
@@ -119,7 +123,9 @@ def test_teacher_review_metrics_summarize_resolved_tasks(api_client, database_se
     }
 
 
-def test_teacher_review_metrics_allow_an_empty_time_range(api_client, database_session: Session) -> None:
+def test_teacher_review_metrics_allow_an_empty_time_range(
+    api_client, database_session: Session
+) -> None:
     assignment, _, _ = _resolved_review_task(api_client, database_session)
 
     response = api_client.get(

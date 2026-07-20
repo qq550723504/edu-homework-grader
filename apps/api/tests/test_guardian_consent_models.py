@@ -77,3 +77,29 @@ def test_not_required_consent_needs_no_evidence() -> None:
         )
 
         session.commit()
+
+
+def test_required_guardian_consent_cannot_be_not_required() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        tenant = Tenant(slug="pilot", name="Pilot")
+        student = User(
+            tenant=tenant,
+            role=Role.STUDENT,
+            school_id="S-001",
+            display_name="Student",
+        )
+        session.add_all([tenant, student])
+        session.flush()
+        session.add(
+            StudentGuardianConsent(
+                student_id=student.id,
+                requires_guardian_consent=True,
+                status=GuardianConsentStatus.NOT_REQUIRED,
+            )
+        )
+
+        with pytest.raises(IntegrityError):
+            session.commit()

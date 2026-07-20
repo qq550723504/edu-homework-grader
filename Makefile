@@ -1,10 +1,10 @@
-.PHONY: install-python test lint format api-test api-lint api-migrate question-test calibration-report web-install web-build dev down
+.PHONY: install-python test lint format api-test api-lint api-migrate question-test calibration-report web-install web-test web-build web-e2e dev down
 
 install-python:
 	python -m pip install -e packages/processor-policy -e "apps/api[dev]" -e "services/grader[dev]"
 
 test:
-	python -m pytest apps/api/tests services/grader/tests
+	python -m pytest packages/processor-policy/tests apps/api/tests services/grader/tests
 
 api-test:
 	python -m pytest apps/api/tests
@@ -23,16 +23,23 @@ calibration-report:
 	python -m edu_grader.calibration services/grader/tests/fixtures/english_calibration.jsonl
 
 lint:
-	python -m ruff check apps/api services/grader
+	python -m ruff format --check packages/processor-policy apps/api services/grader
+	python -m ruff check packages/processor-policy apps/api services/grader
 
 format:
-	python -m ruff format apps/api services/grader
+	python -m ruff format packages/processor-policy apps/api services/grader
 
 web-install:
-	cd apps/web && npm install
+	cd apps/web && npm ci
+
+web-test:
+	cd apps/web && npm test
 
 web-build:
 	cd apps/web && npm run build
+
+web-e2e:
+	cd apps/web && npx playwright install chromium && npm run test:e2e
 
 dev:
 	docker compose up --build

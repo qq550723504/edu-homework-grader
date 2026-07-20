@@ -16,9 +16,11 @@ from edu_grader_api.models import (
     ClassTeacher,
     Classroom,
     Enrollment,
+    GuardianConsentStatus,
     GradingRun,
     ReviewTask,
     Role,
+    StudentGuardianConsent,
     Tenant,
     User,
 )
@@ -118,6 +120,11 @@ def seed_teacher_student_classroom(session: Session) -> tuple[User, User, Classr
         [
             ClassTeacher(class_id=classroom.id, teacher_id=teacher.id),
             Enrollment(class_id=classroom.id, student_id=student.id),
+            StudentGuardianConsent(
+                student_id=student.id,
+                requires_guardian_consent=False,
+                status=GuardianConsentStatus.NOT_REQUIRED,
+            ),
         ]
     )
     session.commit()
@@ -277,12 +284,13 @@ def test_teacher_to_student_correction_vertical_slice(client, session, monkeypat
             },
         )
         assert test_case.status_code == 201
-    assert (
-        client.post(
-            f"/v1/question-versions/{version_id}/test-runs", headers=authorize(client, teacher)
-        ).status_code
-        == 201
+    test_run = client.post(
+        f"/v1/question-versions/{version_id}/test-runs", headers=authorize(client, teacher)
     )
+    assert test_run.status_code == 201
+    assert test_run.json()["status"] == "passed"
+    assert [entry["category"] for entry in test_run.json()["case_runs"]] == sorted(M2_CASES)
+    assert all(entry["passed"] is True for entry in test_run.json()["case_runs"])
     assert (
         client.post(
             f"/v1/question-versions/{version_id}/publish", headers=authorize(client, teacher)

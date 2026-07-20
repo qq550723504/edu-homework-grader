@@ -50,7 +50,7 @@ def test_grading_run_retains_rule_and_answer_snapshots_after_later_edits(
     answer = AttemptAnswer(
         attempt=attempt,
         assignment_item=item,
-        answer_json={"answer": "bridge closed"},
+        answer_json={"format": "text-v1", "text": "bridge closed"},
         version=1,
     )
     run = GradingRun(
@@ -90,13 +90,13 @@ def test_grading_run_retains_rule_and_answer_snapshots_after_later_edits(
     database_session.add(run)
     database_session.commit()
 
-    answer.answer_json = {"answer": "changed later"}
+    answer.answer_json = {"format": "text-v1", "text": "changed later"}
     version.rule_json = {"changed": True}
     database_session.commit()
 
     stored = database_session.get(GradingRun, run.id)
     assert stored is not None
-    assert stored.answer_snapshot_json == {"answer": "bridge closed"}
+    assert stored.answer_snapshot_json == {"format": "text-v1", "text": "bridge closed"}
     assert stored.rule_snapshot_json["scoring_points"][0]["id"] == "cause"
     assert stored.signals[0].evidence_json == {"highest_similarity": 0.95}
 
@@ -117,7 +117,7 @@ class FakeEnglishGraderClient:
         assert (question_type, policy_version, answer_json) == (
             "E4",
             "2",
-            {"answer": "The road closure delayed them."},
+            {"format": "text-v1", "text": "The road closure delayed them."},
         )
         return GradeResult(
             decision="needs_review",
@@ -173,7 +173,7 @@ def test_submit_persists_e4_evidence_without_leaking_rubric(
         student_id=student.id,
         attempt_id=attempt.id,
         assignment_item_id=item.id,
-        answer_json={"answer": "The road closure delayed them."},
+        answer_json={"format": "text-v1", "text": "The road closure delayed them."},
         expected_version=0,
     )
     grader = FakeEnglishGraderClient()
@@ -235,7 +235,7 @@ def test_assigned_teacher_can_read_full_grading_evidence(
         student_id=student.id,
         attempt_id=attempt.id,
         assignment_item_id=item.id,
-        answer_json={"answer": "The road closure delayed them."},
+        answer_json={"format": "text-v1", "text": "The road closure delayed them."},
         expected_version=0,
     )
     submit_attempt(

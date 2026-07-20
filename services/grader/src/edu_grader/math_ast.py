@@ -122,6 +122,23 @@ def _build(node: dict[str, Any], context: _BuildContext, depth: int) -> sp.Expr:
 
 
 def grade_numeric(request: NumericGradeRequest) -> GradingResult:
+    if not request.student_answer.strip():
+        return GradingResult(
+            decision="auto_rejected",
+            score=0.0,
+            max_score=request.max_score,
+            confidence=1.0,
+            criteria=[
+                Criterion(
+                    code="numeric_value",
+                    score=0.0,
+                    max_score=request.max_score,
+                    passed=False,
+                    evidence="No numeric answer was provided.",
+                )
+            ],
+            feedback=[Feedback(type="value", message="未提供数值答案。")],
+        )
     try:
         student = Decimal(request.student_answer.strip())
         expected = Decimal(request.expected_answer.strip())
