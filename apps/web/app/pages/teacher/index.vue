@@ -1,17 +1,17 @@
 <template>
-  <main class="shell">
+  <main class="shell teacher-page">
     <NuxtLink class="back" to="/">← 返回</NuxtLink><LogoutButton />
-    <p class="eyebrow">教师端</p>
-    <h1>教学工作台</h1>
+    <TeacherWorkbenchNav :active-module="activeModule" />
     <p v-if="message" class="notice" role="status">{{ message }}</p>
+    <TeacherOverview
+      v-if="activeModule === 'overview'"
+      :review-count="reviewCount"
+      :completion-rate="completionRate"
+      :published-assignments="publishedAssignments"
+      @open-module="selectModule"
+    />
 
-    <section class="metrics" aria-label="工作台指标">
-      <article class="metric"><strong>{{ reviewCount }}</strong><span>待复核答案</span></article>
-      <article class="metric"><strong>{{ completionRate }}%</strong><span>作业完成率</span></article>
-      <article class="metric"><strong>{{ publishedAssignments }}</strong><span>已发布作业</span></article>
-    </section>
-    <div class="actions"><NuxtLink class="button secondary" to="/teacher/reviews">处理复核队列（{{ reviewCount }}）</NuxtLink><NuxtLink class="button secondary" to="/teacher/appeals">处理学生申诉</NuxtLink></div>
-
+    <TeacherQuestionWorkspace v-if="activeModule === 'questions'">
     <section class="card wide" aria-labelledby="create-question-heading">
       <span class="tag">题库</span>
       <h2 id="create-question-heading">创建草稿题目</h2>
@@ -54,7 +54,9 @@
       <p v-if="latestTestRun" class="notice">最近测试：{{ latestTestRun.status }}{{ latestTestRun.failure_summary ? ` · ${latestTestRun.failure_summary}` : '' }}</p>
       <article v-for="caseRun in latestTestRun?.case_runs ?? []" :key="caseRun.category" class="assignment"><div><span class="subject">{{ caseRun.category }}</span><h3>{{ caseRun.passed ? '通过' : '未通过' }} · {{ caseRun.decision }} · {{ caseRun.score }}</h3><p v-if="caseRun.error_detail">{{ caseRun.error_detail }}</p><pre v-else>{{ JSON.stringify(caseRun.evidence, null, 2) }}</pre></div></article>
     </section>
+    </TeacherQuestionWorkspace>
 
+    <TeacherAssignmentWorkspace v-if="activeModule === 'assignments'">
     <section class="card wide" aria-labelledby="create-assignment-heading">
       <span class="tag">作业</span>
       <h2 id="create-assignment-heading">创建作业草稿</h2>
@@ -109,12 +111,14 @@
         <button class="button secondary" :disabled="saving" type="submit">导入 CSV</button>
       </form>
     </section>
+    </TeacherAssignmentWorkspace>
   </main>
 </template>
 
 <script setup lang="ts">
 import { fetchCurrentPrincipal } from '../../lib/student-api'
 import { addAssignmentItem, createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, fetchTeacherRosterClasses, fetchTeacherWorkspace, importTeacherRoster, publishAssignment, publishQuestionVersion, runQuestionTests, type CreateQuestionInput, type QuestionTestRun, type TeacherAssignment, type TeacherQuestionVersion, type TeacherRosterClass } from '../../lib/teacher-api'
+import { teacherModules, type TeacherModule } from '../../lib/teacher-workbench'
 import { clearGuardianConsentEvidence, guardianConsentFieldsRequired, teacherErrorMessage } from '../../lib/teacher-workflow'
 
 const workspace = ref<{ classes: Array<{ id: string; code: string; name: string }>; questionVersions: TeacherQuestionVersion[]; assignments: TeacherAssignment[]; reviewMetrics: Record<string, unknown>; reviewTasks: Array<{ id: string }> }>({ classes: [], questionVersions: [], assignments: [], reviewMetrics: {}, reviewTasks: [] })
@@ -128,6 +132,18 @@ const saving = ref(false)
 const selectedVersionId = ref<string | null>(null)
 const latestTestRun = ref<QuestionTestRun | null>(null)
 const pendingAssignmentId = ref<string | null>(null)
+const activeModule = ref<TeacherModule>('overview')
+
+function moduleFromHash(hash: string): TeacherModule {
+  const requestedModule = hash.slice(1)
+  return teacherModules.some((module) => module.id === requestedModule)
+    ? requestedModule as TeacherModule
+    : 'overview'
+}
+
+function syncModuleFromHash() {
+  activeModule.value = moduleFromHash(window.location.hash)
+}
 const questionTypes = [
   { value: 'M1', label: 'M1 数值题', policy: '1', rule: '{"expected": 0}' },
   { value: 'M2', label: 'M2 表达式题', policy: '2', rule: '{"expected": ["Add", "x", 1], "variables": ["x"], "required_form": "expanded", "max_score": 1}' },
@@ -153,6 +169,13 @@ const completionRate = computed(() => {
   const submitted = workspace.value.assignments.reduce((total, assignment) => total + assignment.submitted_count, 0)
   return assigned === 0 ? 0 : Math.round((submitted / assigned) * 100)
 })
+
+function selectModule(module: TeacherModule) {
+  if (module === 'reviews') return navigateTo('/teacher/reviews')
+  if (module === 'requests') return navigateTo('/teacher/appeals')
+  activeModule.value = module
+  window.location.hash = module
+}
 
 async function loadWorkspace() {
   const [nextWorkspace, nextRosterClasses] = await Promise.all([
@@ -333,7 +356,13 @@ async function publishPendingAssignment() {
 }
 
 onMounted(async () => {
+  syncModuleFromHash()
+  window.addEventListener('hashchange', syncModuleFromHash)
   try { await loadWorkspace() }
   catch { message.value = '暂时无法读取教师工作台。' }
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('hashchange', syncModuleFromHash)
 })
 </script>
