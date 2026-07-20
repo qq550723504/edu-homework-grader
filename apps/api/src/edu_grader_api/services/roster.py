@@ -1,5 +1,6 @@
 import csv
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from io import StringIO
 from uuid import UUID
@@ -164,7 +165,12 @@ def parse_roster(data: bytes) -> list[RosterRow]:
     return rows
 
 
-def import_roster(session: Session, actor: CurrentPrincipal, rows: list[RosterRow]) -> int:
+def import_roster(
+    session: Session,
+    actor: CurrentPrincipal,
+    rows: list[RosterRow],
+    existing_student_guard: Callable[[Session, User, RosterRow], None] | None = None,
+) -> int:
     """Atomically create tenant-local roster records and their audit events."""
     session.rollback()
     with session.begin():
@@ -196,6 +202,8 @@ def import_roster(session: Session, actor: CurrentPrincipal, rows: list[RosterRo
                 session.add(student)
                 session.flush()
             else:
+                if existing_student_guard is not None:
+                    existing_student_guard(session, student, row)
                 student.display_name = row.student_display_name
 
             consent = session.get(StudentGuardianConsent, student.id)
@@ -257,3 +265,31 @@ def import_roster(session: Session, actor: CurrentPrincipal, rows: list[RosterRo
                 },
             )
     return len(rows)
+
+
+def import_teacher_roster(
+    session: Session,
+    actor: CurrentPrincipal,
+    class_id: UUID,
+    rows: list[RosterRow],
+) -> int:
+    """Import a roster without allowing teachers to alter students in other classes."""
+
+    def guard_existing_student(active_session: Session, student: User, _: RosterRow) -> None:
+        active_session.execute(select(User.id).where(User.id == student.id).with_for_update())
+        enrollment_class_ids = set(
+            active_session.scalars(
+                select(Enrollment.class_id)
+                .where(Enrollment.student_id == student.id)
+                .with_for_update()
+            ).all()
+        )
+        if enrollment_class_ids != {class_id}:
+            raise RosterValidationError("student_school_id already belongs to a different class")
+
+    return import_roster(
+        session,
+        actor,
+        rows,
+        existing_student_guard=guard_existing_student,
+    )

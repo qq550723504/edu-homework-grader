@@ -20,6 +20,7 @@ from edu_grader_api.models import (
     StudentGuardianConsent,
     Tenant,
     User,
+    utc_now,
 )
 from edu_grader_api.settings import settings
 
@@ -108,6 +109,25 @@ def test_teacher_creates_class_and_is_assigned(
     assert session.scalar(select(func.count(AuditLog.id))) == 2
 
 
+def test_teacher_gets_a_conflict_for_a_duplicate_class_code(
+    teacher_context: TeacherContext,
+) -> None:
+    payload = {"code": "7A", "name": "Year 7 A"}
+    assert (
+        teacher_context.client.post(
+            "/v1/teacher/classes", json=payload, headers=auth_headers()
+        ).status_code
+        == 201
+    )
+
+    response = teacher_context.client.post(
+        "/v1/teacher/classes", json=payload, headers=auth_headers()
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "class code already exists"}
+
+
 def test_teacher_adds_student_to_owned_class(
     teacher_context: TeacherContext, session: Session
 ) -> None:
@@ -182,3 +202,56 @@ def test_teacher_cannot_write_another_teachers_class(
 
     assert response.status_code == 404
     assert session.scalar(select(func.count(Enrollment.class_id))) == 0
+
+
+def test_teacher_cannot_overwrite_a_student_from_another_class(
+    teacher_context: TeacherContext, session: Session
+) -> None:
+    tenant = session.scalar(select(Tenant).where(Tenant.slug == "pilot"))
+    assert tenant is not None
+    other_teacher = User(tenant=tenant, role=Role.TEACHER, display_name="Other")
+    other_class = Classroom(tenant=tenant, code="7B", name="Year 7 B")
+    student = User(
+        tenant=tenant,
+        role=Role.STUDENT,
+        school_id="S-900",
+        display_name="Original name",
+    )
+    session.add_all([other_teacher, other_class, student])
+    session.flush()
+    session.add_all(
+        [
+            ClassTeacher(class_id=other_class.id, teacher_id=other_teacher.id),
+            Enrollment(class_id=other_class.id, student_id=student.id),
+            StudentGuardianConsent(
+                student_id=student.id,
+                requires_guardian_consent=True,
+                status=GuardianConsentStatus.GRANTED,
+                notice_version="2026-07",
+                evidence_reference="school-consent-0001",
+                verified_by_user_id=other_teacher.id,
+                granted_at=utc_now(),
+            ),
+        ]
+    )
+    session.commit()
+    classroom = create_owned_class(session, teacher_context.teacher_id)
+
+    response = teacher_context.client.post(
+        f"/v1/teacher/classes/{classroom.id}/students",
+        json={
+            "school_id": "S-900",
+            "display_name": "Overwritten name",
+            "under_14": False,
+            "guardian_consent_status": "not_required",
+        },
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 422
+    session.refresh(student)
+    assert student.display_name == "Original name"
+    assert session.get(Enrollment, (classroom.id, student.id)) is None
+    consent = session.get(StudentGuardianConsent, student.id)
+    assert consent is not None
+    assert consent.status is GuardianConsentStatus.GRANTED

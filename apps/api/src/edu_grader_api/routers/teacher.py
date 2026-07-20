@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..audit import append_audit_event
@@ -14,7 +15,7 @@ from ..models import ClassTeacher, Classroom, Enrollment, GuardianConsentStatus,
 from ..services.roster import (
     RosterRow,
     RosterValidationError,
-    import_roster,
+    import_teacher_roster,
     parse_roster,
     validate_consent_fields,
 )
@@ -90,33 +91,50 @@ def create_class(
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, str | int]:
     session.rollback()
-    with session.begin():
-        classroom = Classroom(
-            tenant_id=UUID(principal.tenant_id),
-            code=body.code,
-            name=body.name,
-        )
-        session.add(classroom)
-        session.flush()
-        session.add(ClassTeacher(class_id=classroom.id, teacher_id=UUID(principal.user_id)))
-        append_audit_event(
-            session,
-            tenant_id=UUID(principal.tenant_id),
-            actor_user_id=UUID(principal.user_id),
-            event_type="class.created",
-            target_type="class",
-            target_id=classroom.id,
-            metadata={},
-        )
-        append_audit_event(
-            session,
-            tenant_id=UUID(principal.tenant_id),
-            actor_user_id=UUID(principal.user_id),
-            event_type="class.teacher_assigned",
-            target_type="class",
-            target_id=classroom.id,
-            metadata={"teacher_id": principal.user_id},
-        )
+    try:
+        with session.begin():
+            if (
+                session.scalar(
+                    select(Classroom.id).where(
+                        Classroom.tenant_id == UUID(principal.tenant_id),
+                        Classroom.code == body.code,
+                    )
+                )
+                is not None
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail="class code already exists"
+                )
+            classroom = Classroom(
+                tenant_id=UUID(principal.tenant_id),
+                code=body.code,
+                name=body.name,
+            )
+            session.add(classroom)
+            session.flush()
+            session.add(ClassTeacher(class_id=classroom.id, teacher_id=UUID(principal.user_id)))
+            append_audit_event(
+                session,
+                tenant_id=UUID(principal.tenant_id),
+                actor_user_id=UUID(principal.user_id),
+                event_type="class.created",
+                target_type="class",
+                target_id=classroom.id,
+                metadata={},
+            )
+            append_audit_event(
+                session,
+                tenant_id=UUID(principal.tenant_id),
+                actor_user_id=UUID(principal.user_id),
+                event_type="class.teacher_assigned",
+                target_type="class",
+                target_id=classroom.id,
+                metadata={"teacher_id": principal.user_id},
+            )
+    except IntegrityError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="class code already exists"
+        ) from error
     return {
         "id": str(classroom.id),
         "code": classroom.code,
@@ -141,9 +159,10 @@ def create_student(
             notice_version=body.guardian_consent_notice_version or "",
             evidence_reference=body.guardian_consent_evidence_reference or "",
         )
-        imported = import_roster(
+        imported = import_teacher_roster(
             session,
             principal,
+            class_id,
             [
                 RosterRow(
                     class_code=classroom.code,
@@ -176,6 +195,6 @@ async def import_students(
             row.class_code != classroom.code or row.class_name != classroom.name for row in rows
         ):
             raise RosterValidationError("CSV class does not match selected class")
-        return {"imported": import_roster(session, principal, rows)}
+        return {"imported": import_teacher_roster(session, principal, class_id, rows)}
     except RosterValidationError as error:
         raise_roster_validation_error(error)
