@@ -2,6 +2,15 @@ export function guardianConsentFieldsRequired(under14: boolean): boolean {
   return under14
 }
 
+export function clearGuardianConsentEvidence(
+  status: 'not_required' | 'pending' | 'granted' | 'withdrawn',
+  noticeVersion: string,
+  evidenceReference: string,
+): { noticeVersion: string; evidenceReference: string } {
+  if (status === 'granted') return { noticeVersion, evidenceReference }
+  return { noticeVersion: '', evidenceReference: '' }
+}
+
 export function teacherErrorMessage(error: unknown): string {
   if (
     typeof error === 'object'

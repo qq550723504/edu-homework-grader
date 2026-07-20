@@ -115,7 +115,7 @@
 <script setup lang="ts">
 import { fetchCurrentPrincipal } from '../../lib/student-api'
 import { addAssignmentItem, createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, fetchTeacherRosterClasses, fetchTeacherWorkspace, importTeacherRoster, publishAssignment, publishQuestionVersion, runQuestionTests, type CreateQuestionInput, type QuestionTestRun, type TeacherAssignment, type TeacherQuestionVersion, type TeacherRosterClass } from '../../lib/teacher-api'
-import { guardianConsentFieldsRequired, teacherErrorMessage } from '../../lib/teacher-workflow'
+import { clearGuardianConsentEvidence, guardianConsentFieldsRequired, teacherErrorMessage } from '../../lib/teacher-workflow'
 
 const workspace = ref<{ classes: Array<{ id: string; code: string; name: string }>; questionVersions: TeacherQuestionVersion[]; assignments: TeacherAssignment[]; reviewMetrics: Record<string, unknown>; reviewTasks: Array<{ id: string }> }>({ classes: [], questionVersions: [], assignments: [], reviewMetrics: {}, reviewTasks: [] })
 const rosterClasses = ref<TeacherRosterClass[]>([])
@@ -208,10 +208,16 @@ async function csrfToken(): Promise<string> {
 
 watch(() => rosterStudentDraft.under_14, (under14) => {
   rosterStudentDraft.guardian_consent_status = under14 ? 'pending' : 'not_required'
-  if (!under14) {
-    rosterStudentDraft.guardian_consent_notice_version = ''
-    rosterStudentDraft.guardian_consent_evidence_reference = ''
-  }
+})
+
+watch(() => rosterStudentDraft.guardian_consent_status, (status) => {
+  const evidence = clearGuardianConsentEvidence(
+    status,
+    rosterStudentDraft.guardian_consent_notice_version,
+    rosterStudentDraft.guardian_consent_evidence_reference,
+  )
+  rosterStudentDraft.guardian_consent_notice_version = evidence.noticeVersion
+  rosterStudentDraft.guardian_consent_evidence_reference = evidence.evidenceReference
 })
 
 async function submitRosterClass() {
