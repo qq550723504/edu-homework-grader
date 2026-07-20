@@ -46,6 +46,8 @@ spec:
           env:
             - name: APP_ENV
               value: production
+            - name: GRADER_MATH_MEMORY_BYTES
+              value: "536870912"
             - name: LANGUAGETOOL_BASE_URL
               value: http://languagetool:8010/v2
             - name: PROCESSOR_ALLOWED_HOSTS
