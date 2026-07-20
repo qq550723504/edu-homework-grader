@@ -45,7 +45,11 @@ def main() -> int:
 
 def _tree_digest(directory: Path) -> str:
     digest = hashlib.sha256()
-    for path in sorted(file for file in directory.rglob("*") if file.is_file()):
+    for path in sorted(
+        file
+        for file in directory.rglob("*")
+        if file.is_file() and ".cache" not in file.relative_to(directory).parts
+    ):
         if path.name == "metadata.json":
             continue
         digest.update(path.relative_to(directory).as_posix().encode("utf-8"))
