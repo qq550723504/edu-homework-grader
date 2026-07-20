@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from edu_grader.english_dependencies import EnglishDependencyError
 import edu_grader.main as main
 
 
@@ -19,6 +20,11 @@ class FakeGrammarChecker:
 
     def check(self, text: str) -> list[object]:
         return []
+
+
+class FailingSimilarity:
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        raise EnglishDependencyError("model directory is unavailable")
 
 
 def test_english_similarity_is_loaded_once_and_reported_ready(monkeypatch) -> None:
@@ -59,3 +65,29 @@ def test_english_similarity_is_loaded_once_and_reported_ready(monkeypatch) -> No
         }
 
     assert FakeSimilarity.instances == 1
+
+
+def test_missing_embedding_model_is_degraded_and_e4_stays_review_safe(monkeypatch) -> None:
+    monkeypatch.setattr(main, "SentenceTransformerSimilarity", FailingSimilarity)
+
+    payload = {
+        "question_type": "E4",
+        "policy_version": "2",
+        "rule": {
+            "scoring_points": [{"id": "point", "evidence_phrases": ["evidence"], "score": 1}],
+            "max_score": 1,
+        },
+        "answer": {"answer": "student answer"},
+    }
+    with TestClient(main.app) as client:
+        assert client.get("/ready").status_code == 503
+        assert client.get("/ready").json() == {
+            "status": "degraded",
+            "english_embedding_model": "unavailable",
+        }
+
+        response = client.post("/v1/grade/english", json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["decision"] == "needs_review"
+    assert response.json()["requires_review"] is True
