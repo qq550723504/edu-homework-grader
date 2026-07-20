@@ -1,3 +1,6 @@
+Exit code: 0
+Wall time: 1.8 seconds
+Output:
 from __future__ import annotations
 
 import multiprocessing
@@ -19,7 +22,7 @@ def load_math_execution_limits(environment: Mapping[str, str] | None = None) -> 
     values = os.environ if environment is None else environment
     return MathExecutionLimits(
         cpu_seconds=int(values.get("GRADER_MATH_CPU_SECONDS", "1")),
-        memory_bytes=int(values.get("GRADER_MATH_MEMORY_BYTES", "134217728")),
+        memory_bytes=int(values.get("GRADER_MATH_MEMORY_BYTES", "536870912")),
         timeout_seconds=float(values.get("GRADER_MATH_TIMEOUT_SECONDS", "1")),
     )
 
@@ -76,3 +79,4 @@ def _review_result(code: str, message: str, request: dict[str, object]) -> Gradi
         ],
         feedback=[Feedback(type="execution", message=message)],
     )
+
