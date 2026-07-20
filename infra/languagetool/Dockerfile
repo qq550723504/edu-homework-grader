@@ -24,4 +24,4 @@ EXPOSE 8010
 
 HEALTHCHECK --interval=10s --timeout=5s --retries=10 CMD wget -q -O - http://localhost:8010/v2/languages > /dev/null || exit 1
 
-CMD ["java", "-cp", "/opt/languagetool/languagetool-server.jar", "org.languagetool.server.HTTPServer", "--port", "8010"]
+CMD ["java", "-cp", "/opt/languagetool/languagetool-server.jar", "org.languagetool.server.HTTPServer", "--port", "8010", "--public"]
