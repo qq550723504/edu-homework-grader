@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -8,6 +10,15 @@ import {
 } from '../app/lib/teacher-workbench'
 
 describe('teacher workbench UI contract', () => {
+  it('mounts the workbench navigation and live workspace modules on the teacher route', () => {
+    const teacherPage = readFileSync(new URL('../app/pages/teacher/index.vue', import.meta.url), 'utf8')
+
+    expect(teacherPage).toContain('<TeacherWorkbenchNav')
+    expect(teacherPage).toContain('<TeacherOverview')
+    expect(teacherPage).toContain('<TeacherQuestionWorkspace')
+    expect(teacherPage).toContain('<TeacherAssignmentWorkspace')
+  })
+
   it('exposes the five stable teacher modules in navigation order', () => {
     expect(teacherModules.map((module) => module.id)).toEqual([
       'overview', 'reviews', 'questions', 'assignments', 'requests'
