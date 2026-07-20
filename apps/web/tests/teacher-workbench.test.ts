@@ -33,4 +33,10 @@ describe('teacher workbench UI contract', () => {
     expect(getTeacherModule('assignments')).toMatchObject({ label: '作业' })
     expect(getTeacherModule('requests')).toMatchObject({ label: '学生申请', badge: '2' })
   })
+
+  it('rejects whitespace-only question answers', () => {
+    expect(isQuestionDraftReady({
+      title: '加法练习', prompt: '计算 2 + 3', questionType: 'math', answer: '   '
+    })).toBe(false)
+  })
 })

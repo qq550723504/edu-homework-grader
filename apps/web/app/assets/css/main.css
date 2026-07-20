@@ -96,6 +96,25 @@ h2 { margin: 12px 0 8px; font-size: 1.2rem; }
 .teacher-quick-start__card p { min-height: 44px; margin: 0 0 18px; color: #68768b; font-size: .92rem; line-height: 1.55; }
 .teacher-empty-module { padding: 32px; }
 .teacher-empty-module p { max-width: 520px; margin: 14px 0 0; color: #68768b; line-height: 1.65; }
+.teacher-module-page { width: min(100%, 1200px); margin: 0 auto; }
+.teacher-workspace { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(0, 1.2fr); gap: 18px; margin-top: 32px; }
+.teacher-workspace__aside, .teacher-form { border: 1px solid #e1e7f0; border-radius: 16px; background: #fff; box-shadow: 0 14px 30px rgba(27, 45, 78, .05); }
+.teacher-workspace__aside { align-self: start; padding: 24px; }
+.teacher-workspace__aside h2 { margin: 16px 0 8px; font-size: 1.18rem; }
+.teacher-workspace__aside p { margin: 0; color: #68768b; font-size: .92rem; line-height: 1.65; }
+.teacher-form { display: grid; gap: 16px; padding: 24px; }
+.teacher-form__heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.teacher-form__heading h2 { margin: 0; font-size: 1.18rem; }
+.teacher-form__heading p { margin: 0; color: #7c899d; font-size: .8rem; }
+.teacher-field { display: grid; gap: 8px; }
+.teacher-field label { color: #34445d; font-size: .9rem; font-weight: 750; }
+.teacher-field label span, .teacher-form__heading span { color: #c53929; }
+.teacher-field input, .teacher-field textarea, .teacher-field select { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid #cfd8e6; border-radius: 9px; background: #fff; color: #17243b; font: inherit; }
+.teacher-field textarea { min-height: 126px; resize: vertical; }
+.teacher-field input::placeholder, .teacher-field textarea::placeholder { color: #9aa6b8; }
+.teacher-form__submit { width: 100%; }
+.teacher-form__submit:disabled { cursor: not-allowed; opacity: .5; }
+.teacher-form__message { margin: 0; padding: 10px 12px; border-radius: 8px; background: #eaf4ee; color: #18794e; font-size: .9rem; }
 .teacher-workbench :focus-visible { outline: 3px solid rgba(45, 99, 216, .4); outline-offset: 2px; }
 
 @media (max-width: 860px) {
@@ -113,6 +132,8 @@ h2 { margin: 12px 0 8px; font-size: 1.2rem; }
   .teacher-page-heading { align-items: flex-start; flex-direction: column; }
   .teacher-page-heading .button { width: 100%; }
   .teacher-metrics, .teacher-quick-start { grid-template-columns: 1fr; }
+  .teacher-workspace { grid-template-columns: 1fr; margin-top: 24px; }
+  .teacher-form, .teacher-workspace__aside, .teacher-empty-module { padding: 20px; }
   .teacher-task { align-items: flex-start; flex-direction: column; }
   .teacher-task .button { width: 100%; }
 }
