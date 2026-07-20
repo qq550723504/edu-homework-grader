@@ -49,7 +49,9 @@ def owned_class_or_404(session: Session, principal: CurrentPrincipal, class_id: 
 
 
 def raise_roster_validation_error(error: RosterValidationError) -> None:
-    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+    ) from error
 
 
 @router.get("/classes")
@@ -115,7 +117,12 @@ def create_class(
             target_id=classroom.id,
             metadata={"teacher_id": principal.user_id},
         )
-    return {"id": str(classroom.id), "code": classroom.code, "name": classroom.name, "student_count": 0}
+    return {
+        "id": str(classroom.id),
+        "code": classroom.code,
+        "name": classroom.name,
+        "student_count": 0,
+    }
 
 
 @router.post("/classes/{class_id}/students", status_code=status.HTTP_201_CREATED)
@@ -165,7 +172,9 @@ async def import_students(
     classroom = owned_class_or_404(session, principal, class_id)
     try:
         rows = parse_roster(await file.read())
-        if any(row.class_code != classroom.code or row.class_name != classroom.name for row in rows):
+        if any(
+            row.class_code != classroom.code or row.class_name != classroom.name for row in rows
+        ):
             raise RosterValidationError("CSV class does not match selected class")
         return {"imported": import_roster(session, principal, rows)}
     except RosterValidationError as error:

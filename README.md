@@ -7,7 +7,7 @@
 ## 第一阶段范围
 
 - 学生端：查看作业、在线答题、自动保存、提交、查看反馈、订正、申请复核。
-- 教师端：建题、布置作业、查看进度、处理复核、发布成绩、查看共性错误。
+- 教师端：创建并管理本人班级、录入或导入学生名册、建题、布置作业、查看进度、处理复核、发布成绩、查看共性错误。
 - 英语：客观题、单词/短语填空、限定句子填空、阅读简答辅助批改。
 - 数学：数值题、表达式等价、方程解、分步骤计算。
 - 暂不做：手写 OCR、英语作文自动最终评分、几何证明全自动评分、原生 App。
@@ -131,6 +131,18 @@ DATABASE_URL=postgresql+psycopg://edu_grader:change-me@localhost:5432/edu_grader
 - 题库、版本与作业：`/v1/questions`、`/v1/question-versions/*`、`/v1/assignments`。
 - 学生作答、申诉与隐私：`/v1/student/*`、`/v1/privacy-requests`。
 - 教师复核、申诉和成绩发布：`/v1/review-tasks`、`/v1/review-appeals`、`/v1/review-metrics`、`/v1/assignments/*/publish-results`。
+
+## 教师班级与学生名册
+
+教师登录后访问 `/teacher`，可创建班级、选择本人负责的班级、逐个录入学生或导入 CSV 名册。教师只能管理自己创建或被分配的班级；其他教师的班级不会出现在列表中，写入请求也会返回资源不存在。
+
+CSV 必须为 UTF-8，并使用以下完整列头：
+
+```text
+class_code,class_name,student_school_id,student_display_name,student_under_14,guardian_consent_status,guardian_consent_notice_version,guardian_consent_evidence_reference
+```
+
+`class_code` 与 `class_name` 必须和教师在页面中选中的班级一致。14 岁以下学生必须填写有效的监护人同意状态；当状态为 `granted` 时，还必须填写通知版本和不含敏感个人信息的同意凭据引用。
 
 ## 题目版本与发布门禁
 
