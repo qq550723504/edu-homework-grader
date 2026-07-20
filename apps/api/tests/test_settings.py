@@ -104,6 +104,26 @@ def test_production_settings_reject_the_default_audit_key() -> None:
         Settings(app_env="production", processor_allowed_hosts="grader")
 
 
+@pytest.mark.parametrize("processor_allowed_hosts", ["grader,external.example", "localhost"])
+def test_production_settings_reject_unreviewed_processor_hosts(
+    processor_allowed_hosts: str,
+) -> None:
+    with pytest.raises(ValueError, match="PROCESSOR_ALLOWED_HOSTS"):
+        Settings(
+            app_env="production",
+            audit_hmac_key="x" * 32,
+            database_url="postgresql://edu_grader:secure-password@db.example/edu_grader",
+            oidc_issuer="https://identity.example/realms/edu-grader",
+            processor_allowed_hosts=processor_allowed_hosts,
+        )
+
+
+def test_development_settings_allow_localhost_processor_host() -> None:
+    settings = Settings(processor_allowed_hosts="grader,localhost")
+
+    assert settings.allowed_processor_hosts == {"grader", "localhost"}
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
