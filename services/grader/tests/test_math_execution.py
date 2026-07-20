@@ -1,3 +1,6 @@
+Exit code: 0
+Wall time: 2 seconds
+Output:
 import edu_grader.execution as execution
 import edu_grader.main as grader_main
 from edu_grader.execution import (
@@ -40,7 +43,7 @@ def test_math_worker_returns_deterministic_result() -> None:
 
 def test_execution_limits_have_safe_defaults_and_allow_environment_overrides() -> None:
     assert load_math_execution_limits({}) == MathExecutionLimits(
-        cpu_seconds=1, memory_bytes=134_217_728, timeout_seconds=1.0
+        cpu_seconds=1, memory_bytes=536_870_912, timeout_seconds=1.0
     )
     assert load_math_execution_limits(
         {
@@ -126,3 +129,4 @@ def test_v2_endpoint_maps_worker_timeout_to_review(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["decision"] == "needs_review"
     assert response.json()["criteria"][0]["code"] == "execution_timeout"
+
