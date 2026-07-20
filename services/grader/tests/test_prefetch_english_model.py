@@ -24,3 +24,15 @@ def test_tree_digest_ignores_huggingface_download_cache(tmp_path: Path) -> None:
     metadata.write_text("later transport response", encoding="utf-8")
 
     assert prefetch_english_model._tree_digest(model_directory) == first_digest
+
+
+def test_configured_english_model_digest_matches_the_verified_snapshot() -> None:
+    verified_digest = "sha256:84714cdabb16d132cbe6e1a4cbd21167abd09eccbdaf69dd053136ae68cc7c17"
+    repository_root = Path(__file__).parents[3]
+
+    for path in (
+        repository_root / ".env.example",
+        repository_root / "compose.yaml",
+        repository_root / "services" / "grader" / "Dockerfile",
+    ):
+        assert verified_digest in path.read_text(encoding="utf-8")
