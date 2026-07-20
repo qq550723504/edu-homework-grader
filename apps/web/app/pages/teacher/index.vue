@@ -76,14 +76,53 @@
       </article>
       <p v-if="workspace.assignments.length === 0" class="notice">暂无作业。</p>
     </section>
+
+    <section class="card wide" aria-labelledby="roster-heading">
+      <span class="tag">班级名册</span>
+      <h2 id="roster-heading">创建班级与录入学生</h2>
+      <form class="stack" @submit.prevent="submitRosterClass">
+        <label>班级代码<input v-model.trim="rosterClassDraft.code" required maxlength="100" placeholder="例如：7A"></label>
+        <label>班级名称<input v-model.trim="rosterClassDraft.name" required maxlength="200" placeholder="例如：七年级 A 班"></label>
+        <button class="button primary" :disabled="saving" type="submit">创建班级</button>
+      </form>
+      <div v-if="rosterClasses.length" class="stack">
+        <h3>我的班级</h3>
+        <button v-for="classroom in rosterClasses" :key="classroom.id" class="button secondary" type="button" @click="selectedRosterClassId = classroom.id">
+          {{ classroom.code }} · {{ classroom.name }} · {{ classroom.student_count }} 名学生
+        </button>
+      </div>
+      <form v-if="selectedRosterClassId" class="stack" @submit.prevent="submitRosterStudent">
+        <h3>录入学生</h3>
+        <label>学号<input v-model.trim="rosterStudentDraft.school_id" required maxlength="100"></label>
+        <label>学生姓名<input v-model.trim="rosterStudentDraft.display_name" required maxlength="200"></label>
+        <label><input v-model="rosterStudentDraft.under_14" type="checkbox"> 学生未满 14 岁</label>
+        <template v-if="guardianConsentFieldsRequired(rosterStudentDraft.under_14)">
+          <label>监护人同意状态<select v-model="rosterStudentDraft.guardian_consent_status"><option value="pending">待确认</option><option value="granted">已同意</option><option value="withdrawn">已撤回</option></select></label>
+          <label v-if="rosterStudentDraft.guardian_consent_status === 'granted'">通知版本<input v-model.trim="rosterStudentDraft.guardian_consent_notice_version" required maxlength="50"></label>
+          <label v-if="rosterStudentDraft.guardian_consent_status === 'granted'">同意凭据引用<input v-model.trim="rosterStudentDraft.guardian_consent_evidence_reference" required maxlength="100"></label>
+        </template>
+        <button class="button primary" :disabled="saving" type="submit">添加学生</button>
+      </form>
+      <form v-if="selectedRosterClassId" class="stack" @submit.prevent="submitRosterImport">
+        <h3>导入 CSV 名册</h3>
+        <label>CSV 文件<input accept=".csv,text/csv" required type="file" @change="selectRosterFile"></label>
+        <button class="button secondary" :disabled="saving" type="submit">导入 CSV</button>
+      </form>
+    </section>
   </main>
 </template>
 
 <script setup lang="ts">
 import { fetchCurrentPrincipal } from '../../lib/student-api'
-import { addAssignmentItem, createAssignment, createQuestion, createTestCase, fetchTeacherWorkspace, publishAssignment, publishQuestionVersion, runQuestionTests, type CreateQuestionInput, type QuestionTestRun, type TeacherAssignment, type TeacherQuestionVersion } from '../../lib/teacher-api'
+import { addAssignmentItem, createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, fetchTeacherRosterClasses, fetchTeacherWorkspace, importTeacherRoster, publishAssignment, publishQuestionVersion, runQuestionTests, type CreateQuestionInput, type QuestionTestRun, type TeacherAssignment, type TeacherQuestionVersion, type TeacherRosterClass } from '../../lib/teacher-api'
+import { clearGuardianConsentEvidence, guardianConsentFieldsRequired, teacherErrorMessage } from '../../lib/teacher-workflow'
 
 const workspace = ref<{ classes: Array<{ id: string; code: string; name: string }>; questionVersions: TeacherQuestionVersion[]; assignments: TeacherAssignment[]; reviewMetrics: Record<string, unknown>; reviewTasks: Array<{ id: string }> }>({ classes: [], questionVersions: [], assignments: [], reviewMetrics: {}, reviewTasks: [] })
+const rosterClasses = ref<TeacherRosterClass[]>([])
+const selectedRosterClassId = ref('')
+const rosterFile = ref<File | null>(null)
+const rosterClassDraft = reactive({ code: '', name: '' })
+const rosterStudentDraft = reactive({ school_id: '', display_name: '', under_14: false, guardian_consent_status: 'not_required' as 'not_required' | 'pending' | 'granted' | 'withdrawn', guardian_consent_notice_version: '', guardian_consent_evidence_reference: '' })
 const message = ref('')
 const saving = ref(false)
 const selectedVersionId = ref<string | null>(null)
@@ -116,7 +155,13 @@ const completionRate = computed(() => {
 })
 
 async function loadWorkspace() {
-  workspace.value = await fetchTeacherWorkspace($fetch)
+  const [nextWorkspace, nextRosterClasses] = await Promise.all([
+    fetchTeacherWorkspace($fetch),
+    fetchTeacherRosterClasses($fetch),
+  ])
+  workspace.value = nextWorkspace
+  rosterClasses.value = nextRosterClasses
+  if (selectedRosterClassId.value && !nextRosterClasses.some((item) => item.id === selectedRosterClassId.value)) selectedRosterClassId.value = ''
 }
 
 function applyRuleTemplate() {
@@ -159,6 +204,62 @@ async function csrfToken(): Promise<string> {
   const principal = await fetchCurrentPrincipal($fetch)
   if (!principal.csrf_token) throw new Error('登录会话已过期，请重新登录。')
   return principal.csrf_token
+}
+
+watch(() => rosterStudentDraft.under_14, (under14) => {
+  rosterStudentDraft.guardian_consent_status = under14 ? 'pending' : 'not_required'
+})
+
+watch(() => rosterStudentDraft.guardian_consent_status, (status) => {
+  const evidence = clearGuardianConsentEvidence(
+    status,
+    rosterStudentDraft.guardian_consent_notice_version,
+    rosterStudentDraft.guardian_consent_evidence_reference,
+  )
+  rosterStudentDraft.guardian_consent_notice_version = evidence.noticeVersion
+  rosterStudentDraft.guardian_consent_evidence_reference = evidence.evidenceReference
+})
+
+async function submitRosterClass() {
+  saving.value = true
+  try {
+    const classroom = await createTeacherRosterClass($fetch, await csrfToken(), rosterClassDraft)
+    rosterClassDraft.code = ''
+    rosterClassDraft.name = ''
+    selectedRosterClassId.value = classroom.id
+    message.value = '班级已创建。'
+    await loadWorkspace()
+  } catch (error: unknown) { message.value = teacherErrorMessage(error) }
+  finally { saving.value = false }
+}
+
+async function submitRosterStudent() {
+  if (!selectedRosterClassId.value) return
+  saving.value = true
+  try {
+    await createTeacherRosterStudent($fetch, await csrfToken(), selectedRosterClassId.value, rosterStudentDraft)
+    rosterStudentDraft.school_id = ''
+    rosterStudentDraft.display_name = ''
+    message.value = '学生已录入。'
+    await loadWorkspace()
+  } catch (error: unknown) { message.value = teacherErrorMessage(error) }
+  finally { saving.value = false }
+}
+
+function selectRosterFile(event: Event) {
+  rosterFile.value = (event.target as HTMLInputElement).files?.[0] ?? null
+}
+
+async function submitRosterImport() {
+  if (!selectedRosterClassId.value || !rosterFile.value) return
+  saving.value = true
+  try {
+    const result = await importTeacherRoster($fetch, await csrfToken(), selectedRosterClassId.value, rosterFile.value)
+    rosterFile.value = null
+    message.value = `已导入 ${result.imported} 名学生。`
+    await loadWorkspace()
+  } catch (error: unknown) { message.value = teacherErrorMessage(error) }
+  finally { saving.value = false }
 }
 
 async function submitTestCase() {

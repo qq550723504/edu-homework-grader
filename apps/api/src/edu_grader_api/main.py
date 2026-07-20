@@ -20,6 +20,7 @@ from .routers.privacy_requests import router as privacy_requests_router
 from .routers.reviews import router as reviews_router
 from .routers.reviews import publication_router
 from .routers.reviews import metrics_router
+from .routers.teacher import router as teacher_router
 from .settings import settings
 
 app = FastAPI(
@@ -42,6 +43,7 @@ app.include_router(question_versions_router)
 app.include_router(reviews_router)
 app.include_router(publication_router)
 app.include_router(metrics_router)
+app.include_router(teacher_router)
 
 
 @app.get("/health", tags=["system"])

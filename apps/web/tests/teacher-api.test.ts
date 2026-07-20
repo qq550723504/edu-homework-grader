@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { batchConfirmReviewTasks, createAssignment, addAssignmentItem, createQuestion, createTestCase, decideReviewTask, decideTeacherAppeal, fetchTeacherWorkspace, publishAssignment, publishAttemptResults, publishQuestionVersion, runQuestionTests } from '../app/lib/teacher-api'
+import { addAssignmentItem, batchConfirmReviewTasks, createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, decideReviewTask, decideTeacherAppeal, fetchTeacherRosterClasses, fetchTeacherWorkspace, importTeacherRoster, publishAssignment, publishAttemptResults, publishQuestionVersion, runQuestionTests } from '../app/lib/teacher-api'
 
 describe('teacher workspace API', () => {
   it('loads classes, question versions, assignments and review metrics through the BFF', async () => {
@@ -91,5 +91,38 @@ describe('teacher workspace API', () => {
     expect(request).toHaveBeenNthCalledWith(4, '/api/core/v1/review-appeals/appeal-1/decisions', {
       method: 'POST', headers: { 'X-CSRF-Token': 'csrf-token' }, body: { approve: false, version: 1, reason: 'Evidence supports the score.' },
     })
+  })
+})
+
+describe('teacher roster API', () => {
+  it('loads roster classes through the authenticated BFF', async () => {
+    const request = vi.fn().mockResolvedValue({
+      items: [{ id: 'class-1', code: '7A', name: 'Year 7 A', student_count: 3 }],
+    })
+
+    await expect(fetchTeacherRosterClasses(request))
+      .resolves.toEqual([{ id: 'class-1', code: '7A', name: 'Year 7 A', student_count: 3 }])
+    expect(request).toHaveBeenCalledWith('/api/core/v1/teacher/classes')
+  })
+
+  it('protects roster writes with the session CSRF token', async () => {
+    const request = vi.fn().mockResolvedValue({ imported: 1 })
+
+    await createTeacherRosterClass(request, 'csrf-token', { code: '7A', name: 'Year 7 A' })
+    await createTeacherRosterStudent(request, 'csrf-token', 'class-1', {
+      school_id: 'S-001', display_name: 'Ada', under_14: false, guardian_consent_status: 'not_required',
+    })
+    await importTeacherRoster(request, 'csrf-token', 'class-1', new Blob(['header']))
+
+    expect(request).toHaveBeenNthCalledWith(1, '/api/core/v1/teacher/classes', {
+      method: 'POST', headers: { 'X-CSRF-Token': 'csrf-token' }, body: { code: '7A', name: 'Year 7 A' },
+    })
+    expect(request).toHaveBeenNthCalledWith(2, '/api/core/v1/teacher/classes/class-1/students', {
+      method: 'POST', headers: { 'X-CSRF-Token': 'csrf-token' },
+      body: { school_id: 'S-001', display_name: 'Ada', under_14: false, guardian_consent_status: 'not_required' },
+    })
+    const [, uploadOptions] = request.mock.calls[2]
+    expect(uploadOptions.headers).toEqual({ 'X-CSRF-Token': 'csrf-token' })
+    expect(uploadOptions.body).toBeInstanceOf(FormData)
   })
 })

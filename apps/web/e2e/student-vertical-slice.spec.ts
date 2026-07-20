@@ -215,7 +215,9 @@ test('teacher creates and publishes an assignment through the browser', async ({
   await expect(page.getByRole('heading', { name: 'Expand x plus one' })).toBeVisible()
 
   await page.getByLabel('作业标题').fill('Browser published assignment')
-  await page.getByLabel('班级').selectOption({ label: 'E2E-7A · E2E Year 7 A' })
+  await page
+    .getByLabel('班级', { exact: true })
+    .selectOption({ label: 'E2E-7A · E2E Year 7 A' })
   await page.getByLabel('题目版本').selectOption({ label: 'Expand x plus one · M2' })
   await page.getByLabel('截止时间').fill('2027-01-01T12:00')
   await page.getByRole('button', { name: '创建作业草稿' }).click()

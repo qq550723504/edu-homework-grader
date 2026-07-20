@@ -252,3 +252,54 @@ export function publishAssignment(
     method: 'POST', headers: { 'X-CSRF-Token': csrfToken },
   })
 }
+
+export interface TeacherRosterClass {
+  id: string
+  code: string
+  name: string
+  student_count: number
+}
+
+export interface CreateTeacherRosterClass {
+  code: string
+  name: string
+}
+
+export interface CreateTeacherRosterStudent {
+  school_id: string
+  display_name: string
+  under_14: boolean
+  guardian_consent_status: 'not_required' | 'pending' | 'granted' | 'withdrawn'
+  guardian_consent_notice_version?: string
+  guardian_consent_evidence_reference?: string
+}
+
+export async function fetchTeacherRosterClasses(request: Request): Promise<TeacherRosterClass[]> {
+  return (await request<{ items: TeacherRosterClass[] }>('/api/core/v1/teacher/classes')).items
+}
+
+export function createTeacherRosterClass(
+  request: Request, csrfToken: string, input: CreateTeacherRosterClass,
+): Promise<TeacherRosterClass> {
+  return request('/api/core/v1/teacher/classes', {
+    method: 'POST', headers: { 'X-CSRF-Token': csrfToken }, body: input,
+  })
+}
+
+export function createTeacherRosterStudent(
+  request: Request, csrfToken: string, classId: string, input: CreateTeacherRosterStudent,
+): Promise<{ imported: number }> {
+  return request(`/api/core/v1/teacher/classes/${classId}/students`, {
+    method: 'POST', headers: { 'X-CSRF-Token': csrfToken }, body: input,
+  })
+}
+
+export function importTeacherRoster(
+  request: Request, csrfToken: string, classId: string, roster: Blob,
+): Promise<{ imported: number }> {
+  const body = new FormData()
+  body.append('file', roster, 'roster.csv')
+  return request(`/api/core/v1/teacher/classes/${classId}/students/import`, {
+    method: 'POST', headers: { 'X-CSRF-Token': csrfToken }, body,
+  })
+}
