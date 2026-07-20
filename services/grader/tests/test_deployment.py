@@ -26,4 +26,3 @@ def test_deployments_allocate_math_worker_address_space_for_sympy() -> None:
 
     assert "GRADER_MATH_MEMORY_BYTES: ${GRADER_MATH_MEMORY_BYTES:-536870912}" in grader
     assert 'name: GRADER_MATH_MEMORY_BYTES\n              value: "536870912"' in production
-
