@@ -34,5 +34,6 @@ def test_configured_english_model_digest_matches_the_verified_snapshot() -> None
         repository_root / ".env.example",
         repository_root / "compose.yaml",
         repository_root / "services" / "grader" / "Dockerfile",
+        repository_root / "README.md",
     ):
         assert verified_digest in path.read_text(encoding="utf-8")
