@@ -39,4 +39,10 @@ describe('teacher workbench UI contract', () => {
       title: '加法练习', prompt: '计算 2 + 3', questionType: 'math', answer: '   '
     })).toBe(false)
   })
+
+  it('does not make late-submission choice a prerequisite for an assignment draft', () => {
+    const base = { title: '周末练习', className: '三年级 2 班', dueAt: '2026-07-21T18:00' }
+    expect(isAssignmentDraftReady({ ...base, allowLate: false })).toBe(true)
+    expect(isAssignmentDraftReady({ ...base, allowLate: true })).toBe(true)
+  })
 })

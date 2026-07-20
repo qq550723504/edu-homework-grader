@@ -115,6 +115,8 @@ h2 { margin: 12px 0 8px; font-size: 1.2rem; }
 .teacher-form__submit { width: 100%; }
 .teacher-form__submit:disabled { cursor: not-allowed; opacity: .5; }
 .teacher-form__message { margin: 0; padding: 10px 12px; border-radius: 8px; background: #eaf4ee; color: #18794e; font-size: .9rem; }
+.teacher-checkbox { display: inline-flex; align-items: center; gap: 8px; color: #34445d; font-size: .9rem; font-weight: 700; }
+.teacher-checkbox input { width: 18px; height: 18px; accent-color: #2459c4; }
 .teacher-workbench :focus-visible { outline: 3px solid rgba(45, 99, 216, .4); outline-offset: 2px; }
 
 @media (max-width: 860px) {
