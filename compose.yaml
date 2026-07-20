@@ -82,7 +82,7 @@ services:
       ENGLISH_EMBEDDING_MODEL_DIGEST: ${ENGLISH_EMBEDDING_MODEL_DIGEST:-sha256:84714cdabb16d132cbe6e1a4cbd21167abd09eccbdaf69dd053136ae68cc7c17}
       PROCESSOR_ALLOWED_HOSTS: ${PROCESSOR_ALLOWED_HOSTS:-grader,languagetool,localhost}
     cpus: 0.50
-    mem_limit: 256m
+    mem_limit: ${GRADER_MEMORY_LIMIT:-1536m}
     pids_limit: 64
     ports:
       - "${GRADER_PORT:-8010}:8010"
