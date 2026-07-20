@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from .auth import CurrentPrincipal, get_current_principal
 from .db import get_session
+from .logging import get_secure_logger
 from .models import (
     ACTIVE_PRIVACY_REQUEST_STATUSES,
     GuardianConsentStatus,
@@ -15,6 +16,8 @@ from .models import (
     Role,
     StudentGuardianConsent,
 )
+
+logger = get_secure_logger(__name__)
 
 
 def require_role(role: Role) -> Callable[[CurrentPrincipal], CurrentPrincipal]:
@@ -33,6 +36,11 @@ def require_student_consent(
     session: Annotated[Session, Depends(get_session)],
 ) -> CurrentPrincipal:
     consent = session.get(StudentGuardianConsent, UUID(principal.user_id))
+    if consent is None:
+        logger.warning(
+            "guardian_consent.missing_record",
+            extra={"fields": {"reason": "missing_record"}},
+        )
     consent_is_allowed = consent is not None and (
         (
             not consent.requires_guardian_consent
