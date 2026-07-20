@@ -42,7 +42,7 @@ Create `namespace.yaml` with `metadata.name: edu-homework-grader` and `kustomiza
 
 - [ ] **Step 3: Create ClusterIP Services**
 
-Define named ports for `api` (8000), `grader` (8010), `web` (3000), `keycloak` (8080), `languagetool` (8011), and `redis` (6379). Do not expose database, Redis, or Grader externally.
+Define named ports for `api` (8000), `grader` (8010), `web` (3000), `keycloak` (8080), `languagetool` (8010), and `redis` (6379). Do not expose database, Redis, or Grader externally.
 
 - [ ] **Step 4: Verify rendering**
 
@@ -103,7 +103,7 @@ Run: `git add scripts/k8s && git commit -m "feat: add Kubernetes secret rotation
 **Files:**
 - Create: `infra/k8s/production/postgres.yaml`
 - Create: `infra/k8s/production/keycloak.yaml`
-- Create: `infra/keycloak/edu-grader-production-realm.json`
+- Create: `infra/k8s/production/realm.json`
 - Create: `infra/k8s/production/application.yaml`
 - Create: `infra/k8s/production/ingress.yaml`
 - Modify: `infra/k8s/production/kustomization.yaml`

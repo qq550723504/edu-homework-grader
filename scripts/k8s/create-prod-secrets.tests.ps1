@@ -15,5 +15,6 @@ Describe 'create-prod-secrets' {
         $source | Should Match 'kubectl create secret generic'
         $source | Should Match 'REDIS_PASSWORD'
         $source | Should Match 'REDIS_URL'
+        $source | Should Match 'NUXT_SESSION_PASSWORD'
     }
 }

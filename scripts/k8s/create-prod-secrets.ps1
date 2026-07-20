@@ -36,6 +36,7 @@ $redisPassword = New-RandomSecret
 $keycloakPostgresPassword = New-RandomSecret
 $keycloakAdminPassword = New-RandomSecret
 $auditHmacKey = New-RandomSecret
+$nuxtSessionPassword = New-RandomSecret
 $postgresPasswordForUrl = [Uri]::EscapeDataString($postgresPassword)
 $redisPasswordForUrl = [Uri]::EscapeDataString($redisPassword)
 
@@ -50,6 +51,7 @@ $secretArguments = @(
     "--from-literal=KEYCLOAK_ADMIN_USERNAME=admin",
     "--from-literal=KEYCLOAK_ADMIN_PASSWORD=$keycloakAdminPassword",
     "--from-literal=AUDIT_HMAC_KEY=$auditHmacKey",
+    "--from-literal=NUXT_SESSION_PASSWORD=$nuxtSessionPassword",
     '--from-literal=AUDIT_HMAC_KEY_VERSION=k8s-1',
     '--from-literal=APP_ENV=production',
     "--from-literal=OIDC_ISSUER=$($issuer.AbsoluteUri.TrimEnd('/'))",

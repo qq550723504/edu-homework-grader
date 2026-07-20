@@ -5,8 +5,9 @@ from pathlib import Path
 REALM_PATH = (
     Path(__file__).resolve().parents[3]
     / "infra"
-    / "keycloak"
-    / "edu-grader-production-realm.json"
+    / "k8s"
+    / "production"
+    / "realm.json"
 )
 
 

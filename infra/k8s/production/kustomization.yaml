@@ -8,3 +8,10 @@ labels:
 resources:
   - namespace.yaml
   - services.yaml
+  - datastore.yaml
+  - application.yaml
+  - ingress.yaml
+configMapGenerator:
+  - name: edu-grader-production-realm
+    files:
+      - realm.json=realm.json
