@@ -22,6 +22,10 @@ export const teacherModules: ReadonlyArray<{ id: TeacherModule; label: string; b
   { id: 'requests', label: '学生申请', badge: '2' }
 ]
 
+export function getTeacherModule(id: TeacherModule) {
+  return teacherModules.find((module) => module.id === id)!
+}
+
 export function isQuestionDraftReady(draft: QuestionDraft): boolean {
   return [draft.title, draft.prompt, draft.questionType, draft.answer].every((value) => value.trim().length > 0)
 }

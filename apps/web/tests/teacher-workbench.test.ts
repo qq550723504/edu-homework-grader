@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  getTeacherModule,
   isAssignmentDraftReady,
   isQuestionDraftReady,
   teacherModules
@@ -24,5 +25,12 @@ describe('teacher workbench UI contract', () => {
     expect(isAssignmentDraftReady({ title: '周末练习', className: '', dueAt: '2026-07-21T18:00', allowLate: false })).toBe(false)
     expect(isAssignmentDraftReady({ title: '周末练习', className: '三年级 2 班', dueAt: '', allowLate: false })).toBe(false)
     expect(isAssignmentDraftReady({ title: '周末练习', className: '三年级 2 班', dueAt: '2026-07-21T18:00', allowLate: true })).toBe(true)
+  })
+
+  it('resolves overview actions to a visible navigation module', () => {
+    expect(getTeacherModule('reviews')).toMatchObject({ label: '复核队列', badge: '36' })
+    expect(getTeacherModule('questions')).toMatchObject({ label: '题库' })
+    expect(getTeacherModule('assignments')).toMatchObject({ label: '作业' })
+    expect(getTeacherModule('requests')).toMatchObject({ label: '学生申请', badge: '2' })
   })
 })
