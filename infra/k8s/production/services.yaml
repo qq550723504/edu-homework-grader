@@ -91,5 +91,5 @@ spec:
     app.kubernetes.io/name: languagetool
   ports:
     - name: http
-      port: 8011
+      port: 8010
       targetPort: http
