@@ -175,6 +175,28 @@ def test_teacher_imports_csv_for_owned_class(
     assert session.scalar(select(func.count(Enrollment.class_id))) == 1
 
 
+def test_teacher_rejects_csv_for_a_different_class(
+    teacher_context: TeacherContext, session: Session
+) -> None:
+    classroom = create_owned_class(session, teacher_context.teacher_id)
+    csv_body = (
+        "class_code,class_name,student_school_id,student_display_name,"
+        "student_under_14,guardian_consent_status,guardian_consent_notice_version,"
+        "guardian_consent_evidence_reference\n"
+        "7B,Year 7 B,S-004,Sam,false,not_required,,\n"
+    )
+
+    response = teacher_context.client.post(
+        f"/v1/teacher/classes/{classroom.id}/students/import",
+        files={"file": ("roster.csv", csv_body, "text/csv")},
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "CSV class does not match selected class"}
+    assert session.scalar(select(func.count(Enrollment.class_id))) == 0
+
+
 def test_teacher_cannot_write_another_teachers_class(
     teacher_context: TeacherContext, session: Session
 ) -> None:
