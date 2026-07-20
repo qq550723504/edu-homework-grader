@@ -1,20 +1,22 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..auth import CurrentPrincipal
 from ..db import get_session
 from ..dependencies import require_role, require_student_processing_allowed
 from ..models import (
+    Assignment,
     AssignmentItem,
     AttemptAnswer,
     CorrectionAttempt,
+    Enrollment,
     GradePublication,
     GradingRun,
     Role,
@@ -23,6 +25,7 @@ from ..models import (
 from ..services.reviews import published_student_grading
 from ..services.assignments import (
     AssignmentAccessError,
+    AssignmentDeadlineError,
     AnswerConflictError,
     AssignmentStateError,
     AssignmentValidationError,
@@ -60,6 +63,56 @@ class AddAssignmentItemRequest(BaseModel):
 class SaveAnswerRequest(BaseModel):
     answer: dict[str, object]
     version: int = Field(ge=0)
+
+
+@router.get("")
+def list_teacher_assignments_route(
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, list[dict[str, object]]]:
+    assignments = list(
+        session.scalars(
+            select(Assignment)
+            .where(
+                Assignment.tenant_id == UUID(principal.tenant_id),
+                Assignment.created_by_user_id == UUID(principal.user_id),
+            )
+            .order_by(Assignment.due_at, Assignment.id)
+        )
+    )
+    return {
+        "assignments": [
+            {
+                "id": str(assignment.id),
+                "title": assignment.title,
+                "subject": assignment.subject,
+                "class_id": str(assignment.class_id),
+                "class_name": assignment.classroom.name,
+                "due_at": _iso8601_utc(assignment.due_at),
+                "status": assignment.status.value,
+                "student_count": session.scalar(
+                    select(func.count(Enrollment.student_id)).where(
+                        Enrollment.class_id == assignment.class_id
+                    )
+                )
+                or 0,
+                "submitted_count": session.scalar(
+                    select(func.count(StudentAttempt.id)).where(
+                        StudentAttempt.assignment_id == assignment.id,
+                        StudentAttempt.status == "submitted",
+                    )
+                )
+                or 0,
+            }
+            for assignment in assignments
+        ]
+    }
+
+
+def _iso8601_utc(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat()
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -222,7 +275,9 @@ def list_student_assignments_route(
         session, tenant_id=UUID(principal.tenant_id), student_id=UUID(principal.user_id)
     )
     return {
-        key: [_assignment_summary(assignment) for assignment in value]
+        key: [
+            _assignment_summary(assignment, student_status) for assignment, student_status in value
+        ]
         for key, value in grouped.items()
     }
 
@@ -259,8 +314,19 @@ def get_student_assignment_route(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
         ) from None
+    grouped_statuses = list_student_assignments(
+        session,
+        tenant_id=UUID(principal.tenant_id),
+        student_id=UUID(principal.user_id),
+    )
+    student_status = next(
+        status
+        for entries in grouped_statuses.values()
+        for candidate, status in entries
+        if candidate.id == assignment.id
+    )
     response: dict[str, object] = {
-        **_assignment_summary(assignment),
+        **_assignment_summary(assignment, student_status),
         "attempt": {"id": str(attempt.id), "status": attempt.status.value},
         "items": [
             {
@@ -326,6 +392,11 @@ def save_answer_route(
                 "current": {"answer": error.answer.answer_json, "version": error.answer.version}
             },
         )
+    except AssignmentDeadlineError as error:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"code": error.code, "message": str(error)},
+        )
     except AssignmentStateError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     except MathAnswerValidationError as error:
@@ -367,6 +438,11 @@ def submit_assignment_route(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
         ) from None
+    except AssignmentDeadlineError as error:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"code": error.code, "message": str(error)},
+        )
     except SubmissionConflictError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     return response
@@ -407,18 +483,26 @@ def submit_correction_attempt_route(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
         ) from None
+    except AssignmentDeadlineError as error:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"code": error.code, "message": str(error)},
+        )
     except SubmissionConflictError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     return response
 
 
-def _assignment_summary(assignment) -> dict[str, str]:
+def _assignment_summary(assignment, student_status: str | None = None) -> dict[str, str]:
+    due_at = assignment.due_at
+    if due_at.tzinfo is None:
+        due_at = due_at.replace(tzinfo=timezone.utc)
     return {
         "id": str(assignment.id),
         "title": assignment.title,
         "subject": assignment.subject,
-        "due_at": assignment.due_at.isoformat(),
-        "status": assignment.status.value,
+        "due_at": due_at.isoformat(),
+        "status": student_status or assignment.status.value,
     }
 
 

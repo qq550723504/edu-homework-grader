@@ -6,6 +6,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 COPY packages/processor-policy /tmp/processor-policy
 COPY apps/api/pyproject.toml ./
+COPY apps/api/alembic.ini ./
+COPY apps/api/alembic ./alembic
 COPY apps/api/src ./src
 RUN python -m pip install --no-cache-dir /tmp/processor-policy .
 

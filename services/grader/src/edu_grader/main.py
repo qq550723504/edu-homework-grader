@@ -1,4 +1,6 @@
 import os
+from contextlib import asynccontextmanager
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -26,10 +28,54 @@ from .math_ast import (
 from .mathjson import MathJsonValidationError, normalize_mathjson
 from .models import GradingResult
 
+
+def _embedding_dependency_version() -> dict[str, str]:
+    return {
+        "id": os.environ.get(
+            "ENGLISH_EMBEDDING_MODEL_ID", "sentence-transformers/all-MiniLM-L6-v2"
+        ),
+        "revision": os.environ.get("ENGLISH_EMBEDDING_MODEL_REVISION", "unconfigured"),
+        "digest": os.environ.get("ENGLISH_EMBEDDING_MODEL_DIGEST", "unconfigured"),
+    }
+
+
+def _runtime_dependency_versions() -> dict[str, str]:
+    try:
+        sentence_transformers_version = version("sentence-transformers")
+    except PackageNotFoundError:
+        sentence_transformers_version = "unavailable"
+    return {"sentence-transformers": sentence_transformers_version}
+
+
+def _load_semantic_similarity(
+    embedding_version: dict[str, str],
+) -> SentenceTransformerSimilarity | UnavailableSimilarity:
+    try:
+        return SentenceTransformerSimilarity(
+            Path(os.environ.get("ENGLISH_EMBEDDING_MODEL_DIRECTORY", "/opt/english-model")),
+            model_id=embedding_version["id"],
+            revision=embedding_version["revision"],
+            digest=embedding_version["digest"],
+        )
+    except EnglishDependencyError as error:
+        return UnavailableSimilarity(str(error))
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    application.state.embedding_dependency_version = _embedding_dependency_version()
+    application.state.runtime_dependency_versions = _runtime_dependency_versions()
+    application.state.semantic_similarity = _load_semantic_similarity(
+        application.state.embedding_dependency_version
+    )
+    yield
+
+
 app = FastAPI(
     title="Edu Homework Grader Service",
     version="0.1.0",
     description="Deterministic and explainable grading primitives.",
+    lifespan=lifespan,
 )
 
 
@@ -59,6 +105,17 @@ def health() -> dict[str, str]:
     return {"status": "ok", "service": "grader"}
 
 
+@app.get("/ready", tags=["system"], response_model=None)
+def ready() -> dict[str, str] | JSONResponse:
+    similarity = app.state.semantic_similarity
+    if isinstance(similarity, UnavailableSimilarity):
+        return JSONResponse(
+            status_code=503,
+            content={"status": "degraded", "english_embedding_model": "unavailable"},
+        )
+    return {"status": "ready", "english_embedding_model": "ready"}
+
+
 @app.post("/v1/grade/english/exact", response_model=GradingResult, tags=["english"])
 def english_exact(request: EnglishExactRequest) -> GradingResult:
     return grade_exact(request)
@@ -74,21 +131,18 @@ def english_grade(request: EnglishGradeRequest) -> GradingResult:
         languagetool_base_url,
         timeout_seconds=float(os.environ.get("LANGUAGETOOL_TIMEOUT_SECONDS", "2")),
     )
-    try:
-        similarity = SentenceTransformerSimilarity(
-            Path(os.environ.get("ENGLISH_EMBEDDING_MODEL_DIRECTORY", "/opt/english-model")),
-            model_id=os.environ.get(
-                "ENGLISH_EMBEDDING_MODEL_ID", "sentence-transformers/all-MiniLM-L6-v2"
-            ),
-            revision=os.environ.get("ENGLISH_EMBEDDING_MODEL_REVISION", "unconfigured"),
-            digest=os.environ.get("ENGLISH_EMBEDDING_MODEL_DIGEST", "unconfigured"),
-        )
-    except EnglishDependencyError as error:
-        similarity = UnavailableSimilarity(str(error))
-    return grade_english(
+    result = grade_english(
         payload,
         grammar_checker=grammar_checker,
-        similarity=similarity,
+        similarity=app.state.semantic_similarity,
+    )
+    return result.model_copy(
+        update={
+            "dependency_versions": {
+                "embedding": app.state.embedding_dependency_version,
+                "runtime": app.state.runtime_dependency_versions,
+            }
+        }
     )
 
 

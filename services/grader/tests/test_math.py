@@ -33,6 +33,16 @@ def test_numeric_tolerance() -> None:
     assert result.score == 2
 
 
+def test_blank_numeric_answer_is_safely_rejected() -> None:
+    result = grade_numeric(
+        NumericGradeRequest(student_answer="   ", expected_answer="5", tolerance="0")
+    )
+
+    assert result.decision == "auto_rejected"
+    assert result.score == 0
+    assert result.criteria[0].code == "numeric_value"
+
+
 def test_expression_equivalence() -> None:
     student = {
         "type": "add",

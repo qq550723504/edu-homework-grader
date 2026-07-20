@@ -232,13 +232,14 @@ def decide_review_task(
     )
     session.add(decision)
     if action is ReviewAction.REQUEST_REGRADE:
-        _rerun_task(
+        task.status = ReviewTaskStatus.SUPERSEDED
+        task.active_key = None
+        replacement = _rerun_task(
             session,
             task=task,
             grader_client=grader_client or HttpGraderClient(settings.grader_base_url),
         )
-        task.status = ReviewTaskStatus.SUPERSEDED
-        task.active_key = None
+        task.superseded_by_task_id = replacement.id
     else:
         task.status = ReviewTaskStatus.RESOLVED
         task.active_key = None
@@ -265,7 +266,7 @@ def decide_review_task(
     return decision
 
 
-def _rerun_task(session: Session, *, task: ReviewTask, grader_client: object) -> None:
+def _rerun_task(session: Session, *, task: ReviewTask, grader_client: object) -> ReviewTask:
     from .assignments import _dependency_review_result, _persist_grading_run
 
     run = task.grading_run
@@ -282,7 +283,9 @@ def _rerun_task(session: Session, *, task: ReviewTask, grader_client: object) ->
     replacement_run = _persist_grading_run(
         session, answer=task.attempt_answer, item=item, result=result
     )
-    create_review_task_for_run(session, replacement_run)
+    replacement = create_review_task_for_run(session, replacement_run)
+    session.flush()
+    return replacement
 
 
 def batch_confirm_deterministic(
@@ -350,7 +353,10 @@ def publish_attempt_results(
         session.scalars(
             select(ReviewTask)
             .join(AttemptAnswer, ReviewTask.attempt_answer_id == AttemptAnswer.id)
-            .where(AttemptAnswer.attempt_id == attempt.id)
+            .where(
+                AttemptAnswer.attempt_id == attempt.id,
+                ReviewTask.superseded_by_task_id.is_(None),
+            )
         )
     )
     if not tasks or any(task.status is not ReviewTaskStatus.RESOLVED for task in tasks):
@@ -382,7 +388,10 @@ def published_student_grading(session: Session, *, attempt_id: UUID) -> list[dic
     for answer in answers:
         task = session.scalar(
             select(ReviewTask)
-            .where(ReviewTask.attempt_answer_id == answer.id)
+            .where(
+                ReviewTask.attempt_answer_id == answer.id,
+                ReviewTask.superseded_by_task_id.is_(None),
+            )
             .order_by(ReviewTask.created_at.desc())
         )
         if task is None:

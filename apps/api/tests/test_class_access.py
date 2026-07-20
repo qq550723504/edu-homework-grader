@@ -118,6 +118,30 @@ def test_class_visibility_is_limited_to_membership(client: TestClient, session: 
     )
 
 
+def test_teacher_lists_only_their_own_classes(client: TestClient, session: Session) -> None:
+    tenant = Tenant(slug="pilot", name="Pilot")
+    teacher = User(
+        tenant=tenant,
+        role=Role.TEACHER,
+        oidc_issuer=ISSUER,
+        oidc_subject="teacher",
+        display_name="Teacher",
+    )
+    assigned = Classroom(tenant=tenant, code="7A", name="Year 7 A")
+    unassigned = Classroom(tenant=tenant, code="7B", name="Year 7 B")
+    session.add_all([tenant, teacher, assigned, unassigned])
+    session.flush()
+    session.add(ClassTeacher(class_id=assigned.id, teacher_id=teacher.id))
+    session.commit()
+
+    response = client.get("/v1/classes", headers=authorize(client, teacher))
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "classes": [{"id": str(assigned.id), "code": "7A", "name": "Year 7 A"}]
+    }
+
+
 def test_audit_logs_are_scoped_to_the_current_tenant(client: TestClient, session: Session) -> None:
     pilot = Tenant(slug="pilot", name="Pilot")
     other = Tenant(slug="other", name="Other")

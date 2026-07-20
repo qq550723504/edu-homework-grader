@@ -44,7 +44,7 @@ def test_m2_v2_client_calls_v2_grader_endpoint(monkeypatch: pytest.MonkeyPatch) 
     result = HttpGraderClient("http://grader").grade(
         "M2",
         {"expected": ["Add", 1, "x"], "variables": ["x"]},
-        {"answer": {"format": "mathjson-v1", "mathjson": ["Add", "x", 1]}},
+        {"format": "mathjson-v1", "mathjson": ["Add", "x", 1]},
     )
 
     assert result.decision == "auto_accepted"

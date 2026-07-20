@@ -241,7 +241,7 @@ class StudentGuardianConsent(Base):
     __table_args__ = (
         CheckConstraint(
             "(requires_guardian_consent = false AND status = 'not_required') "
-            "OR requires_guardian_consent = true",
+            "OR (requires_guardian_consent = true AND status != 'not_required')",
             name="ck_guardian_consent_status_matches_requirement",
         ),
         CheckConstraint(
@@ -266,6 +266,11 @@ class StudentGuardianConsent(Base):
     withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     withdrawal_reason: Mapped[str | None] = mapped_column(String(500))
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Consent changes are security-sensitive.  Include the version in every
+    # UPDATE so concurrent administrators cannot silently overwrite a grant or
+    # withdrawal that was committed after they loaded the record.
+    __mapper_args__ = {"version_id_col": version, "version_id_generator": False}
 
 
 class PrivacyRequest(Base):
@@ -617,6 +622,7 @@ class ReviewTask(Base):
         ForeignKey("attempt_answers.id"), nullable=False
     )
     grading_run_id: Mapped[UUID] = mapped_column(ForeignKey("grading_runs.id"), nullable=False)
+    superseded_by_task_id: Mapped[UUID | None] = mapped_column(ForeignKey("review_tasks.id"))
     reason: Mapped[ReviewReason] = mapped_column(
         Enum(ReviewReason, native_enum=False, values_callable=role_values), nullable=False
     )
@@ -631,6 +637,7 @@ class ReviewTask(Base):
 
     attempt_answer: Mapped[AttemptAnswer] = relationship(back_populates="review_tasks")
     grading_run: Mapped[GradingRun] = relationship(back_populates="review_tasks")
+    superseded_by: Mapped[ReviewTask | None] = relationship(remote_side="ReviewTask.id")
     decisions: Mapped[list[ReviewDecision]] = relationship(back_populates="review_task")
 
 

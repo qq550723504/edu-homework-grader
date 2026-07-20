@@ -12,12 +12,24 @@ export interface StudentAssignmentGroups {
   completed: StudentAssignment[]
 }
 
+export function studentAssignmentStatusLabel(status: string): string {
+  return {
+    pending: '待完成',
+    overdue: '已逾期',
+    late_allowed: '允许迟交',
+    submitted_pending_review: '待复核',
+    correction_required: '待订正',
+    completed: '已完成'
+  }[status] ?? status
+}
+
 export interface CurrentPrincipal {
   id: string
   tenant_id: string
+  csrf_token?: string
 }
 
-type Request<T> = (url: string, options: { headers: Record<string, string> }) => Promise<T>
+type Request<T> = (url: string) => Promise<T>
 
 export function publishedFeedback(detail: { grading?: Array<{ feedback?: Array<{ message?: string }> }> }): string[] {
   return (detail.grading ?? []).flatMap((run) => (run.feedback ?? [])
@@ -28,22 +40,10 @@ export function correctionAvailable(detail: { corrections?: Array<{ status?: str
   return (detail.corrections ?? []).some((entry) => entry.status === 'published')
 }
 
-export function fetchStudentAssignments(
-  apiBase: string,
-  token: string,
-  request: Request<StudentAssignmentGroups>
-): Promise<StudentAssignmentGroups> {
-  return request(`${apiBase}/v1/student/assignments`, {
-    headers: { Authorization: `Bearer ${token}` }
-  })
+export function fetchStudentAssignments(request: Request<StudentAssignmentGroups>): Promise<StudentAssignmentGroups> {
+  return request('/api/core/v1/student/assignments')
 }
 
-export function fetchCurrentPrincipal(
-  apiBase: string,
-  token: string,
-  request: Request<CurrentPrincipal>
-): Promise<CurrentPrincipal> {
-  return request(`${apiBase}/v1/me`, {
-    headers: { Authorization: `Bearer ${token}` }
-  })
+export function fetchCurrentPrincipal(request: Request<CurrentPrincipal>): Promise<CurrentPrincipal> {
+  return request('/api/auth/session')
 }

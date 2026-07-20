@@ -9,7 +9,14 @@ from sqlalchemy.orm import Session
 from ..auth import CurrentPrincipal
 from ..db import get_session
 from ..dependencies import require_role
-from ..models import Question, QuestionTestCase, QuestionVersion, Role, VersionStatus
+from ..models import (
+    Question,
+    QuestionTestCase,
+    QuestionTestCaseRun,
+    QuestionVersion,
+    Role,
+    VersionStatus,
+)
 from ..services.grader import HttpGraderClient
 from ..services.questions import (
     PublishConflict,
@@ -48,6 +55,46 @@ class CreateTestCaseRequest(BaseModel):
     expected_decision: str = Field(min_length=1, max_length=30)
     expected_score: float = Field(ge=0)
     expected_evidence: dict[str, object]
+
+
+@router.get("")
+def list_question_versions_route(
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+    query: str | None = None,
+    question_type: str | None = None,
+    status: VersionStatus | None = None,
+) -> dict[str, list[dict[str, str]]]:
+    statement = (
+        select(QuestionVersion)
+        .join(Question)
+        .where(Question.tenant_id == UUID(principal.tenant_id))
+    )
+    if query:
+        statement = statement.where(Question.title.ilike(f"%{query.strip()}%"))
+    if question_type:
+        statement = statement.where(QuestionVersion.question_type == question_type)
+    if status:
+        statement = statement.where(QuestionVersion.status == status)
+    versions = list(
+        session.scalars(
+            statement.order_by(Question.title, QuestionVersion.version_number, QuestionVersion.id)
+        )
+    )
+    return {
+        "question_versions": [
+            {
+                "id": str(version.id),
+                "question_id": str(version.question_id),
+                "title": version.question.title,
+                "prompt": version.prompt,
+                "question_type": version.question_type,
+                "policy_version": version.grading_policy.policy_version,
+                "status": version.status.value,
+            }
+            for version in versions
+        ]
+    }
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -126,7 +173,7 @@ def update_question_version_route(
     body: UpdateQuestionVersionRequest,
     principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
     session: Annotated[Session, Depends(get_session)],
-) -> dict[str, str]:
+) -> dict[str, object]:
     try:
         session.rollback()
         with session.begin():
@@ -190,7 +237,7 @@ def run_test_cases_route(
     version_id: UUID,
     principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
     session: Annotated[Session, Depends(get_session)],
-) -> dict[str, str]:
+) -> dict[str, object]:
     try:
         session.rollback()
         with session.begin():
@@ -210,7 +257,28 @@ def run_test_cases_route(
         ) from None
     except QuestionVersionStateError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
-    return {"id": str(run.id), "status": run.status.value}
+    case_runs = session.execute(
+        select(QuestionTestCaseRun, QuestionTestCase.category)
+        .join(QuestionTestCase)
+        .where(QuestionTestCaseRun.question_test_run_id == run.id)
+        .order_by(QuestionTestCase.category, QuestionTestCaseRun.id)
+    ).all()
+    return {
+        "id": str(run.id),
+        "status": run.status.value,
+        "failure_summary": run.failure_summary,
+        "case_runs": [
+            {
+                "category": category,
+                "decision": case_run.decision,
+                "score": case_run.score,
+                "evidence": case_run.evidence_json,
+                "passed": case_run.passed,
+                "error_detail": case_run.error_detail,
+            }
+            for case_run, category in case_runs
+        ],
+    }
 
 
 @version_router.post("/{version_id}/publish")

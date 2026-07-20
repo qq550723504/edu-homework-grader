@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from ..answer_envelope import AnswerEnvelopeValidationError, normalize_answer_envelope
 from ..audit import append_audit_event
 from ..models import (
     Assignment,
@@ -19,6 +20,7 @@ from ..models import (
     CorrectionAttempt,
     Classroom,
     Enrollment,
+    GradePublication,
     GradingRun,
     GradingSignal,
     Question,
@@ -40,6 +42,10 @@ class AssignmentAccessError(Exception):
 
 class AssignmentStateError(Exception):
     """Raised when an assignment transition is invalid."""
+
+
+class AssignmentDeadlineError(AssignmentStateError):
+    code = "assignment_overdue"
 
 
 class AssignmentValidationError(Exception):
@@ -194,7 +200,7 @@ def get_teacher_assignment(
 
 def list_student_assignments(
     session: Session, *, tenant_id: UUID, student_id: UUID
-) -> dict[str, list[Assignment]]:
+) -> dict[str, list[tuple[Assignment, str]]]:
     assignments = list(
         session.scalars(
             select(Assignment)
@@ -204,10 +210,10 @@ def list_student_assignments(
                 Assignment.status == AssignmentStatus.PUBLISHED,
                 Enrollment.student_id == student_id,
             )
-            .order_by(Assignment.due_at, Assignment.id)
+            .order_by(Assignment.due_at, Assignment.created_at, Assignment.id)
         )
     )
-    grouped: dict[str, list[Assignment]] = {
+    grouped: dict[str, list[tuple[Assignment, str]]] = {
         "pending": [],
         "correction_required": [],
         "completed": [],
@@ -220,9 +226,44 @@ def list_student_assignments(
                 StudentAttempt.attempt_number == 1,
             )
         )
-        grouped[
-            "completed" if attempt and attempt.status is AttemptStatus.SUBMITTED else "pending"
-        ].append(assignment)
+        correction_pending = None
+        if attempt is not None:
+            correction_pending = session.scalar(
+                select(CorrectionAttempt.id)
+                .join(
+                    StudentAttempt,
+                    CorrectionAttempt.correction_attempt_id == StudentAttempt.id,
+                )
+                .outerjoin(GradePublication, GradePublication.attempt_id == StudentAttempt.id)
+                .where(
+                    CorrectionAttempt.original_attempt_id == attempt.id,
+                    GradePublication.id.is_(None),
+                )
+                .limit(1)
+            )
+        if correction_pending is not None:
+            grouped["correction_required"].append((assignment, "correction_required"))
+            continue
+        if attempt is not None and attempt.status is AttemptStatus.SUBMITTED:
+            published = session.scalar(
+                select(GradePublication.id)
+                .where(GradePublication.attempt_id == attempt.id)
+                .limit(1)
+            )
+            if published is not None:
+                grouped["completed"].append((assignment, "completed"))
+            else:
+                grouped["pending"].append((assignment, "submitted_pending_review"))
+        else:
+            if _is_assignment_late(assignment):
+                status = (
+                    "late_allowed"
+                    if assignment.submission_rule_json.get("allow_late") is True
+                    else "overdue"
+                )
+                grouped["pending"].append((assignment, status))
+            else:
+                grouped["pending"].append((assignment, "pending"))
     return grouped
 
 
@@ -291,6 +332,7 @@ def save_answer(
     )
     if attempt is None or item is None:
         raise AssignmentAccessError()
+    _enforce_assignment_deadline(attempt.assignment)
     stored_answer = _normalize_answer_if_needed(
         item,
         answer_json,
@@ -332,26 +374,24 @@ def _normalize_answer_if_needed(
     answer_json: dict[str, object],
     answer_normalizer: MathAnswerNormalizer,
 ) -> dict[str, object]:
-    if not _is_mathjson_item(item):
-        return answer_json
-    if answer_json.get("format") != "mathjson-v1":
-        raise MathAnswerValidationError("invalid_format", "数学答案必须使用 mathjson-v1 格式。")
-    latex = answer_json.get("latex")
-    if not isinstance(latex, str) or not latex.strip() or len(latex) > 2_000:
-        raise MathAnswerValidationError("invalid_latex", "数学答案 LaTeX 无效或过长。")
-    if "mathjson" not in answer_json:
-        raise MathAnswerValidationError("missing_mathjson", "数学答案缺少 MathJSON。")
+    expected_format = "mathjson-v1" if _is_mathjson_item(item) else "text-v1"
+    try:
+        envelope = normalize_answer_envelope(answer_json, expected_format=expected_format)
+    except AnswerEnvelopeValidationError as error:
+        raise MathAnswerValidationError(error.code, str(error)) from error
+    if expected_format == "text-v1":
+        return envelope
     variables = item.question_version.rule_json.get("variables", [])
     try:
         ast = answer_normalizer.normalize_math_answer(
-            {"mathjson": answer_json["mathjson"], "variables": variables}
+            {"mathjson": envelope["mathjson"], "variables": variables}
         )
     except MathAnswerNormalizationError as error:
         raise MathAnswerValidationError(error.code, str(error)) from error
     return {
         "format": "mathjson-v1",
-        "latex": latex,
-        "mathjson": answer_json["mathjson"],
+        "latex": envelope["latex"],
+        "mathjson": envelope["mathjson"],
         "ast": ast,
     }
 
@@ -419,6 +459,8 @@ def submit_attempt(
         return receipt.response_status, receipt.response_json
     if attempt.status is not AttemptStatus.DRAFT:
         raise SubmissionConflictError("attempt has already been submitted")
+    submitted_late = _is_assignment_late(assignment)
+    _enforce_assignment_deadline(assignment)
     grading = _grade_attempt(
         session,
         assignment=assignment,
@@ -450,9 +492,23 @@ def submit_attempt(
         event_type="student_attempt.submitted",
         target_type="student_attempt",
         target_id=attempt.id,
-        metadata={"assignment_id": str(assignment_id)},
+        metadata={"assignment_id": str(assignment_id), "submitted_late": submitted_late},
     )
     return 200, response
+
+
+def _enforce_assignment_deadline(assignment: Assignment) -> None:
+    if assignment.submission_rule_json.get("allow_late") is True:
+        return
+    if _is_assignment_late(assignment):
+        raise AssignmentDeadlineError("assignment is past its deadline")
+
+
+def _is_assignment_late(assignment: Assignment) -> bool:
+    due_at = assignment.due_at
+    if due_at.tzinfo is None:
+        due_at = due_at.replace(tzinfo=timezone.utc)
+    return utc_now() > due_at
 
 
 def _grade_attempt(
@@ -482,7 +538,7 @@ def _grade_attempt(
             answer = AttemptAnswer(
                 attempt=attempt,
                 assignment_item=item,
-                answer_json={"answer": ""},
+                answer_json={"format": "text-v1", "text": ""},
                 version=1,
             )
             session.add(answer)

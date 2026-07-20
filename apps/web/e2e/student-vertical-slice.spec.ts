@@ -6,23 +6,30 @@ const STUDENT_TOKEN = 'e2e-student-token'
 const TEACHER_TOKEN = 'e2e-teacher-token'
 
 const studentHeaders = { Authorization: `Bearer ${STUDENT_TOKEN}` }
-const teacherHeaders = { Authorization: `Bearer ${TEACHER_TOKEN}` }
 
 type AssignmentDetail = {
   attempt: { id: string }
-  items: Array<{ id: string }>
-}
-
-type ReviewTask = {
-  id: string
-  attempt_id: string
-  version: number
+  items: Array<{ id: string; answer?: Record<string, unknown> | null }>
 }
 
 async function expectOk(response: APIResponse, operation: string): Promise<void> {
   if (!response.ok()) {
     throw new Error(`${operation} failed with ${response.status()}: ${await response.text()}`)
   }
+}
+
+async function establishStudentSession(page: import('@playwright/test').Page): Promise<void> {
+  const response = await page.request.post(`${webBaseUrl}/api/auth/e2e-session`, {
+    headers: { 'X-E2E-Token': STUDENT_TOKEN },
+  })
+  await expectOk(response, 'create isolated E2E web session')
+}
+
+async function establishTeacherSession(page: import('@playwright/test').Page): Promise<void> {
+  const response = await page.request.post(`${webBaseUrl}/api/auth/e2e-session`, {
+    headers: { 'X-E2E-Token': TEACHER_TOKEN },
+  })
+  await expectOk(response, 'create isolated teacher E2E web session')
 }
 
 async function assignmentDetail(
@@ -36,124 +43,188 @@ async function assignmentDetail(
   return response.json()
 }
 
-async function confirmAndPublish(
-  request: APIRequestContext,
-  assignmentId: string,
-  attemptId: string,
-): Promise<void> {
-  const tasksResponse = await request.get(
-    `${apiBaseUrl}/v1/review-tasks?assignment_id=${assignmentId}`,
-    { headers: teacherHeaders },
-  )
-  await expectOk(tasksResponse, 'list teacher review tasks')
-  const tasks = (await tasksResponse.json()) as { review_tasks: ReviewTask[] }
-  const task = tasks.review_tasks.find((entry) => entry.attempt_id === attemptId)
-  expect(task, `review task for attempt ${attemptId}`).toBeDefined()
-
-  const decision = await request.post(`${apiBaseUrl}/v1/review-tasks/${task!.id}/decisions`, {
-    headers: teacherHeaders,
-    data: { action: 'confirm', version: task!.version },
-  })
-  await expectOk(decision, 'confirm review task')
-
-  const publication = await request.post(
-    `${apiBaseUrl}/v1/assignments/${assignmentId}/attempts/${attemptId}/publish-results`,
-    { headers: teacherHeaders },
-  )
-  await expectOk(publication, 'publish attempt results')
-}
-
-async function publishCorrection(
-  request: APIRequestContext,
-  assignmentId: string,
-  originalAttemptId: string,
-): Promise<void> {
-  const appeal = await request.post(
-    `${apiBaseUrl}/v1/student/attempts/${originalAttemptId}/appeals`,
-    {
-      headers: studentHeaders,
-      data: { reason: 'Please review my equivalent expression.' },
-    },
-  )
-  await expectOk(appeal, 'create student appeal')
-  const appealId = ((await appeal.json()) as { id: string }).id
-
-  const approval = await request.post(
-    `${apiBaseUrl}/v1/review-appeals/${appealId}/decisions`,
-    {
-      headers: teacherHeaders,
-      data: { approve: true, version: 0 },
-    },
-  )
-  await expectOk(approval, 'approve student appeal')
-  const correctionAttemptId = (
-    (await approval.json()) as { correction_attempt_id: string }
-  ).correction_attempt_id
-
-  const detail = await assignmentDetail(request, assignmentId)
-  const saved = await request.put(
-    `${apiBaseUrl}/v1/student/attempts/${correctionAttemptId}/answers/${detail.items[0].id}`,
-    {
-      headers: studentHeaders,
-      data: {
-        answer: {
-          format: 'mathjson-v1',
-          latex: 'x+1',
-          mathjson: ['Add', 'x', 1],
-        },
-        version: 0,
-      },
-    },
-  )
-  await expectOk(saved, 'save correction answer')
-
-  const submitted = await request.post(
-    `${apiBaseUrl}/v1/student/attempts/${correctionAttemptId}/submit`,
-    {
-      headers: {
-        ...studentHeaders,
-        'Idempotency-Key': crypto.randomUUID(),
-      },
-    },
-  )
-  await expectOk(submitted, 'submit correction')
-  await confirmAndPublish(request, assignmentId, correctionAttemptId)
-}
-
-test('student submits an algebra answer and sees published feedback and correction', async ({
+test('student keeps text and math drafts with their own questions after switching and refreshing', async ({
   page,
   request,
 }) => {
-  await page.context().addCookies([
-    { name: 'edu_access_token', value: STUDENT_TOKEN, url: webBaseUrl },
-  ])
+  await establishStudentSession(page)
   await page.goto(`${webBaseUrl}/student`)
 
-  const openAssignment = page.getByRole('link', { name: '进入作答' })
-  await expect(openAssignment).toBeVisible()
-  await openAssignment.click()
-  await expect(page).toHaveURL(/\/student\/assignments\/[^/]+$/)
-
+  const multiQuestionAssignment = page.locator('article', {
+    has: page.getByRole('heading', { name: 'Draft isolation' }),
+  })
+  await multiQuestionAssignment.getByRole('link', { name: '进入作答' }).click()
   const mathField = page.getByLabel('数学答案')
-  await expect(mathField).toBeVisible()
+  await expect(mathField).toBeVisible({ timeout: 15_000 })
   await mathField.fill('x+1')
   await expect(page.getByText('同步状态：已同步')).toBeVisible()
 
-  await page.getByRole('button', { name: '提交作业' }).click()
-  await expect(page.getByText('同步状态：已提交')).toBeVisible()
+  await page.getByRole('button', { name: '下一题' }).click()
+  const textField = page.getByLabel('答案')
+  await expect(textField).toBeVisible()
+  await textField.fill('A concise explanation.')
+  await expect(page.getByText('同步状态：已同步')).toBeVisible()
 
   const assignmentId = new URL(page.url()).pathname.split('/').at(-1)!
-  const originalDetail = await assignmentDetail(request, assignmentId)
-  await confirmAndPublish(request, assignmentId, originalDetail.attempt.id)
+  const savedDetail = await assignmentDetail(request, assignmentId)
+  expect(savedDetail.items[1].answer).toEqual({
+    format: 'text-v1',
+    text: 'A concise explanation.',
+  })
 
   await page.reload()
-  await expect(page.getByRole('region', { name: '已发布反馈' })).toContainText(
-    '表达式等价。',
-  )
+  await expect(mathField).toHaveJSProperty('value', 'x+1')
+  await page.getByRole('button', { name: '下一题' }).click()
+  await expect(textField).toHaveValue('A concise explanation.')
+})
 
-  // Appeal/correction screens do not exist yet. Prepare those states through
-  // the same public APIs used by future UI surfaces, then assert student UI copy.
-  await publishCorrection(request, assignmentId, originalDetail.attempt.id)
-  await page.reload()
-  await expect(page.getByRole('status')).toHaveText('可以查看订正结果')
+test('student logout removes the protected session and no JavaScript-readable token remains', async ({ page }) => {
+  const clientErrors: string[] = []
+  page.on('pageerror', (error) => clientErrors.push(error.message))
+  await establishStudentSession(page)
+  await page.goto(`${webBaseUrl}/student`)
+  await expect(page.getByRole('heading', { name: '我的作业' })).toBeVisible()
+  await expect(page.getByRole('link', { name: '进入作答' }).first()).toBeVisible()
+
+  await page.getByRole('button', { name: '退出登录' }).click()
+  expect(clientErrors).toEqual([])
+  await expect.poll(async () => {
+    const response = await page.request.get(`${webBaseUrl}/api/auth/session`)
+    const body = await response.text()
+    return body ? JSON.parse(body) : null
+  }).toBeNull()
+  await expect(page).toHaveURL(`${webBaseUrl}/`)
+  await expect(page.evaluate(() => document.cookie)).resolves.not.toContain('edu_access_token')
+  await expect(page.evaluate(() => document.cookie)).resolves.not.toContain('access_token')
+  await expect(page.getByRole('link', { name: '进入学生端' })).toBeVisible()
+})
+
+test('student submits, teacher reviews and publishes, then teacher approves the student appeal through browsers', async ({ browser }) => {
+  test.setTimeout(60_000)
+  const studentContext = await browser.newContext()
+  const teacherContext = await browser.newContext()
+  const studentPage = await studentContext.newPage()
+  const teacherPage = await teacherContext.newPage()
+  try {
+    await establishStudentSession(studentPage)
+    await studentPage.goto(`${webBaseUrl}/student`)
+    const assignment = studentPage.locator('article', {
+      has: studentPage.getByRole('heading', { name: 'Expression equivalence' }),
+    })
+    await assignment.getByRole('link', { name: '进入作答' }).click()
+    await studentPage.getByLabel('数学答案').fill('x+1')
+    await expect(studentPage.getByText('同步状态：已同步')).toBeVisible()
+    await studentPage.getByRole('button', { name: '提交作业' }).click()
+    await expect(studentPage.getByText('同步状态：已提交')).toBeVisible()
+
+    await establishTeacherSession(teacherPage)
+    await teacherPage.goto(`${webBaseUrl}/teacher/reviews`)
+    await expect(teacherPage.getByRole('heading', { name: '复核队列' })).toBeVisible()
+    await teacherPage.getByRole('button', { name: '查看证据' }).click()
+    await expect(teacherPage.getByRole('heading', { name: '复核详情' })).toBeVisible()
+    await teacherPage.getByRole('button', { name: '保存复核决策' }).click()
+    await expect(teacherPage.getByText('复核决策已保存。')).toBeVisible()
+
+    await teacherPage.getByRole('button', { name: '发布此学生成绩' }).click()
+    await expect(teacherPage.getByText('学生成绩已发布。')).toBeVisible()
+
+    await studentPage.reload()
+    await expect(studentPage.getByRole('region', { name: '已发布反馈' })).toBeVisible()
+    await studentPage.getByLabel('申诉理由').fill('Please review the equivalent expression.')
+    await studentPage.getByRole('button', { name: '提交申诉' }).click()
+    await expect(studentPage.getByText('申诉已提交，教师会查看评分证据后处理。')).toBeVisible()
+
+    await teacherPage.goto(`${webBaseUrl}/teacher/appeals`)
+    await expect(teacherPage.getByRole('heading', { name: '学生申诉' })).toBeVisible()
+    await teacherPage.getByRole('button', { name: '处理申诉' }).click()
+    await teacherPage.getByRole('button', { name: '保存申诉决定' }).click()
+    await expect(teacherPage.getByText('申诉已批准，已为学生创建订正机会。')).toBeVisible()
+  } finally {
+    await studentContext.close()
+    await teacherContext.close()
+  }
+})
+
+test('teacher creates an M1 draft question through the browser', async ({ page }) => {
+  await establishTeacherSession(page)
+  await page.goto(`${webBaseUrl}/teacher`)
+  await expect(page.getByRole('heading', { name: 'Expand x plus one' })).toBeVisible()
+
+  await page.getByLabel('题目标题').fill('Browser addition')
+  await page.getByLabel('题干').fill('What is 2 + 3?')
+  await page.getByLabel('正确答案').fill('5')
+  await page.getByRole('button', { name: '创建草稿题目' }).click()
+
+  await expect(page.getByText('草稿题目已创建')).toBeVisible()
+  const createdQuestion = page.locator('article', {
+    has: page.getByRole('heading', { name: 'Browser addition' }),
+  })
+  await expect(createdQuestion).toContainText('draft')
+})
+
+test('teacher tests and publishes an M1 question through the browser', async ({ page }) => {
+  await establishTeacherSession(page)
+  await page.goto(`${webBaseUrl}/teacher`)
+  await expect(page.getByRole('heading', { name: 'Expand x plus one' })).toBeVisible()
+
+  await page.getByLabel('题目标题').fill('Browser publishable addition')
+  await page.getByLabel('题干').fill('What is 2 + 3?')
+  await page.getByLabel('正确答案').fill('5')
+  await page.getByRole('button', { name: '创建草稿题目' }).click()
+  await expect(page.getByText('草稿题目已创建')).toBeVisible()
+
+  const acceptedEvidence = JSON.stringify({
+    max_score: 1, confidence: 1, requires_review: false,
+    criteria: [{ code: 'numeric_value', passed: true, score: 1, max_score: 1 }],
+    feedback: [], dependency_versions: { grader: 'e2e-m1@1' },
+  })
+  const rejectedEvidence = JSON.stringify({
+    max_score: 1, confidence: 1, requires_review: false,
+    criteria: [{ code: 'numeric_value', passed: false, score: 0, max_score: 1 }],
+    feedback: [], dependency_versions: { grader: 'e2e-m1@1' },
+  })
+  const categories = [
+    ['correct', '5', 'auto_accepted', '1', acceptedEvidence],
+    ['incorrect', '4', 'auto_rejected', '0', rejectedEvidence],
+    ['empty', '', 'auto_rejected', '0', rejectedEvidence],
+    ['boundary', '5.0', 'auto_accepted', '1', acceptedEvidence],
+  ]
+  for (const [category, answer, decision, score, evidence] of categories) {
+    await page.getByLabel('用例类别').fill(category)
+    await page.getByLabel('学生答案 JSON').fill(JSON.stringify({ format: 'text-v1', text: answer }))
+    await page.getByLabel('预期判定').fill(decision)
+    await page.getByLabel('预期分数').fill(score)
+    await page.getByLabel('预期证据 JSON').fill(evidence)
+    await page.getByRole('button', { name: '添加测试用例' }).click()
+    await expect(page.getByText('测试用例已添加')).toBeVisible()
+  }
+
+  await page.getByRole('button', { name: '运行测试' }).click()
+  await expect(page.getByText('全部测试通过，可以发布。')).toBeVisible()
+  await page.getByRole('button', { name: '发布题目版本' }).click()
+  await expect(page.getByText('题目版本已发布')).toBeVisible()
+  const publishedQuestion = page.locator('article', {
+    has: page.getByRole('heading', { name: 'Browser publishable addition' }),
+  })
+  await expect(publishedQuestion).toContainText('published')
+})
+
+test('teacher creates and publishes an assignment through the browser', async ({ page }) => {
+  await establishTeacherSession(page)
+  await page.goto(`${webBaseUrl}/teacher`)
+  await expect(page.getByRole('heading', { name: 'Expand x plus one' })).toBeVisible()
+
+  await page.getByLabel('作业标题').fill('Browser published assignment')
+  await page.getByLabel('班级').selectOption({ label: 'E2E-7A · E2E Year 7 A' })
+  await page.getByLabel('题目版本').selectOption({ label: 'Expand x plus one · M2' })
+  await page.getByLabel('截止时间').fill('2027-01-01T12:00')
+  await page.getByRole('button', { name: '创建作业草稿' }).click()
+
+  await expect(page.getByText('作业草稿已创建，请确认后发布。')).toBeVisible()
+  await page.getByRole('button', { name: '发布作业', exact: true }).click()
+  await expect(page.getByText('作业已发布')).toBeVisible()
+  const publishedAssignment = page.locator('article', {
+    has: page.getByRole('heading', { name: 'Browser published assignment' }),
+  })
+  await expect(publishedAssignment).toContainText('published')
 })

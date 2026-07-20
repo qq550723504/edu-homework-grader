@@ -39,7 +39,7 @@ def test_e4_request_preserves_policy_version_feedback_and_signals(monkeypatch) -
             "scoring_points": [{"id": "cause", "evidence_phrases": ["bridge closed"], "score": 1}],
             "max_score": 1,
         },
-        {"answer": "road closed"},
+        {"format": "text-v1", "text": "road closed"},
         policy_version="2",
     )
 

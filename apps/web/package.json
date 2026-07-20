@@ -15,7 +15,8 @@
     "@cortex-js/compute-engine": "^0.84.1",
     "dexie": "4.4.4",
     "mathlive": "^0.110.0",
-    "nuxt": "4.4.8"
+    "nuxt": "4.4.8",
+    "oauth4webapi": "^3.8.6"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",

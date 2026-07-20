@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-edu_grader}
       POSTGRES_USER: ${POSTGRES_USER:-edu_grader}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set_POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
@@ -30,7 +30,7 @@ services:
     environment:
       POSTGRES_DB: ${KEYCLOAK_POSTGRES_DB:-keycloak}
       POSTGRES_USER: ${KEYCLOAK_POSTGRES_USER:-keycloak}
-      POSTGRES_PASSWORD: ${KEYCLOAK_POSTGRES_PASSWORD:-change-me}
+      POSTGRES_PASSWORD: ${KEYCLOAK_POSTGRES_PASSWORD:?set_KEYCLOAK_POSTGRES_PASSWORD}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${KEYCLOAK_POSTGRES_USER:-keycloak} -d ${KEYCLOAK_POSTGRES_DB:-keycloak}"]
       interval: 5s
@@ -41,13 +41,13 @@ services:
     image: quay.io/keycloak/keycloak:26.4.7
     command: ["start-dev", "--import-realm"]
     environment:
-      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:-admin}
-      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-change-me}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:?set_KEYCLOAK_ADMIN_USERNAME}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set_KEYCLOAK_ADMIN_PASSWORD}
       KC_DB: postgres
       KC_DB_URL_HOST: keycloak-postgres
       KC_DB_URL_DATABASE: ${KEYCLOAK_POSTGRES_DB:-keycloak}
       KC_DB_USERNAME: ${KEYCLOAK_POSTGRES_USER:-keycloak}
-      KC_DB_PASSWORD: ${KEYCLOAK_POSTGRES_PASSWORD:-change-me}
+      KC_DB_PASSWORD: ${KEYCLOAK_POSTGRES_PASSWORD:?set_KEYCLOAK_POSTGRES_PASSWORD}
     ports:
       - "${KEYCLOAK_PORT:-8080}:8080"
     volumes:
@@ -78,8 +78,8 @@ services:
       LANGUAGETOOL_TIMEOUT_SECONDS: ${LANGUAGETOOL_TIMEOUT_SECONDS:-2}
       ENGLISH_EMBEDDING_MODEL_DIRECTORY: ${ENGLISH_EMBEDDING_MODEL_DIRECTORY:-/opt/english-model}
       ENGLISH_EMBEDDING_MODEL_ID: ${ENGLISH_EMBEDDING_MODEL_ID:-sentence-transformers/all-MiniLM-L6-v2}
-      ENGLISH_EMBEDDING_MODEL_REVISION: ${ENGLISH_EMBEDDING_MODEL_REVISION:-unconfigured}
-      ENGLISH_EMBEDDING_MODEL_DIGEST: ${ENGLISH_EMBEDDING_MODEL_DIGEST:-unconfigured}
+      ENGLISH_EMBEDDING_MODEL_REVISION: ${ENGLISH_EMBEDDING_MODEL_REVISION:-1110a243fdf4706b3f48f1d95db1a4f5529b4d41}
+      ENGLISH_EMBEDDING_MODEL_DIGEST: ${ENGLISH_EMBEDDING_MODEL_DIGEST:-sha256:709383867deb097dbd130f792d5f60065aa34d33d17a14033fdceeb7a6a1c10b}
       PROCESSOR_ALLOWED_HOSTS: ${PROCESSOR_ALLOWED_HOSTS:-grader,languagetool,localhost}
     cpus: 0.50
     mem_limit: 256m
@@ -101,7 +101,7 @@ services:
       dockerfile: ./apps/api/Dockerfile
     environment:
       APP_ENV: ${APP_ENV:-development}
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://edu_grader:change-me@postgres:5432/edu_grader}
+      DATABASE_URL: ${DATABASE_URL:?set_DATABASE_URL}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       GRADER_BASE_URL: ${GRADER_BASE_URL:-http://grader:8010}
       OIDC_ISSUER: ${OIDC_ISSUER:-http://keycloak:8080/realms/edu-grader}
@@ -110,7 +110,7 @@ services:
       OIDC_TENANT_SLUG: ${OIDC_TENANT_SLUG:-pilot}
       BOOTSTRAP_ADMIN_SUB: ${BOOTSTRAP_ADMIN_SUB:-}
       BOOTSTRAP_ADMIN_TENANT_SLUG: ${BOOTSTRAP_ADMIN_TENANT_SLUG:-}
-      AUDIT_HMAC_KEY: ${AUDIT_HMAC_KEY:-development-only-change-me-32-bytes-minimum}
+      AUDIT_HMAC_KEY: ${AUDIT_HMAC_KEY:?set_AUDIT_HMAC_KEY}
       AUDIT_HMAC_KEY_VERSION: ${AUDIT_HMAC_KEY_VERSION:-dev-1}
       PROCESSOR_ALLOWED_HOSTS: ${PROCESSOR_ALLOWED_HOSTS:-grader,languagetool,localhost}
     ports:
@@ -123,7 +123,7 @@ services:
       grader:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
       interval: 10s
       timeout: 5s
       retries: 10

@@ -6,7 +6,8 @@
     "realm": [
       {"name": "admin"},
       {"name": "teacher"},
-      {"name": "student"}
+      {"name": "student"},
+      {"name": "offline_access"}
     ]
   },
   "clients": [
@@ -22,20 +23,18 @@
       "publicClient": true,
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
-      "redirectUris": ["http://localhost:3000/*"],
-      "webOrigins": ["http://localhost:3000"],
+      "redirectUris": ["http://localhost:3000/*", "http://localhost:13000/*"],
+      "webOrigins": ["http://localhost:3000", "http://localhost:13000"],
       "protocol": "openid-connect",
       "attributes": {
         "pkce.code.challenge.method": "S256"
       },
-      "defaultClientScopes": [
-        "web-origins",
-        "acr",
-        "roles",
-        "basic",
-        "edu-grader-api-audience",
-        "school-id"
-      ]
+        "defaultClientScopes": [
+          "offline_access",
+          "edu-grader-api-audience",
+          "edu-grader-subject",
+          "school-id"
+        ]
     }
   ],
   "clientScopes": [
@@ -55,8 +54,8 @@
         }
       ]
     },
-    {
-      "name": "school-id",
+      {
+        "name": "school-id",
       "protocol": "openid-connect",
       "protocolMappers": [
         {
@@ -72,17 +71,63 @@
             "userinfo.token.claim": "true"
           }
         }
-      ]
-    }
+        ]
+      },
+      {
+        "name": "edu-grader-subject",
+        "protocol": "openid-connect",
+        "protocolMappers": [
+          {
+            "name": "subject",
+            "protocol": "openid-connect",
+            "protocolMapper": "oidc-sub-mapper",
+            "consentRequired": false,
+            "config": {
+              "access.token.claim": "true",
+              "id.token.claim": "true",
+              "userinfo.token.claim": "true",
+              "introspection.token.claim": "true"
+            }
+          }
+        ]
+      }
   ],
   "users": [
     {
       "id": "00000000-0000-0000-0000-000000000001",
       "username": "pilot-admin",
       "enabled": true,
+      "firstName": "Pilot",
+      "lastName": "Admin",
+      "email": "pilot-admin@example.invalid",
+      "emailVerified": true,
       "attributes": {"school_id": ["ADMIN-001"]},
-      "realmRoles": ["admin"],
+      "realmRoles": ["admin", "offline_access"],
       "credentials": [{"type": "password", "value": "admin-change-me", "temporary": false}]
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "username": "pilot-teacher",
+      "enabled": true,
+      "firstName": "Pilot",
+      "lastName": "Teacher",
+      "email": "pilot-teacher@example.invalid",
+      "emailVerified": true,
+      "attributes": {"school_id": ["TEACHER-001"]},
+      "realmRoles": ["teacher", "offline_access"],
+      "credentials": [{"type": "password", "value": "teacher-change-me", "temporary": false}]
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000003",
+      "username": "pilot-student",
+      "enabled": true,
+      "firstName": "Pilot",
+      "lastName": "Student",
+      "email": "pilot-student@example.invalid",
+      "emailVerified": true,
+      "attributes": {"school_id": ["STUDENT-001"]},
+      "realmRoles": ["student", "offline_access"],
+      "credentials": [{"type": "password", "value": "student-change-me", "temporary": false}]
     }
   ]
 }

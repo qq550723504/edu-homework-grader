@@ -33,10 +33,14 @@ def require_student_consent(
     session: Annotated[Session, Depends(get_session)],
 ) -> CurrentPrincipal:
     consent = session.get(StudentGuardianConsent, UUID(principal.user_id))
-    if consent is not None and consent.status not in {
-        GuardianConsentStatus.NOT_REQUIRED,
-        GuardianConsentStatus.GRANTED,
-    }:
+    consent_is_allowed = consent is not None and (
+        (
+            not consent.requires_guardian_consent
+            and consent.status is GuardianConsentStatus.NOT_REQUIRED
+        )
+        or (consent.requires_guardian_consent and consent.status is GuardianConsentStatus.GRANTED)
+    )
+    if not consent_is_allowed:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="guardian consent required",

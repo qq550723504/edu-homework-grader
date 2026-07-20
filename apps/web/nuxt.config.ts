@@ -14,6 +14,11 @@ export default defineNuxtConfig({
     }
   },
   runtimeConfig: {
+    appEnv: process.env.NUXT_APP_ENV ?? process.env.APP_ENV ?? 'development',
+    coreApiBase: process.env.NUXT_CORE_API_BASE ?? 'http://localhost:8000',
+    oidcClientId: process.env.NUXT_OIDC_CLIENT_ID ?? 'edu-grader-web',
+    oidcIssuer: process.env.NUXT_OIDC_ISSUER ?? 'http://localhost:8080/realms/edu-grader',
+    sessionPassword: process.env.NUXT_SESSION_PASSWORD ?? 'development-only-session-password-change-me',
     public: {
       apiBase: process.env.NUXT_PUBLIC_API_BASE ?? 'http://localhost:8000'
     }

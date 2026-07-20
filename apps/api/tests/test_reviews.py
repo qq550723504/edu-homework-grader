@@ -15,7 +15,7 @@ from edu_grader_api.models import (
 )
 from edu_grader_api.services.assignments import get_student_assignment, save_answer, submit_attempt
 from edu_grader_api.services.questions import GradeResult
-from edu_grader_api.services.reviews import decide_review_task
+from edu_grader_api.services.reviews import decide_review_task, publish_attempt_results
 from test_assignments import authorize, published_assignment_for_student
 from test_assignments import client as _assignment_client
 from test_assignments import session as _assignment_session
@@ -49,7 +49,7 @@ def test_assigned_teacher_lists_manual_review_tasks(api_client, database_session
         student_id=student.id,
         attempt_id=attempt.id,
         assignment_item_id=item.id,
-        answer_json={"answer": "A concise answer."},
+        answer_json={"format": "text-v1", "text": "A concise answer."},
         expected_version=0,
     )
     submit_attempt(
@@ -62,6 +62,15 @@ def test_assigned_teacher_lists_manual_review_tasks(api_client, database_session
     )
     task = database_session.scalar(select(ReviewTask))
     assert task is not None
+    submission_audit = database_session.scalar(
+        select(AuditLog).where(AuditLog.target_id == attempt.id)
+    )
+    assert submission_audit is not None
+    submission_audit.metadata_json = {
+        **submission_audit.metadata_json,
+        "submitted_late": True,
+    }
+    database_session.commit()
 
     response = api_client.get(
         "/v1/review-tasks", headers=authorize(api_client, assignment.created_by_user)
@@ -77,6 +86,7 @@ def test_assigned_teacher_lists_manual_review_tasks(api_client, database_session
             "reason": "needs_review",
             "question_type": "E4",
             "version": 0,
+            "submitted_late": True,
         }
     ]
 
@@ -98,7 +108,7 @@ def test_assigned_teacher_reads_full_review_evidence(api_client, database_sessio
         student_id=student.id,
         attempt_id=attempt.id,
         assignment_item_id=item.id,
-        answer_json={"answer": "The road closure delayed them."},
+        answer_json={"format": "text-v1", "text": "The road closure delayed them."},
         expected_version=0,
     )
     submit_attempt(
@@ -117,7 +127,10 @@ def test_assigned_teacher_reads_full_review_evidence(api_client, database_sessio
     )
 
     assert response.status_code == 200
-    assert response.json()["answer"] == {"answer": "The road closure delayed them."}
+    assert response.json()["answer"] == {
+        "format": "text-v1",
+        "text": "The road closure delayed them.",
+    }
     assert response.json()["rule_snapshot"] == version.rule_json
     assert response.json()["grading"]["requires_review"] is True
     assert response.json()["signals"][0]["kind"] == "criterion"
@@ -142,7 +155,7 @@ def test_teacher_adjusts_score_with_reason_and_resolves_task(
         student_id=student.id,
         attempt_id=attempt.id,
         assignment_item_id=item.id,
-        answer_json={"answer": "A concise answer."},
+        answer_json={"format": "text-v1", "text": "A concise answer."},
         expected_version=0,
     )
     submit_attempt(
@@ -221,7 +234,7 @@ def test_teacher_batch_confirms_deterministic_tasks(api_client, database_session
         student_id=student.id,
         attempt_id=attempt.id,
         assignment_item_id=item.id,
-        answer_json={"value": "5"},
+        answer_json={"format": "text-v1", "text": "5"},
         expected_version=0,
     )
     submit_attempt(
@@ -265,7 +278,7 @@ def test_regrade_supersedes_task_and_creates_replacement_run(database_session: S
         student_id=student.id,
         attempt_id=attempt.id,
         assignment_item_id=item.id,
-        answer_json={"answer": "A concise answer."},
+        answer_json={"format": "text-v1", "text": "A concise answer."},
         expected_version=0,
     )
     submit_attempt(
@@ -298,3 +311,24 @@ def test_regrade_supersedes_task_and_creates_replacement_run(database_session: S
     assert replacement is not None
     assert replacement.grading_run_id != original_run_id
     assert replacement.status is ReviewTaskStatus.OPEN
+
+    decide_review_task(
+        database_session,
+        tenant_id=student.tenant_id,
+        teacher_id=assignment.created_by_user_id,
+        task_id=replacement.id,
+        action=ReviewAction.CONFIRM,
+        version=0,
+        score=None,
+        reason=None,
+    )
+
+    publication = publish_attempt_results(
+        database_session,
+        tenant_id=student.tenant_id,
+        teacher_id=assignment.created_by_user_id,
+        assignment_id=assignment.id,
+        attempt_id=attempt.id,
+    )
+
+    assert publication.attempt_id == attempt.id

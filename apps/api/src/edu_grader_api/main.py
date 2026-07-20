@@ -1,8 +1,11 @@
 import logging
 
 from fastapi import Depends, FastAPI
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from .auth import CurrentPrincipal, get_current_principal
+from .db import engine
 from .logging import get_secure_logger
 from .routers.admin import router as admin_router
 from .routers.appeals import router as appeals_router
@@ -44,6 +47,19 @@ app.include_router(metrics_router)
 @app.get("/health", tags=["system"])
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "api", "environment": settings.app_env}
+
+
+@app.get("/ready", tags=["system"], response_model=None)
+def ready() -> dict[str, str] | JSONResponse:
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except Exception:
+        logger.warning("readiness check failed", extra={"component": "database"})
+        return JSONResponse(
+            status_code=503, content={"status": "degraded", "database": "unavailable"}
+        )
+    return {"status": "ready", "database": "ready"}
 
 
 @app.get("/v1/meta/capabilities", tags=["meta"])

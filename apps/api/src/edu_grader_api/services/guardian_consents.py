@@ -3,6 +3,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
 
 from ..audit import append_audit_event
 from ..models import GuardianConsentStatus, Role, StudentGuardianConsent, User, utc_now
@@ -53,6 +54,7 @@ def grant_guardian_consent(
     consent.withdrawn_at = None
     consent.withdrawal_reason = None
     consent.version += 1
+    _flush_consent_or_raise_conflict(session)
     append_audit_event(
         session,
         tenant_id=tenant_id,
@@ -93,6 +95,7 @@ def withdraw_guardian_consent(
     consent.withdrawn_at = utc_now()
     consent.withdrawal_reason = reason
     consent.version += 1
+    _flush_consent_or_raise_conflict(session)
     append_audit_event(
         session,
         tenant_id=tenant_id,
@@ -119,3 +122,10 @@ def _get_required_consent(
     if consent is None or not consent.requires_guardian_consent:
         raise GuardianConsentNotFoundError("guardian consent record not found")
     return consent
+
+
+def _flush_consent_or_raise_conflict(session: Session) -> None:
+    try:
+        session.flush()
+    except StaleDataError as error:
+        raise GuardianConsentConflictError("guardian consent changed") from error

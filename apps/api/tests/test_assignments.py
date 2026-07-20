@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -16,13 +16,17 @@ from edu_grader_api.models import (
     Assignment,
     AssignmentItem,
     AssignmentStatus,
+    AttemptStatus,
+    AuditLog,
     ClassTeacher,
     Classroom,
     Enrollment,
+    GuardianConsentStatus,
     Question,
     QuestionVersion,
     Role,
     StudentAttempt,
+    StudentGuardianConsent,
     SubmissionReceipt,
     Tenant,
     User,
@@ -128,6 +132,11 @@ def make_classroom_data(
         [
             ClassTeacher(class_id=classroom.id, teacher_id=teacher.id),
             Enrollment(class_id=classroom.id, student_id=student.id),
+            StudentGuardianConsent(
+                student_id=student.id,
+                requires_guardian_consent=False,
+                status=GuardianConsentStatus.NOT_REQUIRED,
+            ),
         ]
     )
     session.commit()
@@ -167,6 +176,52 @@ def test_assigned_teacher_can_publish_a_versioned_assignment(
 
     assert published_response.status_code == 200
     assert published_response.json()["status"] == AssignmentStatus.PUBLISHED.value
+
+
+def test_teacher_lists_only_their_assignments_with_completion_progress(
+    client: TestClient, session: Session
+) -> None:
+    teacher, _, student, classroom, _, _ = make_classroom_data(session)
+    assignment = Assignment(
+        tenant=classroom.tenant,
+        classroom=classroom,
+        created_by_user=teacher,
+        title="Algebra",
+        subject="mathematics",
+        due_at=datetime(2026, 7, 20, tzinfo=timezone.utc),
+        submission_rule_json={"allow_late": False},
+        status=AssignmentStatus.PUBLISHED,
+    )
+    session.add(assignment)
+    session.flush()
+    completed = StudentAttempt(
+        tenant_id=student.tenant_id,
+        assignment=assignment,
+        student=student,
+        attempt_number=1,
+        status=AttemptStatus.SUBMITTED,
+    )
+    session.add(completed)
+    session.commit()
+
+    response = client.get("/v1/assignments", headers=authorize(client, teacher))
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "assignments": [
+            {
+                "id": str(assignment.id),
+                "title": "Algebra",
+                "subject": "mathematics",
+                "class_id": str(classroom.id),
+                "class_name": "Year 7 A",
+                "due_at": "2026-07-20T00:00:00+00:00",
+                "status": "published",
+                "student_count": 1,
+                "submitted_count": 1,
+            }
+        ]
+    }
 
 
 def test_unassigned_teacher_and_draft_question_are_rejected(
@@ -212,7 +267,7 @@ def published_assignment_for_student(
         created_by_user=teacher,
         title="Published algebra",
         subject="mathematics",
-        due_at=datetime(2026, 7, 20, tzinfo=timezone.utc),
+        due_at=datetime.now(timezone.utc) + timedelta(days=1),
         submission_rule_json={"allow_late": False},
         status=AssignmentStatus.PUBLISHED,
         published_at=datetime(2026, 7, 18, tzinfo=timezone.utc),
@@ -221,6 +276,12 @@ def published_assignment_for_student(
     session.add_all([assignment, item])
     session.commit()
     return student, classroom, assignment, item, published
+
+
+def test_published_assignment_fixture_uses_a_future_deadline(session: Session) -> None:
+    _, _, assignment, _, _ = published_assignment_for_student(session)
+
+    assert assignment.due_at.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc)
 
 
 def test_enrolled_student_lists_pending_and_opens_frozen_assignment(
@@ -240,6 +301,59 @@ def test_enrolled_student_lists_pending_and_opens_frozen_assignment(
     assert detail.json()["items"][0]["prompt"] == "What is 2 + 3?"
 
 
+def test_submitted_unpublished_assignment_remains_pending_review(
+    client: TestClient, session: Session
+) -> None:
+    student, _, assignment, _, _ = published_assignment_for_student(session)
+    attempt = StudentAttempt(
+        tenant_id=student.tenant_id,
+        assignment_id=assignment.id,
+        student_id=student.id,
+        attempt_number=1,
+        status=AttemptStatus.SUBMITTED,
+        submitted_at=datetime(2026, 7, 19, tzinfo=timezone.utc),
+    )
+    session.add(attempt)
+    session.commit()
+
+    listed = client.get("/v1/student/assignments", headers=authorize(client, student))
+
+    assert listed.status_code == 200
+    assert listed.json()["completed"] == []
+    assert listed.json()["pending"] == [
+        {
+            "id": str(assignment.id),
+            "title": "Published algebra",
+            "subject": "mathematics",
+            "due_at": assignment.due_at.replace(tzinfo=timezone.utc).isoformat(),
+            "status": "submitted_pending_review",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("allow_late", "expected_status"),
+    [(False, "overdue"), (True, "late_allowed")],
+)
+def test_expired_unsubmitted_assignment_exposes_late_policy_status(
+    client: TestClient, session: Session, allow_late: bool, expected_status: str
+) -> None:
+    student, _, assignment, _, _ = published_assignment_for_student(session)
+    assignment.due_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    assignment.submission_rule_json = {"allow_late": allow_late}
+    session.commit()
+
+    listed = client.get("/v1/student/assignments", headers=authorize(client, student))
+    detail = client.get(
+        f"/v1/student/assignments/{assignment.id}", headers=authorize(client, student)
+    )
+
+    assert listed.status_code == 200
+    assert listed.json()["pending"][0]["status"] == expected_status
+    assert detail.status_code == 200
+    assert detail.json()["status"] == expected_status
+
+
 def test_answer_save_rejects_stale_version_and_submitted_attempt(
     client: TestClient, session: Session
 ) -> None:
@@ -253,18 +367,95 @@ def test_answer_save_rejects_stale_version_and_submitted_attempt(
     saved = client.put(
         answer_url,
         headers=authorize(client, student),
-        json={"answer": {"value": "5"}, "version": 0},
+        json={"answer": {"format": "text-v1", "text": "5"}, "version": 0},
     )
     conflict = client.put(
         answer_url,
         headers=authorize(client, student),
-        json={"answer": {"value": "6"}, "version": 0},
+        json={"answer": {"format": "text-v1", "text": "6"}, "version": 0},
     )
 
     assert saved.status_code == 200
     assert saved.json()["version"] == 1
     assert conflict.status_code == 409
-    assert conflict.json()["current"]["answer"] == {"value": "5"}
+    assert conflict.json()["current"]["answer"] == {"format": "text-v1", "text": "5"}
+
+
+def test_answer_save_rejects_expired_assignment_when_late_work_is_disabled(
+    client: TestClient, session: Session
+) -> None:
+    student, _, assignment, item, _ = published_assignment_for_student(session)
+    assignment.due_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    assignment.submission_rule_json = {"allow_late": False}
+    session.commit()
+    detail = client.get(
+        f"/v1/student/assignments/{assignment.id}", headers=authorize(client, student)
+    )
+
+    response = client.put(
+        f"/v1/student/attempts/{detail.json()['attempt']['id']}/answers/{item.id}",
+        headers=authorize(client, student),
+        json={"answer": {"format": "text-v1", "text": "5"}, "version": 0},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "assignment_overdue"
+
+
+def test_submit_rejects_expired_assignment_when_late_work_is_disabled(
+    client: TestClient, session: Session
+) -> None:
+    student, _, assignment, _, _ = published_assignment_for_student(session)
+    assignment.due_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    assignment.submission_rule_json = {"allow_late": False}
+    session.commit()
+
+    response = client.post(
+        f"/v1/student/assignments/{assignment.id}/submit",
+        headers=authorize(client, student) | {"Idempotency-Key": str(uuid4())},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "assignment_overdue"
+
+
+def test_submit_allows_late_work_and_records_late_audit_evidence(
+    client: TestClient, session: Session
+) -> None:
+    student, _, assignment, _, _ = published_assignment_for_student(session)
+    assignment.due_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    assignment.submission_rule_json = {"allow_late": True}
+    session.commit()
+
+    response = client.post(
+        f"/v1/student/assignments/{assignment.id}/submit",
+        headers=authorize(client, student) | {"Idempotency-Key": str(uuid4())},
+    )
+
+    audit = session.scalar(
+        select(AuditLog).where(AuditLog.event_type == "student_attempt.submitted")
+    )
+    assert response.status_code == 200
+    assert audit is not None
+    assert audit.metadata_json["submitted_late"] is True
+
+
+def test_answer_save_rejects_legacy_unversioned_envelope(
+    client: TestClient, session: Session
+) -> None:
+    student, _, assignment, item, _ = published_assignment_for_student(session)
+    detail = client.get(
+        f"/v1/student/assignments/{assignment.id}", headers=authorize(client, student)
+    )
+
+    response = client.put(
+        f"/v1/student/attempts/{detail.json()['attempt']['id']}/answers/{item.id}",
+        headers=authorize(client, student),
+        json={"answer": {"value": "5"}, "version": 0},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "unsupported_answer_envelope"
 
 
 def test_submit_replays_a_matching_idempotency_key(client: TestClient, session: Session) -> None:

@@ -2,13 +2,15 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from edu_grader_api.auth import VerifiedIdentity, get_token_verifier
+from edu_grader_api.auth import CurrentPrincipal, VerifiedIdentity, get_token_verifier
 from edu_grader_api.db import Base, get_session
+from edu_grader_api.dependencies import require_student_consent
 from edu_grader_api.main import app
 from edu_grader_api.models import (
     AuditLog,
@@ -17,6 +19,10 @@ from edu_grader_api.models import (
     StudentGuardianConsent,
     Tenant,
     User,
+)
+from edu_grader_api.services.guardian_consents import (
+    GuardianConsentConflictError,
+    grant_guardian_consent,
 )
 from edu_grader_api.settings import settings
 
@@ -128,6 +134,51 @@ def test_pending_guardian_consent_blocks_student_assignment_access(
         assert response.json() == {"detail": "guardian consent required"}
 
 
+def test_missing_guardian_consent_blocks_student_assignment_access(
+    client: TestClient, session: Session
+) -> None:
+    _, student = student_and_admin(session)
+    consent = session.get(StudentGuardianConsent, student.id)
+    assert consent is not None
+    session.delete(consent)
+    session.commit()
+
+    response = client.get("/v1/student/assignments", headers=authorize(client, student))
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "guardian consent required"}
+
+
+def test_contradictory_not_required_consent_is_fail_closed_at_runtime() -> None:
+    consent = StudentGuardianConsent(
+        student_id=uuid4(),
+        requires_guardian_consent=True,
+        status=GuardianConsentStatus.NOT_REQUIRED,
+    )
+
+    class LegacyConsentSession:
+        def get(
+            self, model: type[StudentGuardianConsent], student_id: object
+        ) -> StudentGuardianConsent:
+            assert model is StudentGuardianConsent
+            assert student_id == consent.student_id
+            return consent
+
+    principal = CurrentPrincipal(
+        user_id=str(consent.student_id),
+        tenant_id=str(uuid4()),
+        role=Role.STUDENT,
+        school_id="S-001",
+        display_name="Student",
+    )
+
+    with pytest.raises(HTTPException) as error:
+        require_student_consent(principal, LegacyConsentSession())
+
+    assert error.value.status_code == 403
+    assert error.value.detail == "guardian consent required"
+
+
 def test_admin_can_grant_then_withdraw_guardian_consent(
     client: TestClient, session: Session
 ) -> None:
@@ -160,3 +211,39 @@ def test_admin_can_grant_then_withdraw_guardian_consent(
         "guardian_consent.granted",
         "guardian_consent.withdrawn",
     ]
+
+
+def test_stale_guardian_consent_update_is_rejected_at_database_write(
+    session: Session,
+) -> None:
+    admin, student = student_and_admin(session)
+    concurrent_session = Session(session.get_bind())
+    try:
+        stale_consent = concurrent_session.get(StudentGuardianConsent, student.id)
+        assert stale_consent is not None
+        assert stale_consent.version == 0
+
+        grant_guardian_consent(
+            session,
+            tenant_id=admin.tenant_id,
+            actor_user_id=admin.id,
+            student_id=student.id,
+            notice_version="2026-07",
+            evidence_reference="school-consent-0001",
+            expected_version=0,
+        )
+        session.commit()
+
+        with pytest.raises(GuardianConsentConflictError, match="guardian consent changed"):
+            grant_guardian_consent(
+                concurrent_session,
+                tenant_id=admin.tenant_id,
+                actor_user_id=admin.id,
+                student_id=student.id,
+                notice_version="2026-08",
+                evidence_reference="school-consent-0002",
+                expected_version=0,
+            )
+    finally:
+        concurrent_session.rollback()
+        concurrent_session.close()
