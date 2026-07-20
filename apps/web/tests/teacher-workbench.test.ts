@@ -45,11 +45,11 @@ describe('teacher workbench UI contract', () => {
     expect(isAssignmentDraftReady({ title: '周末练习', className: '三年级 2 班', dueAt: '2026-07-21T18:00', allowLate: true })).toBe(true)
   })
 
-  it('resolves overview actions to a visible navigation module', () => {
-    expect(getTeacherModule('reviews')).toMatchObject({ label: '复核队列', badge: '36' })
+  it('resolves overview actions to a visible navigation module without sample queue counts', () => {
+    expect(getTeacherModule('reviews')).toMatchObject({ label: '复核队列' })
     expect(getTeacherModule('questions')).toMatchObject({ label: '题库' })
     expect(getTeacherModule('assignments')).toMatchObject({ label: '作业' })
-    expect(getTeacherModule('requests')).toMatchObject({ label: '学生申请', badge: '2' })
+    expect(getTeacherModule('requests')).toMatchObject({ label: '学生申请' })
   })
 
   it('rejects whitespace-only question answers', () => {

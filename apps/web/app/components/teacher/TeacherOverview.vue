@@ -19,16 +19,15 @@
     <section class="teacher-overview-grid" aria-label="教师待办与快捷操作">
       <article class="teacher-panel teacher-panel--priority">
         <div class="teacher-panel__heading">
-          <div><p class="teacher-panel__eyebrow">优先处理</p><h2>今日待办</h2></div>
-          <span class="teacher-panel__hint">共 38 项</span>
+          <div><p class="teacher-panel__eyebrow">优先处理</p><h2>待处理事项</h2></div>
         </div>
         <div class="teacher-task-list">
           <div class="teacher-task">
-            <div><h3>复核待评分答案</h3><p>数学 · 三年级 2 班</p></div>
+            <div><h3>复核待评分答案</h3><p>打开复核队列查看当前需要处理的提交。</p></div>
             <button class="button secondary" type="button" @click="emit('open-module', 'reviews')">开始复核</button>
           </div>
           <div class="teacher-task">
-            <div><h3>处理学生申请</h3><p>延期提交 · 2 个新申请</p></div>
+            <div><h3>处理学生申请</h3><p>打开学生申请页查看当前待办。</p></div>
             <button class="button secondary" type="button" @click="emit('open-module', 'requests')">去处理</button>
           </div>
         </div>
@@ -39,10 +38,7 @@
           <div><p class="teacher-panel__eyebrow">作业进度</p><h2>进行中的作业</h2></div>
           <button class="teacher-text-button" type="button" @click="emit('open-module', 'assignments')">查看全部</button>
         </div>
-        <div class="teacher-assignment-summary">
-          <div><strong>分数的初步认识</strong><span>18 / 25 已提交</span></div>
-          <div><strong>英语单词拼写</strong><span>截止明天 18:00</span></div>
-        </div>
+        <p>打开作业页查看草稿、已发布作业和当前提交进度。</p>
       </article>
     </section>
 

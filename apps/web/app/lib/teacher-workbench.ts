@@ -16,10 +16,10 @@ export interface AssignmentDraft {
 
 export const teacherModules: ReadonlyArray<{ id: TeacherModule; label: string; badge?: string }> = [
   { id: 'overview', label: '工作台' },
-  { id: 'reviews', label: '复核队列', badge: '36' },
+  { id: 'reviews', label: '复核队列' },
   { id: 'questions', label: '题库' },
   { id: 'assignments', label: '作业' },
-  { id: 'requests', label: '学生申请', badge: '2' }
+  { id: 'requests', label: '学生申请' }
 ]
 
 export function getTeacherModule(id: TeacherModule) {
