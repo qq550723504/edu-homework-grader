@@ -48,6 +48,10 @@ spec:
               value: production
             - name: GRADER_MATH_MEMORY_BYTES
               value: "536870912"
+            - name: GRADER_MATH_CPU_SECONDS
+              value: "2"
+            - name: GRADER_MATH_TIMEOUT_SECONDS
+              value: "5"
             - name: LANGUAGETOOL_BASE_URL
               value: http://languagetool:8010/v2
             - name: PROCESSOR_ALLOWED_HOSTS
