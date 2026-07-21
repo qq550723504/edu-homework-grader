@@ -69,6 +69,56 @@ class FailingGrader(PassingGrader):
         raise RuntimeError("grader is unavailable")
 
 
+class PassingE2Grader(PassingGrader):
+    def __init__(self) -> None:
+        self.grade_requests: list[tuple[str, dict[str, object], dict[str, object], str | None]] = []
+
+    def grade(
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
+    ) -> GradeResult:
+        self.grade_requests.append((question_type, rule_json, answer_json, policy_version))
+        return GradeResult("auto_accepted", 1, {}, "fake-e2-v1")
+
+
+class FailingE2Grader(PassingE2Grader):
+    def grade(
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
+    ) -> GradeResult:
+        raise RuntimeError("English grader diagnostic")
+
+
+class PartialE2Grader(PassingE2Grader):
+    def grade(
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
+    ) -> GradeResult:
+        return GradeResult("auto_accepted", 0.5, {}, "fake-e2-v1")
+
+
+def valid_e2_candidate() -> dict[str, object]:
+    return {
+        "question_type": "E2",
+        "policy_version": "1",
+        "prompt": "Use the past tense of go.",
+        "rule_json": {"lemma": "go", "accepted_forms": ["went"], "constraints": {"tense": "past"}},
+        "explanation": "The past-tense form of go is went.",
+    }
+
+
 class PassingM2Grader:
     def __init__(self) -> None:
         self.normalization_requests: list[dict[str, object]] = []
@@ -304,6 +354,59 @@ def test_valid_m2_candidate_normalizes_and_probes(session: Session) -> None:
     assert grader.normalization_requests == [{"mathjson": ["Add", "x", 1], "variables": ["x"]}]
     assert grader.grade_requests[0][0] == "M2"
     assert grader.grade_requests[0][2] == {"mathjson": ["Add", "x", 1]}
+
+
+def test_valid_e2_candidate_probes_every_accepted_form(session: Session) -> None:
+    draft = generation_draft(
+        session, allowed_question_types=["E2"], candidate_json=valid_e2_candidate()
+    )
+    grader = PassingE2Grader()
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    assert run.status is ValidationRunStatus.PASSED
+    assert grader.grade_requests == [
+        ("E2", draft.candidate_json["rule_json"], {"format": "text-v1", "text": "went"}, "1")
+    ]
+
+
+def test_e2_normalized_duplicate_forms_are_blocked(session: Session) -> None:
+    duplicate = valid_e2_candidate()
+    duplicate["rule_json"] = {"lemma": "go", "accepted_forms": ["Went", " went "]}
+    duplicate_draft = generation_draft(
+        session, allowed_question_types=["E2"], candidate_json=duplicate
+    )
+
+    duplicate_run = verification.run_candidate_verification(
+        session, draft=duplicate_draft, grader_client=PassingE2Grader()
+    )
+
+    assert "e2_forms_invalid" in finding_codes(duplicate_run)
+
+
+@pytest.mark.parametrize("grader", [FailingE2Grader(), PartialE2Grader()])
+def test_e2_grader_failure_is_safely_blocked(session: Session, grader: PassingE2Grader) -> None:
+    failed_draft = generation_draft(
+        session, allowed_question_types=["E2"], candidate_json=valid_e2_candidate()
+    )
+    failed_run = verification.run_candidate_verification(
+        session, draft=failed_draft, grader_client=grader
+    )
+
+    finding = next(item for item in failed_run.findings if item.code == "e2_grader_probe_failed")
+    assert finding.evidence_json == {"probe": "accepted_forms"}
+    assert "went" not in finding.remediation
+
+
+def test_e2_schema_invalid_rules_do_not_call_the_grader(session: Session) -> None:
+    candidate = valid_e2_candidate()
+    candidate["rule_json"] = {"lemma": "go", "accepted_forms": []}
+    draft = generation_draft(session, allowed_question_types=["E2"], candidate_json=candidate)
+    grader = PassingE2Grader()
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    assert "policy_schema_invalid" in finding_codes(run)
+    assert grader.grade_requests == []
 
 
 def test_m2_normalizer_failure_is_safely_blocked(session: Session) -> None:
