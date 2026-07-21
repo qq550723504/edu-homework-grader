@@ -25,6 +25,10 @@ def upgrade() -> None:
         sa.Column("status", sa.String(length=30), nullable=False),
         sa.Column("feature_summary_json", sa.JSON(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.CheckConstraint(
+            "status IN ('passed', 'warning', 'blocked')",
+            name="ck_generation_validation_run_status",
+        ),
         sa.ForeignKeyConstraint(["generated_question_draft_id"], ["generated_question_drafts.id"]),
         sa.ForeignKeyConstraint(["generation_job_id"], ["generation_jobs.id"]),
         sa.PrimaryKeyConstraint("id"),
@@ -54,6 +58,10 @@ def upgrade() -> None:
         sa.Column("evidence_json", sa.JSON(), nullable=False),
         sa.Column("remediation", sa.String(length=1000), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.CheckConstraint(
+            "severity IN ('warning', 'blocked')",
+            name="ck_validation_finding_severity",
+        ),
         sa.ForeignKeyConstraint(["validation_run_id"], ["generation_validation_runs.id"]),
         sa.PrimaryKeyConstraint("id"),
     )

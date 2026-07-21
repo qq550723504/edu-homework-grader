@@ -281,6 +281,31 @@ def test_e1_normalized_duplicate_answers_are_blocked_without_grader(session: Ses
     assert finding_codes(run) == {"e1_answers_invalid"}
 
 
+def test_e1_unsafe_accepted_answer_is_blocked_without_echoing_answer(session: Session) -> None:
+    draft = generation_draft(
+        session,
+        candidate_json={
+            "question_type": "E1",
+            "policy_version": "2",
+            "prompt": "Choose the safe word.",
+            "rule_json": {
+                "accepted_answers": ["pornographic"],
+                "normalization": {"unicode_form": "NFKC", "ignore_case": True},
+            },
+            "explanation": "Choose a word from the list.",
+        },
+    )
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=FailingGrader()
+    )
+
+    finding = next(finding for finding in run.findings if finding.code == "unsafe_minor_content")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {"category": "adult_content"}
+    assert "pornographic" not in str(finding.evidence_json)
+
+
 def test_duplicate_and_unsafe_content_produce_explainable_findings(session: Session) -> None:
     draft = generation_draft(session)
     duplicate = GeneratedQuestionDraft(

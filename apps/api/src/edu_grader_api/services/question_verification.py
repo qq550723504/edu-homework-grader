@@ -173,10 +173,14 @@ def _evaluate_candidate(
             )
         )
 
-    if isinstance(prompt, str):
-        findings.extend(
-            _safety_findings(prompt, explanation if isinstance(explanation, str) else "")
+    findings.extend(
+        _safety_findings(
+            prompt if isinstance(prompt, str) else "",
+            explanation if isinstance(explanation, str) else "",
+            *(_text_values(rule_json) if isinstance(rule_json, dict) else []),
         )
+    )
+    if isinstance(prompt, str):
         if _has_normalized_duplicate(session, draft=draft, tenant_id=job.tenant_id, prompt=prompt):
             findings.append(
                 VerificationFinding(
@@ -286,6 +290,11 @@ def _persist_run(
     draft: GeneratedQuestionDraft,
     findings: list[VerificationFinding],
 ) -> GenerationValidationRun:
+    session.execute(
+        select(GeneratedQuestionDraft)
+        .where(GeneratedQuestionDraft.id == draft.id)
+        .with_for_update()
+    )
     latest_run_number = session.scalar(
         select(func.max(GenerationValidationRun.run_number)).where(
             GenerationValidationRun.generated_question_draft_id == draft.id
@@ -337,8 +346,8 @@ def _has_normalized_duplicate(
     )
 
 
-def _safety_findings(prompt: str, explanation: str) -> list[VerificationFinding]:
-    normalized_content = _normalize_text(f"{prompt} {explanation}")
+def _safety_findings(*texts: str) -> list[VerificationFinding]:
+    normalized_content = _normalize_text(" ".join(texts))
     for term, category in _UNSAFE_MINOR_TERMS:
         if term in normalized_content:
             return [
@@ -348,6 +357,16 @@ def _safety_findings(prompt: str, explanation: str) -> list[VerificationFinding]
                     "Remove unsafe content before asking for teacher review.",
                 )
             ]
+    return []
+
+
+def _text_values(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [text for item in value for text in _text_values(item)]
+    if isinstance(value, dict):
+        return [text for item in value.values() for text in _text_values(item)]
     return []
 
 
