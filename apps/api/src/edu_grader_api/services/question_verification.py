@@ -26,23 +26,21 @@ from ..models import (
 )
 from ..policies import validate_policy
 from ..settings import settings
+from .candidate_content_policy import (
+    CONTENT_POLICY_VERSION,
+    find_candidate_content_matches,
+)
 from .grader import EmbeddingDependencyVersion, SemanticSimilarityResult
 from .question_fingerprints import FINGERPRINT_VERSION, PromptFingerprints, fingerprint_prompt
 from .questions import GradeResult
 
 
-VALIDATOR_VERSION = "verification-v3"
-RULESET_VERSION = "rules-v3"
+VALIDATOR_VERSION = "verification-v4"
+RULESET_VERSION = "rules-v4"
 _SEMANTIC_CHUNK_SIZE = 128
 _DUPLICATE_REMEDIATION = "Revise the prompt to make the candidate meaningfully distinct."
 _WHITESPACE = re.compile(r"\s+")
 _E2_TERMINAL_PUNCTUATION = re.compile(r"[.!?。！？]+$")
-_UNSAFE_MINOR_TERMS = (
-    ("pornographic", "adult_content"),
-    ("sexual content", "adult_content"),
-    ("self-harm instructions", "self_harm"),
-    ("graphic violence", "graphic_violence"),
-)
 _GRADE_TEXT_LIMITS = {
     "G1": 300,
     "G2": 400,
@@ -817,6 +815,7 @@ def _persist_run(
         status=status,
         feature_summary_json={
             "finding_count": len(findings),
+            "content_policy_version": CONTENT_POLICY_VERSION,
             **duplicate_feature_summary,
         },
     )
@@ -1154,17 +1153,19 @@ def _semantic_comparators(
 
 
 def _safety_findings(*texts: str) -> list[VerificationFinding]:
-    normalized_content = _normalize_text(" ".join(texts))
-    for term, category in _UNSAFE_MINOR_TERMS:
-        if term in normalized_content:
-            return [
-                _blocked(
-                    "unsafe_minor_content",
-                    {"category": category},
-                    "Remove unsafe content before asking for teacher review.",
-                )
-            ]
-    return []
+    return [
+        VerificationFinding(
+            code=match.code,
+            severity=ValidationFindingSeverity(match.severity),
+            evidence={
+                "category": match.category,
+                "rule_id": match.rule_id,
+                "policy_version": CONTENT_POLICY_VERSION,
+            },
+            remediation=match.remediation,
+        )
+        for match in find_candidate_content_matches(texts)
+    ]
 
 
 def _text_values(value: object) -> list[str]:
