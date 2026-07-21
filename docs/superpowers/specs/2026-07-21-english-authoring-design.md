@@ -12,7 +12,7 @@ The teacher page currently embeds policy versions and JSON strings. The E1, E2, 
 
 ## Chosen Approach
 
-The Core API will expose a small create-policy catalog. It will list only policies valid for new questions; E4@1 remains in the general schema registry for historical-read compatibility but is absent from the create catalog and rejected for new creation.
+The Core API will expose a small default-policy catalog for guided new-question authoring. E4@1 remains in the general schema registry for historical-read compatibility but is absent from that catalog and rejected for new creation. Other existing policy versions retain their established schema-validation behavior; the catalog is not a broad new creation allow-list.
 
 The web app will fetch that catalog and use the returned version instead of a hard-coded English version. A pure TypeScript mapper will translate type-specific form values into a `CreateQuestionInput` rule and return field-level client validation errors. The page renders ordinary E1–E4 fields and has an explicit, opt-in advanced JSON mode. Both paths submit through the same mapper and API contract.
 
@@ -31,7 +31,7 @@ The web app will fetch that catalog and use the returned version instead of a ha
 }
 ```
 
-Question creation validates the requested pair against this catalog before normal schema validation. Existing E4@1 records can still be listed and read; the change does not mutate or delete them.
+Question creation rejects E4@1 before normal schema validation. Existing E4@1 records can still be listed and read; the change does not mutate or delete them. The catalog determines guided-form defaults rather than silently removing pre-existing API policy choices.
 
 ## Web Form Model
 
