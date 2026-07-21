@@ -55,7 +55,7 @@ _M2_AST_FIELDS_BY_TYPE = {
     "div": frozenset({"type", "numerator", "denominator"}),
     "pow": frozenset({"type", "base", "exponent"}),
     "number": frozenset({"type", "value"}),
-    "symbol": frozenset({"type", "value"}),
+    "symbol": frozenset({"type", "name"}),
 }
 _GRADE_COMPLEXITY_METRICS = (
     "max_prompt_units",
@@ -557,7 +557,7 @@ def _m2_complexity_metrics(ast: dict[str, object]) -> tuple[Decimal | None, int]
             absolute_value = abs(value)
             if maximum_numeric_value is None or absolute_value > maximum_numeric_value:
                 maximum_numeric_value = absolute_value
-        if node_type == "symbol" and (not isinstance(node["value"], str) or not node["value"]):
+        if node_type == "symbol" and (not isinstance(node["name"], str) or not node["name"]):
             raise ValueError("safe MathJSON symbol is invalid")
         for child_key in child_keys:
             child = node.get(child_key)

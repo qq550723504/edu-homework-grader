@@ -1,7 +1,9 @@
 import importlib.util
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+from edu_grader.mathjson import normalize_mathjson
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
@@ -406,7 +408,7 @@ class PassingM2Grader:
         return {
             "type": "add",
             "args": [
-                {"type": "symbol", "value": "x"},
+                {"type": "symbol", "name": "x"},
                 {"type": "number", "value": "1"},
             ],
         }
@@ -485,12 +487,12 @@ class ComplexM2Grader(PassingM2Grader):
         return {
             "type": "add",
             "args": [
-                {"type": "symbol", "value": "x"},
+                {"type": "symbol", "name": "x"},
                 {
                     "type": "mul",
                     "args": [
                         {"type": "number", "value": "2"},
-                        {"type": "symbol", "value": "x"},
+                        {"type": "symbol", "name": "x"},
                     ],
                 },
             ],
@@ -2266,8 +2268,8 @@ def test_m2_rational_safe_ast_supports_numeric_complexity(session: Session) -> N
     "ast",
     [
         {"type": "symbol"},
-        {"type": "number", "value": "1", "arg": {"type": "symbol", "value": "x"}},
-        {"type": "symbol", "value": "x", "unexpected": "field"},
+        {"type": "number", "value": "1", "arg": {"type": "symbol", "name": "x"}},
+        {"type": "symbol", "name": "x", "unexpected": "field"},
     ],
 )
 def test_m2_incomplete_or_unknown_safe_ast_is_blocked_before_grader_probe(
@@ -2284,6 +2286,19 @@ def test_m2_incomplete_or_unknown_safe_ast_is_blocked_before_grader_probe(
     assert finding_codes(run) == {"m2_mathjson_invalid"}
     assert grader.grade_requests == []
     assert len(grader.normalization_requests) == 1
+
+
+def test_m2_safe_ast_contract_matches_grader_normalizer() -> None:
+    ast = normalize_mathjson(["Add", "x", 1], ["x"])
+
+    assert ast == {
+        "type": "add",
+        "args": [
+            {"type": "symbol", "name": "x"},
+            {"type": "number", "value": "1"},
+        ],
+    }
+    assert verification._m2_complexity_metrics(ast) == (Decimal("1"), 1)
 
 
 def test_invalid_m2_schema_preserves_policy_finding(session: Session) -> None:
