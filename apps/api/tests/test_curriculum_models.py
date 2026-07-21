@@ -154,7 +154,7 @@ def test_curriculum_import_operations_is_the_alembic_head() -> None:
     config = Config("apps/api/alembic.ini")
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "0014_curriculum_import_operations"
+    assert script.get_current_head() == "0015_ai_generation_jobs"
 
 
 def test_import_batch_keeps_row_location_and_lifecycle(session: Session) -> None:

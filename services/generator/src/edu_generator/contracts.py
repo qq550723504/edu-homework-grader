@@ -16,9 +16,10 @@ QuestionType = Literal["M1", "M2", "E1", "E2", "E3", "E4"]
 class ProviderFailure(RuntimeError):
     """A stable, sanitized provider failure that callers can safely persist."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, retryable: bool = False) -> None:
         super().__init__(message)
         self.code = code
+        self.retryable = retryable
 
 
 class GenerationRequest(BaseModel):
@@ -76,3 +77,11 @@ class GeneratedCandidateEnvelope(BaseModel):
             raise ProviderFailure(
                 "invalid_structured_output", "provider output failed validation"
             ) from exc
+
+
+class ProviderCandidatePayload(BaseModel):
+    """The provider-authored portion of a Responses structured output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidates: list[GeneratedCandidate] = Field(min_length=1, max_length=20)

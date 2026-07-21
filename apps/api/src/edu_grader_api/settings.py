@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     audit_hmac_key: str = DEFAULT_AUDIT_HMAC_KEY
     audit_hmac_key_version: str = "dev-1"
     processor_allowed_hosts: str = "grader,languagetool,localhost"
+    generation_provider: str = "fake"
+    openai_api_key: str = ""
+    generator_openai_model: str = ""
+    generator_openai_base_url: str = "https://api.openai.com"
+    generator_provider_allowed_hosts: str = "api.openai.com"
+    generator_timeout_seconds: float = 30
+    generator_daily_tenant_limit: int = 100
+    generator_max_batch_size: int = 20
 
     @model_validator(mode="after")
     def require_production_security_controls(self) -> "Settings":
@@ -52,6 +60,15 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "GRADER_BASE_URL must use a host in PROCESSOR_ALLOWED_HOSTS in production"
                 )
+            if self.generation_provider == "openai":
+                if not self.openai_api_key:
+                    raise ValueError("OPENAI_API_KEY is required when GENERATION_PROVIDER=openai")
+                if not self.generator_openai_model:
+                    raise ValueError(
+                        "GENERATOR_OPENAI_MODEL is required when GENERATION_PROVIDER=openai"
+                    )
+                if not self.generator_provider_allowed_hosts:
+                    raise ValueError("GENERATOR_PROVIDER_ALLOWED_HOSTS is required")
         return self
 
     @property
@@ -66,6 +83,14 @@ class Settings(BaseSettings):
     def curriculum_admin_subject_set(self) -> frozenset[str]:
         return frozenset(
             item.strip() for item in self.curriculum_admin_subjects.split(",") if item.strip()
+        )
+
+    @property
+    def allowed_generator_provider_hosts(self) -> frozenset[str]:
+        return frozenset(
+            item.strip().casefold()
+            for item in self.generator_provider_allowed_hosts.split(",")
+            if item.strip()
         )
 
 

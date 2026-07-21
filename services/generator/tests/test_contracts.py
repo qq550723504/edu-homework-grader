@@ -3,6 +3,7 @@ from uuid import uuid4
 import pytest
 
 from edu_generator.contracts import GeneratedCandidateEnvelope, GenerationRequest
+from edu_generator.openai_provider import OpenAIResponsesProvider
 from edu_generator.providers import FakeGenerationProvider, ProviderFailure
 
 
@@ -44,3 +45,21 @@ def test_candidate_envelope_rejects_identity_unknown_fields_and_incomplete_candi
 ) -> None:
     with pytest.raises(ProviderFailure):
         GeneratedCandidateEnvelope.from_provider_payload(payload)
+
+
+def test_openai_provider_requires_an_explicit_model_and_allowlisted_endpoint() -> None:
+    with pytest.raises(ProviderFailure, match="GENERATOR_OPENAI_MODEL"):
+        OpenAIResponsesProvider(
+            api_key="test-key",
+            model="",
+            base_url="https://api.openai.com",
+            allowed_hosts=frozenset({"api.openai.com"}),
+        )
+
+    with pytest.raises(ProviderFailure, match="allowlisted"):
+        OpenAIResponsesProvider(
+            api_key="test-key",
+            model="gpt-test-snapshot",
+            base_url="https://api.openai.com",
+            allowed_hosts=frozenset({"other.example"}),
+        )
