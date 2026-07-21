@@ -36,6 +36,7 @@ class CurrentPrincipal:
     role: Role
     school_id: str | None
     display_name: str
+    oidc_subject: str = ""
 
 
 class TokenVerifier(Protocol):
@@ -161,6 +162,7 @@ def get_current_principal(
         role=user.role,
         school_id=user.school_id,
         display_name=user.display_name,
+        oidc_subject=user.oidc_subject or "",
     )
 
 

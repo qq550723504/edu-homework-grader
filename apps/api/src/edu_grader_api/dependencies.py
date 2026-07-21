@@ -16,6 +16,7 @@ from .models import (
     Role,
     StudentGuardianConsent,
 )
+from .settings import settings
 
 logger = get_secure_logger(__name__)
 
@@ -25,6 +26,35 @@ def require_role(role: Role) -> Callable[[CurrentPrincipal], CurrentPrincipal]:
         principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
     ) -> CurrentPrincipal:
         if principal.role is not role:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
+        return principal
+
+    return dependency
+
+
+def require_any_role(*roles: Role) -> Callable[[CurrentPrincipal], CurrentPrincipal]:
+    """Require one of the supplied platform roles without revealing the resource."""
+
+    def dependency(
+        principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+    ) -> CurrentPrincipal:
+        if principal.role not in roles:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
+        return principal
+
+    return dependency
+
+
+def require_curriculum_admin() -> Callable[[CurrentPrincipal], CurrentPrincipal]:
+    """Restrict global curriculum writes to configured platform administrators."""
+
+    def dependency(
+        principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+    ) -> CurrentPrincipal:
+        if (
+            principal.role is not Role.ADMIN
+            or principal.oidc_subject not in settings.curriculum_admin_subject_set
+        ):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
         return principal
 
