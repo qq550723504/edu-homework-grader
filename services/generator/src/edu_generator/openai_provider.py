@@ -52,6 +52,7 @@ class OpenAIResponsesProvider:
     def generate(self, request: GenerationRequest) -> GeneratedCandidateEnvelope:
         try:
             from openai import OpenAI
+            from openai.lib._pydantic import to_strict_json_schema
         except ImportError as exc:
             raise ProviderFailure(
                 "provider_unavailable", "OpenAI provider dependency is unavailable"
@@ -67,6 +68,8 @@ class OpenAIResponsesProvider:
                 model=self.model_version,
                 instructions=(
                     "Generate de-identified candidate homework questions. "
+                    "E4 must return a nonblank generated reading_material containing every E4 "
+                    "evidence phrase; all other types must return reading_material null. "
                     "Return only JSON conforming to the supplied schema."
                 ),
                 input=json.dumps(request.model_dump(mode="json"), ensure_ascii=True),
@@ -75,7 +78,7 @@ class OpenAIResponsesProvider:
                         "type": "json_schema",
                         "name": "generated_question_candidates",
                         "strict": True,
-                        "schema": ProviderCandidatePayload.model_json_schema(),
+                        "schema": to_strict_json_schema(ProviderCandidatePayload),
                     }
                 },
             )

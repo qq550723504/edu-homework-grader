@@ -272,6 +272,7 @@ def valid_e4_candidate() -> dict[str, object]:
         "question_type": "E4",
         "policy_version": "2",
         "prompt": "Read the short passage and answer in one sentence.",
+        "reading_material": "Because the bridge was closed, they arrived late.",
         "rule_json": {
             "max_score": 3,
             "scoring_points": [
@@ -675,6 +676,140 @@ def test_valid_e4_candidate_probes_every_evidence_phrase(session: Session) -> No
     assert [request[1]["max_score"] for request in grader.grade_requests] == [2.0, 1.0]
     assert all(len(request[1]["scoring_points"]) == 1 for request in grader.grade_requests)
     assert draft.candidate_json["rule_json"]["scoring_points"][0]["score"] == 2
+
+
+@pytest.mark.parametrize(
+    ("material", "reason"),
+    [
+        (None, "missing_or_blank"),
+        ({}, "missing_or_blank"),
+        (" " * 2, "missing_or_blank"),
+        ("x" * 8_001, "too_long"),
+    ],
+)
+def test_e4_missing_or_oversized_material_blocks_without_grader_calls(
+    session: Session, material: object, reason: str
+) -> None:
+    candidate = valid_e4_candidate()
+    if material is None:
+        candidate.pop("reading_material")
+    else:
+        candidate["reading_material"] = material
+    grader = PassingE4Grader()
+
+    run = verification.run_candidate_verification(
+        session,
+        draft=generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate),
+        grader_client=grader,
+    )
+
+    finding = next(item for item in run.findings if item.code == "e4_reading_material_invalid")
+    assert finding.evidence_json == {
+        "reason": reason,
+        "scoring_point_count": 2,
+        "evidence_phrase_count": 2,
+    }
+    assert grader.grade_requests == []
+
+
+def test_legacy_persisted_e4_candidate_without_material_blocks_without_grader_calls(
+    session: Session,
+) -> None:
+    candidate = valid_e4_candidate()
+    candidate.pop("reading_material")
+    grader = PassingE4Grader()
+
+    run = verification.run_candidate_verification(
+        session,
+        draft=generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate),
+        grader_client=grader,
+    )
+
+    finding = next(item for item in run.findings if item.code == "e4_reading_material_invalid")
+    assert finding.evidence_json == {
+        "reason": "missing_or_blank",
+        "scoring_point_count": 2,
+        "evidence_phrase_count": 2,
+    }
+    assert grader.grade_requests == []
+
+
+def test_e4_material_mismatch_blocks_before_grader_and_never_echoes_text(
+    session: Session,
+) -> None:
+    candidate = valid_e4_candidate()
+    candidate["reading_material"] = "The road was open, and the students arrived early."
+    grader = PassingE4Grader()
+
+    run = verification.run_candidate_verification(
+        session,
+        draft=generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate),
+        grader_client=grader,
+    )
+
+    finding = next(item for item in run.findings if item.code == "e4_evidence_material_mismatch")
+    assert finding.evidence_json == {
+        "probe": "reading_material",
+        "scoring_point_count": 2,
+        "evidence_phrase_count": 2,
+    }
+    assert grader.grade_requests == []
+    assert "road was open" not in finding.remediation
+
+
+def test_e4_punctuation_only_evidence_is_invalid_without_grader_calls(
+    session: Session,
+) -> None:
+    candidate = valid_e4_candidate()
+    candidate["rule_json"]["scoring_points"] = [
+        {
+            "id": "reason",
+            "evidence_phrases": ["."],
+            "score": 2,
+        }
+    ]
+    candidate["rule_json"]["max_score"] = 2
+    grader = PassingE4Grader()
+
+    run = verification.run_candidate_verification(
+        session,
+        draft=generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate),
+        grader_client=grader,
+    )
+
+    finding = next(item for item in run.findings if item.code == "e4_scoring_points_invalid")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {
+        "reason": "normalized_empty_phrase",
+        "scoring_point_count": 1,
+        "evidence_phrase_count": 1,
+    }
+    assert grader.grade_requests == []
+
+
+def test_e4_normalized_material_match_and_material_safety_scan(session: Session) -> None:
+    candidate = valid_e4_candidate()
+    candidate["reading_material"] = "BECAUSE the bridge was closed.  THEY arrived late!"
+    assert (
+        verification.run_candidate_verification(
+            session,
+            draft=generation_draft(
+                session, allowed_question_types=["E4"], candidate_json=candidate
+            ),
+            grader_client=PassingE4Grader(),
+        ).status
+        is ValidationRunStatus.PASSED
+    )
+
+    candidate["reading_material"] = "self-harm instructions"
+    unsafe = verification.run_candidate_verification(
+        session,
+        draft=generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate),
+        grader_client=PassingE4Grader(),
+    )
+    assert next(
+        item for item in unsafe.findings if item.code == "unsafe_minor_content"
+    ).evidence_json == {"category": "self_harm"}
 
 
 def test_e4_normalized_duplicate_point_ids_are_blocked(session: Session) -> None:

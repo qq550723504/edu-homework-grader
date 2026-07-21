@@ -122,6 +122,35 @@ def teacher_and_objective(session: Session) -> tuple[User, CurriculumObjectiveRe
     return teacher, revision
 
 
+def teacher_and_e4_objective(session: Session) -> tuple[User, CurriculumObjectiveRevision]:
+    teacher, revision = teacher_and_objective(session)
+    revision.allowed_question_types = ["E4"]
+    session.commit()
+    return teacher, revision
+
+
+def create_and_fetch_e4_draft(client: TestClient, session: Session) -> object:
+    teacher, revision = teacher_and_e4_objective(session)
+    headers = authorize(client, teacher) | {"Idempotency-Key": "e4-reading-material"}
+    created = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=headers,
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "grade": "Grade 5",
+            "subject": "mathematics",
+            "question_types": ["E4"],
+            "requested_count": 1,
+            "policy_catalog_version": "2026.07",
+            "prompt_version": "generator-v1",
+        },
+    )
+    assert created.status_code == 201
+    return client.get(
+        f"/v1/ai-question-generation/jobs/{created.json()['id']}/questions", headers=headers
+    )
+
+
 def test_teacher_job_request_is_idempotent_and_never_publishes(
     client: TestClient, session: Session
 ) -> None:
@@ -149,6 +178,15 @@ def test_teacher_job_request_is_idempotent_and_never_publishes(
     assert questions.status_code == 200
     assert questions.json()["items"][0]["teacher_state"] == "pending_review"
     assert session.scalars(select(QuestionVersion)).all() == []
+
+
+def test_teacher_question_list_returns_e4_reading_material(
+    client: TestClient, session: Session
+) -> None:
+    response = create_and_fetch_e4_draft(client, session)
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["candidate"]["reading_material"]
 
 
 def test_generation_job_rejects_a_batch_over_the_configured_limit(
