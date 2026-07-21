@@ -164,6 +164,40 @@ test('teacher creates an M1 draft question through the browser', async ({ page }
   await expect(createdQuestion).toContainText('draft')
 })
 
+test('teacher creates guided E1 through E4 draft questions with current policies', async ({ page }) => {
+  await establishTeacherSession(page)
+  await page.goto(`${webBaseUrl}/teacher#questions`)
+
+  const scenarios = [
+    { type: 'E1', title: 'Browser E1', fill: async () => page.getByLabel('可接受答案').fill('cat') },
+    { type: 'E2', title: 'Browser E2', fill: async () => {
+      await page.getByLabel('词元').fill('go')
+      await page.getByLabel('可接受词形').fill('went')
+    } },
+    { type: 'E3', title: 'Browser E3', fill: async () => page.getByRole('radio', { name: '启用语法反馈', exact: true }).check() },
+    { type: 'E4', title: 'Browser E4', fill: async () => {
+      await page.getByLabel('评分点名称').fill('cause')
+      await page.getByLabel('证据短语').fill('bridge closed')
+    } },
+  ]
+
+  for (const scenario of scenarios) {
+    await page.getByLabel('题型', { exact: true }).selectOption(scenario.type)
+    await page.getByLabel('题目标题').fill(scenario.title)
+    await page.getByLabel('题干').fill('Answer the question.')
+    await scenario.fill()
+    const requestPromise = page.waitForRequest((request) => (
+      request.url().endsWith('/api/core/v1/questions') && request.method() === 'POST'
+    ))
+    await page.getByRole('button', { name: '创建草稿题目' }).click()
+    const request = await requestPromise
+    if (scenario.type === 'E4') {
+      expect(request.postDataJSON()).toMatchObject({ question_type: 'E4', policy_version: '2' })
+    }
+    await expect(page.getByText('草稿题目已创建')).toBeVisible()
+  }
+})
+
 test('teacher tests and publishes an M1 question through the browser', async ({ page }) => {
   await establishTeacherSession(page)
   await page.goto(`${webBaseUrl}/teacher`)

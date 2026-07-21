@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { addAssignmentItem, batchConfirmReviewTasks, createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, decideReviewTask, decideTeacherAppeal, fetchTeacherRosterClasses, fetchTeacherWorkspace, importTeacherRoster, publishAssignment, publishAttemptResults, publishQuestionVersion, runQuestionTests } from '../app/lib/teacher-api'
+import { addAssignmentItem, batchConfirmReviewTasks, createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, decideReviewTask, decideTeacherAppeal, fetchQuestionPolicyCatalog, fetchTeacherRosterClasses, fetchTeacherWorkspace, importTeacherRoster, publishAssignment, publishAttemptResults, publishQuestionVersion, runQuestionTests } from '../app/lib/teacher-api'
 
 describe('teacher workspace API', () => {
   it('loads classes, question versions, assignments and review metrics through the BFF', async () => {
@@ -37,6 +37,14 @@ describe('teacher workspace API', () => {
         rule: { expected: 5 },
       },
     })
+  })
+
+  it('loads the API-owned question policy catalog through the BFF', async () => {
+    const request = vi.fn().mockResolvedValue({ policies: [{ question_type: 'E4', policy_version: '2' }] })
+
+    await expect(fetchQuestionPolicyCatalog(request))
+      .resolves.toEqual([{ question_type: 'E4', policy_version: '2' }])
+    expect(request).toHaveBeenCalledWith('/api/core/v1/question-policy-catalog')
   })
 
   it('runs and publishes a version through CSRF-protected BFF endpoints', async () => {

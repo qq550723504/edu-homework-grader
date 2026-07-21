@@ -24,6 +24,41 @@
           </select>
         </label>
         <label v-if="question.question_type === 'M1'">正确答案<input v-model.trim="question.expected" aria-label="正确答案" required inputmode="decimal"></label>
+        <template v-else-if="isEnglishQuestion">
+          <label><input v-model="advancedJsonMode" type="checkbox"> 高级 JSON 模式</label>
+          <label v-if="advancedJsonMode">评分规则（JSON）<textarea v-model.trim="question.ruleJson" aria-label="评分规则" required rows="5" /></label>
+          <template v-else-if="question.question_type === 'E1'">
+            <label v-for="(_answer, index) in englishDraft.acceptedAnswers" :key="`e1-${index}`">可接受答案<input v-model.trim="englishDraft.acceptedAnswers[index]" aria-label="可接受答案"></label>
+            <button class="button secondary" type="button" @click="englishDraft.acceptedAnswers.push('')">添加可接受答案</button>
+          </template>
+          <template v-else-if="question.question_type === 'E2'">
+            <label>词元<input v-model.trim="englishDraft.lemma" aria-label="词元"></label>
+            <label v-for="(_form, index) in englishDraft.acceptedForms" :key="`e2-${index}`">可接受词形<input v-model.trim="englishDraft.acceptedForms[index]" aria-label="可接受词形"></label>
+            <button class="button secondary" type="button" @click="englishDraft.acceptedForms.push('')">添加可接受词形</button>
+            <label>词性<input v-model.trim="englishDraft.constraints.partOfSpeech" aria-label="词性"></label>
+            <label>时态<input v-model.trim="englishDraft.constraints.tense" aria-label="时态"></label>
+            <label>单复数<input v-model.trim="englishDraft.constraints.number" aria-label="单复数"></label>
+            <label>限定词<input v-model.trim="englishDraft.constraints.determiner" aria-label="限定词"></label>
+          </template>
+          <template v-else-if="question.question_type === 'E3'">
+            <label v-for="(_answer, index) in englishDraft.acceptedAnswers" :key="`e3-${index}`">可接受答案<input v-model.trim="englishDraft.acceptedAnswers[index]" aria-label="可接受答案"></label>
+            <label><input v-model="englishDraft.grammarFeedbackRequired" :value="true" type="radio"> 启用语法反馈</label>
+            <label><input v-model="englishDraft.grammarFeedbackRequired" :value="false" type="radio"> 不启用语法反馈</label>
+          </template>
+          <template v-else>
+            <section v-for="(point, index) in englishDraft.scoringPoints" :key="`e4-${index}`" class="stack">
+              <h3>评分点 {{ index + 1 }}</h3>
+              <label>评分点名称<input v-model.trim="point.id" aria-label="评分点名称"></label>
+              <label v-for="(_phrase, phraseIndex) in point.evidencePhrases" :key="`e4-${index}-${phraseIndex}`">证据短语<input v-model.trim="point.evidencePhrases[phraseIndex]" aria-label="证据短语"></label>
+              <button class="button secondary" type="button" @click="point.evidencePhrases.push('')">添加证据短语</button>
+              <label>评分点分值<input v-model.number="point.score" aria-label="评分点分值" type="number" min="0" max="100" step="any"></label>
+            </section>
+            <button class="button secondary" type="button" @click="addScoringPoint">添加评分点</button>
+            <label>语义阈值<input v-model.number="englishDraft.similarityThreshold" aria-label="语义阈值" type="number" min="0" max="1" step="0.01"></label>
+          </template>
+          <label>最高分<input v-model.number="englishDraft.maxScore" aria-label="最高分" type="number" min="0" max="100" step="any"></label>
+          <p v-for="(error, field) in questionErrors" :key="field" class="notice" role="alert">{{ error }}</p>
+        </template>
         <label v-else>评分规则（JSON）<textarea v-model.trim="question.ruleJson" aria-label="评分规则" required rows="5" /></label>
         <button class="button primary" :disabled="saving" type="submit">{{ saving ? '正在创建…' : '创建草稿题目' }}</button>
       </form>
@@ -117,7 +152,8 @@
 
 <script setup lang="ts">
 import { fetchCurrentPrincipal } from '../../lib/student-api'
-import { addAssignmentItem, createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, fetchTeacherRosterClasses, fetchTeacherWorkspace, importTeacherRoster, publishAssignment, publishQuestionVersion, runQuestionTests, type CreateQuestionInput, type QuestionTestRun, type TeacherAssignment, type TeacherQuestionVersion, type TeacherRosterClass } from '../../lib/teacher-api'
+import { addAssignmentItem, createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, fetchQuestionPolicyCatalog, fetchTeacherRosterClasses, fetchTeacherWorkspace, importTeacherRoster, publishAssignment, publishQuestionVersion, runQuestionTests, type CreateQuestionInput, type QuestionPolicyCatalogEntry, type QuestionTestRun, type TeacherAssignment, type TeacherQuestionVersion, type TeacherRosterClass } from '../../lib/teacher-api'
+import { buildEnglishQuestionRule, defaultEnglishDraft, fieldForPolicyError, type EnglishQuestionType } from '../../lib/english-question-authoring'
 import { teacherModules, type TeacherModule } from '../../lib/teacher-workbench'
 import { clearGuardianConsentEvidence, guardianConsentFieldsRequired, teacherErrorMessage } from '../../lib/teacher-workflow'
 
@@ -132,6 +168,10 @@ const saving = ref(false)
 const selectedVersionId = ref<string | null>(null)
 const latestTestRun = ref<QuestionTestRun | null>(null)
 const pendingAssignmentId = ref<string | null>(null)
+const questionPolicies = ref<QuestionPolicyCatalogEntry[]>([])
+const englishDraft = reactive(defaultEnglishDraft('E1'))
+const advancedJsonMode = ref(false)
+const questionErrors = ref<Record<string, string>>({})
 const activeModule = ref<TeacherModule>('overview')
 const route = useRoute()
 
@@ -148,10 +188,10 @@ function syncModuleFromHash(hash = route.hash) {
 const questionTypes = [
   { value: 'M1', label: 'M1 数值题', policy: '1', rule: '{"expected": 0}' },
   { value: 'M2', label: 'M2 表达式题', policy: '2', rule: '{"expected": ["Add", "x", 1], "variables": ["x"], "required_form": "expanded", "max_score": 1}' },
-  { value: 'E1', label: 'E1 精确匹配', policy: '2', rule: '{"accepted_answers": []}' },
-  { value: 'E2', label: 'E2 受限填空', policy: '1', rule: '{"accepted_forms": []}' },
-  { value: 'E3', label: 'E3 句子题', policy: '1', rule: '{}' },
-  { value: 'E4', label: 'E4 阅读简答辅助', policy: '1', rule: '{}' },
+  { value: 'E1', label: 'E1 精确匹配', policy: '', rule: '' },
+  { value: 'E2', label: 'E2 受限填空', policy: '', rule: '' },
+  { value: 'E3', label: 'E3 句子题', policy: '', rule: '' },
+  { value: 'E4', label: 'E4 阅读简答辅助', policy: '', rule: '' },
 ]
 const question = reactive({ title: '', prompt: '', question_type: 'M1', expected: '', ruleJson: questionTypes[0].rule })
 const questionFilter = reactive({ query: '', type: '' })
@@ -163,6 +203,7 @@ const filteredQuestionVersions = computed(() => workspace.value.questionVersions
   return (!query || `${version.title} ${version.prompt}`.toLocaleLowerCase().includes(query)) && (!questionFilter.type || version.question_type === questionFilter.type)
 }))
 const publishedQuestionVersions = computed(() => workspace.value.questionVersions.filter((version) => version.status === 'published'))
+const isEnglishQuestion = computed(() => ['E1', 'E2', 'E3', 'E4'].includes(question.question_type))
 const reviewCount = computed(() => workspace.value.reviewTasks.length)
 const publishedAssignments = computed(() => workspace.value.assignments.filter((assignment) => assignment.status === 'published').length)
 const completionRate = computed(() => {
@@ -179,29 +220,70 @@ function selectModule(module: TeacherModule) {
 }
 
 async function loadWorkspace() {
-  const [nextWorkspace, nextRosterClasses] = await Promise.all([
+  const [nextWorkspace, nextRosterClasses, nextQuestionPolicies] = await Promise.all([
     fetchTeacherWorkspace($fetch),
     fetchTeacherRosterClasses($fetch),
+    fetchQuestionPolicyCatalog($fetch),
   ])
   workspace.value = nextWorkspace
   rosterClasses.value = nextRosterClasses
+  questionPolicies.value = nextQuestionPolicies
   if (selectedRosterClassId.value && !nextRosterClasses.some((item) => item.id === selectedRosterClassId.value)) selectedRosterClassId.value = ''
 }
 
 function applyRuleTemplate() {
   const template = questionTypes.find((entry) => entry.value === question.question_type)!
+  questionErrors.value = {}
+  advancedJsonMode.value = false
+  if (isEnglishQuestion.value) {
+    Object.assign(englishDraft, defaultEnglishDraft(question.question_type as EnglishQuestionType))
+    if (question.question_type === 'E4') addScoringPoint()
+    question.ruleJson = ''
+    return
+  }
   question.ruleJson = template.rule
+}
+
+function addScoringPoint() {
+  englishDraft.scoringPoints.push({ id: '', evidencePhrases: [''], score: 1 })
 }
 
 function questionInput(): CreateQuestionInput {
   const template = questionTypes.find((entry) => entry.value === question.question_type)!
+  questionErrors.value = {}
   const rule = question.question_type === 'M1'
     ? { expected: Number(question.expected) }
-    : JSON.parse(question.ruleJson) as Record<string, unknown>
+    : isEnglishQuestion.value && !advancedJsonMode.value
+      ? guidedEnglishRule()
+      : JSON.parse(question.ruleJson) as Record<string, unknown>
   if (question.question_type === 'M1' && !Number.isFinite(rule.expected)) {
     throw new Error('正确答案必须是有限数字。')
   }
-  return { title: question.title, prompt: question.prompt, question_type: question.question_type, policy_version: template.policy, rule }
+  const policyVersion = isEnglishQuestion.value
+    ? questionPolicies.value.find((entry) => entry.question_type === question.question_type)?.policy_version
+    : template.policy
+  if (!policyVersion) throw new Error(`当前题型尚未开放：${question.question_type}`)
+  return { title: question.title, prompt: question.prompt, question_type: question.question_type, policy_version: policyVersion, rule }
+}
+
+function guidedEnglishRule(): Record<string, unknown> {
+  const result = buildEnglishQuestionRule(question.question_type as EnglishQuestionType, englishDraft)
+  questionErrors.value = result.errors
+  if (!result.rule) throw new Error('请修正题目规则中的错误。')
+  return result.rule
+}
+
+function applyQuestionPolicyErrors(error: unknown): boolean {
+  if (!isEnglishQuestion.value || typeof error !== 'object' || error === null || !('data' in error)) return false
+  const detail = (error as { data?: { detail?: { errors?: unknown } } }).data?.detail
+  if (!detail || !Array.isArray(detail.errors)) return false
+  questionErrors.value = Object.fromEntries(detail.errors.flatMap((item) => {
+    if (typeof item !== 'object' || item === null || !('path' in item) || !('message' in item)) return []
+    const path = typeof item.path === 'string' ? fieldForPolicyError(item.path) : null
+    const message = typeof item.message === 'string' ? item.message : null
+    return path && message ? [[path, message]] : []
+  }))
+  return Object.keys(questionErrors.value).length > 0
 }
 
 async function submitQuestion() {
@@ -218,7 +300,9 @@ async function submitQuestion() {
     question.expected = ''
     await loadWorkspace()
   } catch (error: unknown) {
-    message.value = error instanceof Error ? error.message : '创建题目失败，请稍后重试。'
+    message.value = applyQuestionPolicyErrors(error)
+      ? '请修正题目规则中的错误。'
+      : error instanceof Error ? error.message : '创建题目失败，请稍后重试。'
   } finally {
     saving.value = false
   }
