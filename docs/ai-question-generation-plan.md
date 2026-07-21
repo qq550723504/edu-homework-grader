@@ -1,6 +1,6 @@
 # K–13 课程约束型 AI 出题实施计划
 
-状态：Proposed
+状态：M1 基础能力已实现（#39）；教师审核接入与生成质量验证仍待后续 Issue
 更新日期：2026-07-21
 Epic：[#36](https://github.com/qq550723504/edu-homework-grader/issues/36)
 
@@ -23,6 +23,11 @@ Epic：[#36](https://github.com/qq550723504/edu-homework-grader/issues/36)
 ```
 
 AI 不拥有发布权限。任何候选题必须由教师明确接受，并继续通过现有 QuestionVersion 测试与发布门禁。
+
+当前实现的运行边界：Core API 持久化作业、配额、审计与候选草稿，`services/generator` 只处理
+去标识化的结构化请求和 Provider 适配。默认使用确定性 `fake` Provider；生产可选 OpenAI Responses
+Provider，但必须从 Secret Manager 注入 `OPENAI_API_KEY`，显式指定固定 `GENERATOR_OPENAI_MODEL`，并使用
+专用主机 allowlist。候选题只进入 `generated_question_drafts`，不创建或发布 `QuestionVersion`。
 
 ## 2. 产品原则
 
