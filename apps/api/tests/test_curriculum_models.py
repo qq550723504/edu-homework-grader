@@ -19,6 +19,9 @@ from edu_grader_api.models import (
     Base,
     CurriculumActivityType,
     CurriculumGradeMapping,
+    CurriculumImportBatch,
+    CurriculumImportIssue,
+    CurriculumImportStatus,
     CurriculumObjective,
     CurriculumObjectiveRevision,
     CurriculumPrerequisite,
@@ -147,11 +150,40 @@ def test_objective_belongs_to_one_profile_grade_mapping(session: Session) -> Non
     assert objective.grade_mapping_id == grade_mapping.id
 
 
-def test_curriculum_foundation_is_the_alembic_head() -> None:
+def test_curriculum_import_operations_is_the_alembic_head() -> None:
     config = Config("apps/api/alembic.ini")
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "0013_curriculum_profile_foundation"
+    assert script.get_current_head() == "0014_curriculum_import_operations"
+
+
+def test_import_batch_keeps_row_location_and_lifecycle(session: Session) -> None:
+    batch = CurriculumImportBatch(
+        profile=active_profile(session),
+        input_format="json",
+        content_digest="a" * 64,
+        baseline_fingerprint="b" * 64,
+        status=CurriculumImportStatus.DRAFT,
+        submitted_by_user_id=uuid4(),
+        change_summary="Initial curated import",
+        summary_json={"additions": 1},
+    )
+    issue = CurriculumImportIssue(
+        batch=batch,
+        source_path="/objectives/0/grade_level",
+        source_row=None,
+        source_column=None,
+        code="unknown_grade",
+        category="validation",
+        message="internal level is not supported by this profile",
+    )
+    session.add_all([batch, issue])
+    session.commit()
+
+    stored = session.get(CurriculumImportBatch, batch.id)
+    assert stored is not None
+    assert stored.status is CurriculumImportStatus.DRAFT
+    assert stored.issues[0].code == "unknown_grade"
 
 
 def test_k_grade_rejects_scored_question_types(session: Session) -> None:

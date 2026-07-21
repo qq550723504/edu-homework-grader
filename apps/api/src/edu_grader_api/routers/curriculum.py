@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -14,6 +14,7 @@ from ..dependencies import require_any_role, require_curriculum_admin
 from ..models import (
     CurriculumActivityType,
     CurriculumGradeMapping,
+    CurriculumImportBatch,
     CurriculumObjective,
     CurriculumObjectiveRevision,
     CurriculumProfile,
@@ -21,6 +22,7 @@ from ..models import (
     CurriculumRevisionStatus,
     CurriculumSourceRecord,
     Role,
+    User,
 )
 from ..services.curriculum import (
     CurriculumValidationError,
@@ -28,6 +30,24 @@ from ..services.curriculum import (
     create_objective_revision,
     create_prerequisite,
     validate_internal_level,
+)
+from ..services.curriculum_imports import (
+    ImportDocument,
+    ImportGradeMapping,
+    ImportLifecycleError,
+    ImportProfile,
+    ImportSource,
+    ImportValidationError,
+    StaleImportBaselineError,
+    activate_import,
+    analyse_import,
+    apply_import,
+    export_active_profile,
+    parse_csv_document,
+    retire_profile,
+    retirement_impact,
+    review_import,
+    submit_import_for_review,
 )
 
 
@@ -87,6 +107,19 @@ class CreatePrerequisiteRequest(BaseModel):
 
 class CurriculumRevisionStatusTransitionRequest(BaseModel):
     status: CurriculumRevisionStatus
+
+
+class CurriculumImportRequest(BaseModel):
+    format: Literal["json", "csv"]
+    document: dict[str, object] | str
+    profile: dict[str, object] | None = None
+    source: dict[str, object] | None = None
+    grade_mappings: list[dict[str, object]] | None = None
+    catalogue_fingerprint: str | None = Field(default=None, min_length=64, max_length=64)
+
+
+class ReviewImportRequest(BaseModel):
+    approve: bool
 
 
 @router.get("")
@@ -533,6 +566,270 @@ def create_prerequisite_route(
         ) from error
 
     return {"id": str(prerequisite.id), "relation_type": prerequisite.relation_type}
+
+
+@admin_router.post("/imports/dry-run")
+def dry_run_curriculum_import_route(
+    body: CurriculumImportRequest,
+    _: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    document = _import_document(body)
+    return _import_analysis_payload(analyse_import(session, document))
+
+
+@admin_router.post("/imports", status_code=status.HTTP_201_CREATED)
+def create_curriculum_import_route(
+    body: CurriculumImportRequest,
+    principal: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    document = _import_document(body)
+    try:
+        session.rollback()
+        with session.begin():
+            analysis = analyse_import(session, document)
+            if body.catalogue_fingerprint != analysis.catalogue_fingerprint:
+                raise StaleImportBaselineError("catalogue changed after dry-run")
+            batch = apply_import(
+                session,
+                document=document,
+                analysis=analysis,
+                actor=_current_user(session, principal),
+                input_format=body.format,
+            )
+            append_audit_event(
+                session,
+                tenant_id=UUID(principal.tenant_id),
+                actor_user_id=UUID(principal.user_id),
+                event_type="curriculum.import_created",
+                target_type="curriculum_import_batch",
+                target_id=batch.id,
+                metadata={"status": batch.status.value, "digest": batch.content_digest[:12]},
+            )
+    except (ImportValidationError, StaleImportBaselineError) as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    return _import_batch_payload(batch)
+
+
+@admin_router.post("/imports/{batch_id}/submit-review")
+def submit_curriculum_import_review_route(
+    batch_id: UUID,
+    principal: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    try:
+        session.rollback()
+        with session.begin():
+            batch = session.get(CurriculumImportBatch, batch_id)
+            if batch is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+                )
+            submit_import_for_review(session, batch=batch)
+            append_audit_event(
+                session,
+                tenant_id=UUID(principal.tenant_id),
+                actor_user_id=UUID(principal.user_id),
+                event_type="curriculum.import_submitted_for_review",
+                target_type="curriculum_import_batch",
+                target_id=batch.id,
+                metadata={"status": batch.status.value},
+            )
+    except ImportLifecycleError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    return _import_batch_payload(batch)
+
+
+@admin_router.post("/imports/{batch_id}/review")
+def review_curriculum_import_route(
+    batch_id: UUID,
+    body: ReviewImportRequest,
+    principal: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    try:
+        session.rollback()
+        with session.begin():
+            batch = session.get(CurriculumImportBatch, batch_id)
+            if batch is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+                )
+            review_import(
+                session,
+                batch=batch,
+                reviewer=_current_user(session, principal),
+                approve=body.approve,
+            )
+            append_audit_event(
+                session,
+                tenant_id=UUID(principal.tenant_id),
+                actor_user_id=UUID(principal.user_id),
+                event_type="curriculum.import_reviewed",
+                target_type="curriculum_import_batch",
+                target_id=batch.id,
+                metadata={"approved": body.approve, "status": batch.status.value},
+            )
+    except ImportLifecycleError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    return _import_batch_payload(batch)
+
+
+@admin_router.post("/imports/{batch_id}/activate")
+def activate_curriculum_import_route(
+    batch_id: UUID,
+    principal: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    try:
+        session.rollback()
+        with session.begin():
+            batch = session.get(CurriculumImportBatch, batch_id)
+            if batch is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+                )
+            activate_import(session, batch=batch, actor=_current_user(session, principal))
+            append_audit_event(
+                session,
+                tenant_id=UUID(principal.tenant_id),
+                actor_user_id=UUID(principal.user_id),
+                event_type="curriculum.import_activated",
+                target_type="curriculum_import_batch",
+                target_id=batch.id,
+                metadata={"status": batch.status.value},
+            )
+    except ImportLifecycleError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    return _import_batch_payload(batch)
+
+
+@admin_router.get("/import-schema")
+def curriculum_import_schema_route(
+    _: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
+) -> dict[str, object]:
+    return {
+        "json_schema": ImportDocument.model_json_schema(),
+        "csv_columns": [
+            "code",
+            "grade_level",
+            "subject",
+            "domain",
+            "text",
+            "source_locator",
+            "allowed_question_types",
+            "difficulty_min",
+            "difficulty_max",
+            "activity_type",
+            "change_summary",
+        ],
+    }
+
+
+@admin_router.get("/profiles/{profile_code}/export")
+def export_curriculum_profile_route(
+    profile_code: str,
+    _: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    document = export_active_profile(session, profile_code=profile_code)
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
+    return document.model_dump(mode="json")
+
+
+@admin_router.get("/profiles/{profile_id}/retirement-impact")
+def curriculum_retirement_impact_route(
+    profile_id: UUID,
+    _: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    profile = session.get(CurriculumProfile, profile_id)
+    if profile is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
+    return retirement_impact(profile)
+
+
+@admin_router.post("/profiles/{profile_id}/retire")
+def retire_curriculum_profile_route(
+    profile_id: UUID,
+    principal: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    session.rollback()
+    with session.begin():
+        profile = session.get(CurriculumProfile, profile_id)
+        if profile is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
+        impact = retirement_impact(profile)
+        if impact["references"]:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="profile has references"
+            )
+        retire_profile(session, profile=profile)
+        append_audit_event(
+            session,
+            tenant_id=UUID(principal.tenant_id),
+            actor_user_id=UUID(principal.user_id),
+            event_type="curriculum.profile_retired",
+            target_type="curriculum_profile",
+            target_id=profile.id,
+            metadata={"coverage": impact["coverage"]},
+        )
+    return _profile_payload(profile)
+
+
+def _import_document(body: CurriculumImportRequest) -> ImportDocument:
+    try:
+        if body.format == "json":
+            if not isinstance(body.document, dict):
+                raise ValueError("JSON imports require an object document")
+            return ImportDocument.model_validate(body.document)
+        if (
+            not isinstance(body.document, str)
+            or body.profile is None
+            or body.source is None
+            or body.grade_mappings is None
+        ):
+            raise ValueError(
+                "CSV imports require CSV text plus profile, source, and grade mappings"
+            )
+        return parse_csv_document(
+            body.document,
+            profile=ImportProfile.model_validate(body.profile),
+            source=ImportSource.model_validate(body.source),
+            grade_mappings=[
+                ImportGradeMapping.model_validate(item) for item in body.grade_mappings
+            ],
+        )
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="invalid curriculum import document",
+        ) from error
+
+
+def _current_user(session: Session, principal: CurrentPrincipal) -> User:
+    user = session.get(User, UUID(principal.user_id))
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
+    return user
+
+
+def _import_analysis_payload(analysis: object) -> dict[str, object]:
+    return analysis.model_dump(mode="json") | {"can_apply": analysis.can_apply}  # type: ignore[attr-defined]
+
+
+def _import_batch_payload(batch: CurriculumImportBatch) -> dict[str, object]:
+    return {
+        "id": str(batch.id),
+        "status": batch.status.value,
+        "profile_id": str(batch.profile_id),
+        "summary": batch.summary_json,
+        "reviewed_at": batch.reviewed_at.isoformat() if batch.reviewed_at else None,
+        "activated_at": batch.activated_at.isoformat() if batch.activated_at else None,
+    }
 
 
 def _active_profile(session: Session, profile_code: str) -> CurriculumProfile:

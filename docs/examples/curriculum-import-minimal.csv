@@ -1,0 +1,2 @@
+code,grade_level,subject,domain,text,source_locator,allowed_question_types,difficulty_min,difficulty_max,activity_type,change_summary
+EX-MATH-G1-NUM-001,G1,mathematics,number,Represent small whole numbers with drawings and objects.,section 1,M1,0.0,0.3,scored_question,Initial curated objective
