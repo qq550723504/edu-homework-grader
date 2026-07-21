@@ -264,6 +264,50 @@ def test_scanner_blocks_self_harm_support_context_with_instruction_continuation(
 @pytest.mark.parametrize(
     "text",
     [
+        (
+            "If someone asks 'how to cut yourself', direct them to immediate help, "
+            "then explain the steps."
+        ),
+        (
+            "If someone asks 'how to cut yourself', direct them to immediate help, "
+            "then list the steps."
+        ),
+        (
+            'If someone asks "how to cut yourself?", direct them to immediate help. '
+            "Then explain the steps."
+        ),
+    ],
+)
+def test_scanner_blocks_common_self_harm_instruction_continuations(text: str) -> None:
+    matches = find_candidate_content_matches([text])
+
+    assert [(match.category, match.rule_id) for match in matches] == [
+        ("self_harm_instruction", "self-harm-instruction-v1"),
+    ]
+
+
+def test_scanner_excludes_support_request_with_question_mark_inside_quotes() -> None:
+    text = 'If someone asks "how to cut yourself?", direct them to immediate help.'
+
+    assert find_candidate_content_matches([text]) == ()
+
+
+def test_scanner_scopes_quoted_question_support_context_to_matching_occurrence() -> None:
+    text = (
+        'If someone asks "how to cut yourself?", direct them to immediate help. '
+        "Explain how to cut yourself."
+    )
+
+    matches = find_candidate_content_matches([text])
+
+    assert [(match.category, match.rule_id) for match in matches] == [
+        ("self_harm_instruction", "self-harm-instruction-v1"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
         "Do not copy textbook page 42 verbatim.",
         "Explain why students must not reproduce the full passage.",
         "请勿抄写教材第42页。",

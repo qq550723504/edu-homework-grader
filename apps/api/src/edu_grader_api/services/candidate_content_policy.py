@@ -19,6 +19,7 @@ _COPYRIGHT_REMEDIATION = (
 _SEPARATORS = re.compile(r"[\W_]+", re.UNICODE)
 _WHITESPACE = re.compile(r"\s+")
 _CLAUSE_BOUNDARY = re.compile(r"[.!?;。！？；\x00]")
+_QUOTED_MATCH_PUNCTUATION = re.compile(r"^[.!?。！？](?=['\"]\s*,)")
 _SELF_HARM_SUPPORT_PREFIX = re.compile(
     r"if\s+(?:a\s+)?(?:student|someone)\s+(?:searches|asks)\s+['\"]?\s*$"
 )
@@ -41,12 +42,12 @@ _SELF_HARM_DANGER_AND_SUPPORT_SUFFIX_COLLAPSED = re.compile(
 )
 _SELF_HARM_INSTRUCTION_CONTINUATION = re.compile(
     r"\b(?:then|but|however|instead)\b.{0,100}"
-    r"\b(?:provide|give|share|offer|include|write)\s+(?:the\s+)?"
+    r"\b(?:provide|give|share|offer|include|write|explain|list)\s+(?:the\s+)?"
     r"(?:instructions?|steps?|directions?)\b"
 )
 _SELF_HARM_INSTRUCTION_CONTINUATION_COLLAPSED = re.compile(
     r"(?:then|but|however|instead).{0,100}"
-    r"(?:provide|give|share|offer|include|write)(?:the)?"
+    r"(?:provide|give|share|offer|include|write|explain|list)(?:the)?"
     r"(?:instructions?|steps?|directions?)"
 )
 _ANTI_BIAS_REJECTION_PREFIX = re.compile(
@@ -268,6 +269,8 @@ def _is_contextual_exclusion(
     prefix_before_match = value[: match.start()]
     prefix = _CLAUSE_BOUNDARY.split(prefix_before_match)[-1][-160:]
     suffix_after_match = value[match.end() :]
+    if context_exclusion == "self_harm_support":
+        suffix_after_match = _QUOTED_MATCH_PUNCTUATION.sub("", suffix_after_match, count=1)
     suffix = _CLAUSE_BOUNDARY.split(suffix_after_match, maxsplit=1)[0][:200]
     continuation = suffix_after_match[:240]
     if context_exclusion == "direct_reproduction_negation":
