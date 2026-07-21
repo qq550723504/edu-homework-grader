@@ -201,6 +201,28 @@ def test_teacher_creates_an_ordered_multi_question_assignment_atomically(
     ]
 
 
+def test_teacher_creates_an_ordered_english_assignment_atomically(
+    client: TestClient, session: Session
+) -> None:
+    teacher, _, _, classroom, _, _ = make_classroom_data(session)
+    published_e1 = published_question_version(
+        session, teacher=teacher, tenant=classroom.tenant, question_type="E1", title="Vocabulary"
+    )
+    published_e4 = published_question_version(
+        session, teacher=teacher, tenant=classroom.tenant, question_type="E4", title="Reading"
+    )
+
+    response = client.post(
+        "/v1/assignments",
+        headers=authorize(client, teacher),
+        json=assignment_payload(classroom)
+        | {"subject": "english", "question_version_ids": [str(published_e4.id), str(published_e1.id)]},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["positions"] == [1, 2]
+
+
 @pytest.mark.parametrize("question_version_ids", [[], ["published", "published"], ["english"]])
 def test_assignment_composition_rejects_empty_duplicate_and_cross_subject_versions(
     client: TestClient, session: Session, question_version_ids: list[str]
