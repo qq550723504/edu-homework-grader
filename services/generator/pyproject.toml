@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "edu-grader-generator"
+version = "0.1.0"
+description = "Provider-neutral structured candidate-question generation"
+requires-python = ">=3.12"
+dependencies = [
+  "pydantic>=2.10,<3",
+  "edu-grader-processor-policy",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
