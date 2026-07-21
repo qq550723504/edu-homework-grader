@@ -4,9 +4,9 @@
 
 **Goal:** Skip expensive CI jobs for documentation-only pull requests while preserving successful required-check statuses.
 
-**Architecture:** Keep the existing `CI` workflow triggers. A `changes` job uses `dorny/paths-filter@v3` to expose a `non_docs` output; each existing heavy job depends on that job and runs for non-pull-request events or when the pull request includes a non-document file. A focused pytest regression test protects the workflow contract.
+**Architecture:** Keep the existing `CI` workflow triggers. A `changes` job uses `dorny/paths-filter@v4` with `predicate-quantifier: every` to expose a `non_docs` output; each existing heavy job depends on that job and runs for non-pull-request events or when the pull request includes a non-document file. A focused pytest regression test protects the workflow contract.
 
-**Tech Stack:** GitHub Actions, `dorny/paths-filter@v3`, pytest, Ruff.
+**Tech Stack:** GitHub Actions, `dorny/paths-filter@v4`, pytest, Ruff.
 
 ## Global Constraints
 
@@ -14,6 +14,8 @@
 - Any non-document file, including `.github/**`, must run the complete CI workflow.
 - `push` to `main` and `workflow_dispatch` must always run the complete CI workflow.
 - Do not add workflow-level `paths-ignore`; required checks must not remain pending.
+- The filter must use `predicate-quantifier: every`; the default `some` would make `**` match every changed document file.
+- The workflow must grant `pull-requests: read` so the filter can list files for pull-request events.
 
 ---
 
@@ -47,8 +49,10 @@ def test_ci_skips_heavy_jobs_only_for_docs_only_pull_requests() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding="utf-8")
 
     assert "changes:" in workflow
-    assert "dorny/paths-filter@v3" in workflow
+    assert "dorny/paths-filter@v4" in workflow
     assert "non_docs:" in workflow
+    assert "pull-requests: read" in workflow
+    assert "predicate-quantifier: every" in workflow
     assert "'docs/**'" in workflow
     assert "'**/*.md'" in workflow
 
@@ -92,9 +96,10 @@ git commit -m "ci: skip heavy checks for docs-only pull requests"
       non_docs: ${{ steps.filter.outputs.non_docs }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
+          predicate-quantifier: every
           filters: |
             non_docs:
               - '**'

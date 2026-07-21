@@ -8,8 +8,11 @@ leaving required GitHub checks pending.
 ## Decision
 
 Keep the existing `CI` workflow trigger unchanged. Add a lightweight `changes` job that uses the
-maintained `dorny/paths-filter` action to publish whether a pull request contains a non-document
-file. Each existing expensive job depends on `changes` and runs when either:
+maintained `dorny/paths-filter@v4` action to publish whether a pull request contains a non-document
+file. The workflow grants that job `pull-requests: read`, which the action needs to list changed
+files. Its `non_docs` filter uses `predicate-quantifier: every` so a changed file must match `**`
+and must not match either documentation exclusion. Each existing expensive job depends on `changes`
+and runs when either:
 
 - the event is not a pull request; or
 - the pull request includes at least one file outside `docs/**` and outside `**/*.md`.
