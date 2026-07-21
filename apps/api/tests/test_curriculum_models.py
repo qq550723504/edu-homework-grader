@@ -1,6 +1,8 @@
 from uuid import uuid4
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -96,3 +98,10 @@ def test_prerequisite_cannot_reference_the_same_revision(session: Session) -> No
 
     with pytest.raises(IntegrityError):
         session.commit()
+
+
+def test_curriculum_foundation_is_the_alembic_head() -> None:
+    config = Config("apps/api/alembic.ini")
+    script = ScriptDirectory.from_config(config)
+
+    assert script.get_current_head() == "0013_curriculum_profile_foundation"
