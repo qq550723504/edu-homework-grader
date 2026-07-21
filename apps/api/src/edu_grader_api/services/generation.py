@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session
 
 from ..models import (
     CurriculumObjectiveRevision,
+    CurriculumProfileStatus,
+    CurriculumRevisionStatus,
     GeneratedQuestionDraft,
     GenerationAttempt,
     GenerationJob,
@@ -76,6 +78,12 @@ def create_or_get_job(
     revision = session.get(CurriculumObjectiveRevision, request.curriculum_objective_revision_id)
     if revision is None:
         raise GenerationServiceError("curriculum objective revision was not found")
+    if (
+        revision.status is not CurriculumRevisionStatus.ACTIVE
+        or revision.objective.status is not CurriculumProfileStatus.ACTIVE
+        or revision.objective.profile.status is not CurriculumProfileStatus.ACTIVE
+    ):
+        raise GenerationServiceError("curriculum objective revision must be active")
     if not set(request.question_types).issubset(set(revision.allowed_question_types)):
         raise GenerationServiceError("requested question types are not allowed by the objective")
 
@@ -119,10 +127,10 @@ def run_generation_job(
     if job.status in {GenerationJobStatus.READY_FOR_REVIEW, GenerationJobStatus.PARTIALLY_FAILED}:
         return job
 
-    request = _provider_request(job, teacher_constraint=teacher_constraint)
+    request = _provider_request(session, job, teacher_constraint=teacher_constraint)
     job.status = GenerationJobStatus.GENERATING
     job.started_at = job.started_at or utc_now()
-    session.flush()
+    session.commit()
 
     for attempt_number in range(len(job.attempts) + 1, max_attempts + 1):
         attempt = GenerationAttempt(
@@ -147,9 +155,18 @@ def run_generation_job(
                 continue
             break
 
+        if job.cancel_requested_at is None:
+            session.expire(job)
+            session.refresh(job)
         attempt.provider_name = result.provider_name
         attempt.model_version = result.model_version
         attempt.response_summary = {"candidate_count": len(result.candidates)}
+        if job.cancel_requested_at is not None:
+            _finish_attempt(attempt, status="cancelled", failure_code=None, started_at=started_at)
+            job.status = GenerationJobStatus.CANCELLED
+            job.finished_at = utc_now()
+            session.flush()
+            return job
         _finish_attempt(attempt, status="succeeded", failure_code=None, started_at=started_at)
         job.status = GenerationJobStatus.VALIDATING
         generated = _persist_valid_candidates(
@@ -184,17 +201,27 @@ def cancel_generation_job(session: Session, *, job: GenerationJob) -> Generation
     return job
 
 
-def _provider_request(job: GenerationJob, *, teacher_constraint: str | None) -> GenerationRequest:
+def _provider_request(
+    session: Session, job: GenerationJob, *, teacher_constraint: str | None
+) -> GenerationRequest:
     question_types = job.distribution_json.get("question_types", [])
     if not isinstance(question_types, list) or not all(
         isinstance(item, str) for item in question_types
     ):
         raise GenerationServiceError("generation job question type distribution is invalid")
+    revision = session.get(CurriculumObjectiveRevision, job.curriculum_objective_revision_id)
+    if revision is None:
+        raise GenerationServiceError("generation job objective revision was not found")
     return GenerationRequest(
         objective_revision_id=job.curriculum_objective_revision_id,
+        objective_text=revision.text,
+        knowledge_point=revision.objective.knowledge_point,
+        difficulty_min=revision.difficulty_min,
+        difficulty_max=revision.difficulty_max,
         grade=job.grade or "unspecified",
         subject=job.subject or "unspecified",
         question_types=question_types,
+        requested_count=job.requested_count,
         policy_version=job.policy_version or "unknown",
         prompt_version=job.prompt_version or "unknown",
         teacher_constraint=teacher_constraint,
@@ -235,7 +262,7 @@ def _persist_valid_candidates(
 
 
 def _request_digest(request: GenerationJobRequest) -> str:
-    content = request.model_dump(mode="json", exclude={"idempotency_key", "teacher_constraint"})
+    content = request.model_dump(mode="json", exclude={"idempotency_key"})
     return _content_hash(content)
 
 

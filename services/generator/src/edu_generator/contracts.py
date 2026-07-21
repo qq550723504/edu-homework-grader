@@ -28,9 +28,14 @@ class GenerationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     objective_revision_id: UUID
+    objective_text: str = Field(min_length=1, max_length=2_000)
+    knowledge_point: str | None = Field(default=None, max_length=200)
+    difficulty_min: float = Field(ge=0, le=1)
+    difficulty_max: float = Field(ge=0, le=1)
     grade: str = Field(min_length=1, max_length=100)
     subject: str = Field(min_length=1, max_length=100)
     question_types: list[QuestionType] = Field(min_length=1, max_length=20)
+    requested_count: int = Field(ge=1, le=20)
     policy_version: str = Field(min_length=1, max_length=100)
     prompt_version: str = Field(min_length=1, max_length=100)
     teacher_constraint: str | None = Field(default=None, max_length=1_000)

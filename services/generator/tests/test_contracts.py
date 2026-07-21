@@ -10,9 +10,13 @@ from edu_generator.providers import FakeGenerationProvider, ProviderFailure
 def test_fake_provider_returns_stable_m1_m2_e1_e4_envelopes() -> None:
     request = GenerationRequest(
         objective_revision_id=uuid4(),
+        objective_text="Use whole numbers under 100.",
+        difficulty_min=0,
+        difficulty_max=1,
         grade="Grade 5",
         subject="mathematics",
         question_types=["M1", "M2", "E1", "E4"],
+        requested_count=4,
         policy_version="2026.07",
         prompt_version="generator-v1",
         teacher_constraint="Use only whole numbers under 100.",

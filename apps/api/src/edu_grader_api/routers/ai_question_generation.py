@@ -69,6 +69,7 @@ def create_generation_job_route(
         job = create_or_get_job(session, request=request, actor=actor)
         created = existing is None
         if created:
+            session.commit()
             run_generation_job(
                 session,
                 job=job,
@@ -188,6 +189,7 @@ def regenerate_draft_route(
     try:
         job = create_or_get_job(session, request=request, actor=actor)
         if existing is None:
+            session.commit()
             run_generation_job(
                 session,
                 job=job,

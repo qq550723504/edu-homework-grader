@@ -124,6 +124,12 @@ def test_development_settings_allow_localhost_processor_host() -> None:
     assert settings.allowed_processor_hosts == {"grader", "localhost"}
 
 
+def test_openai_provider_default_uses_the_versioned_api_endpoint() -> None:
+    settings = Settings()
+
+    assert settings.generator_openai_base_url == "https://api.openai.com/v1"
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
