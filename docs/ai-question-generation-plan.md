@@ -1,7 +1,7 @@
 # K–13 课程约束型 AI 出题实施计划
 
-状态：Proposed  
-更新日期：2026-07-21  
+状态：Proposed
+更新日期：2026-07-21
 Epic：[#36](https://github.com/qq550723504/edu-homework-grader/issues/36)
 
 ## 1. 目标
