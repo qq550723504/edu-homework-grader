@@ -202,6 +202,95 @@ def valid_e3_candidate() -> dict[str, object]:
     }
 
 
+class PassingE4Grader(PassingGrader):
+    def __init__(self) -> None:
+        self.grade_requests: list[tuple[str, dict[str, object], dict[str, object], str | None]] = []
+
+    def grade(
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
+    ) -> GradeResult:
+        self.grade_requests.append((question_type, rule_json, answer_json, policy_version))
+        point = rule_json["scoring_points"][0]  # type: ignore[index]
+        return GradeResult("needs_review", point["score"], {}, "fake-e4-v1")  # type: ignore[index]
+
+
+class FailingE4Grader(PassingE4Grader):
+    def grade(
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
+    ) -> GradeResult:
+        raise RuntimeError("similarity dependency diagnostic")
+
+
+class UnexpectedE4DecisionGrader(PassingE4Grader):
+    def grade(
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
+    ) -> GradeResult:
+        return GradeResult("auto_accepted", 2, {}, "fake-e4-v1")
+
+
+class PartialE4Grader(PassingE4Grader):
+    def grade(
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
+    ) -> GradeResult:
+        return GradeResult("needs_review", 0, {}, "fake-e4-v1")
+
+
+class NonFiniteE4Grader(PassingE4Grader):
+    def grade(
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
+    ) -> GradeResult:
+        return GradeResult("needs_review", float("nan"), {}, "fake-e4-v1")
+
+
+def valid_e4_candidate() -> dict[str, object]:
+    return {
+        "question_type": "E4",
+        "policy_version": "2",
+        "prompt": "Read the short passage and answer in one sentence.",
+        "rule_json": {
+            "max_score": 3,
+            "scoring_points": [
+                {
+                    "id": "reason",
+                    "evidence_phrases": ["because the bridge was closed"],
+                    "score": 2,
+                },
+                {
+                    "id": "result",
+                    "evidence_phrases": ["they arrived late"],
+                    "score": 1,
+                },
+            ],
+        },
+        "explanation": "Identify both the cause and the result.",
+    }
+
+
 class PassingM2Grader:
     def __init__(self) -> None:
         self.normalization_requests: list[dict[str, object]] = []
@@ -563,6 +652,169 @@ def test_e3_schema_invalid_rules_do_not_call_the_grader(session: Session) -> Non
     candidate["rule_json"] = {"max_score": 1}
     draft = generation_draft(session, allowed_question_types=["E3"], candidate_json=candidate)
     grader = PassingE3Grader()
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    assert "policy_schema_invalid" in finding_codes(run)
+    assert grader.grade_requests == []
+
+
+def test_valid_e4_candidate_probes_every_evidence_phrase(session: Session) -> None:
+    draft = generation_draft(
+        session, allowed_question_types=["E4"], candidate_json=valid_e4_candidate()
+    )
+    grader = PassingE4Grader()
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    assert run.status is ValidationRunStatus.PASSED
+    assert [request[2]["text"] for request in grader.grade_requests] == [
+        "because the bridge was closed",
+        "they arrived late",
+    ]
+    assert [request[1]["max_score"] for request in grader.grade_requests] == [2.0, 1.0]
+    assert all(len(request[1]["scoring_points"]) == 1 for request in grader.grade_requests)
+    assert draft.candidate_json["rule_json"]["scoring_points"][0]["score"] == 2
+
+
+def test_e4_normalized_duplicate_point_ids_are_blocked(session: Session) -> None:
+    candidate = valid_e4_candidate()
+    candidate["rule_json"]["scoring_points"][1]["id"] = " Reason "
+    draft = generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate)
+    grader = PassingE4Grader()
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    finding = next(item for item in run.findings if item.code == "e4_scoring_points_invalid")
+    assert finding.evidence_json == {
+        "reason": "normalized_duplicate_id",
+        "scoring_point_count": 2,
+        "evidence_phrase_count": 2,
+    }
+    assert grader.grade_requests == []
+
+
+def test_e4_normalized_duplicate_phrases_are_blocked(session: Session) -> None:
+    candidate = valid_e4_candidate()
+    candidate["rule_json"]["scoring_points"][1]["evidence_phrases"] = [
+        " Because the bridge was closed."
+    ]
+    draft = generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate)
+    grader = PassingE4Grader()
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    finding = next(item for item in run.findings if item.code == "e4_scoring_points_invalid")
+    assert finding.evidence_json == {
+        "reason": "normalized_duplicate_phrase",
+        "scoring_point_count": 2,
+        "evidence_phrase_count": 2,
+    }
+    assert grader.grade_requests == []
+
+
+def test_e4_overlapping_phrases_across_points_are_blocked(session: Session) -> None:
+    candidate = valid_e4_candidate()
+    candidate["rule_json"]["scoring_points"][0]["evidence_phrases"] = ["bridge closed"]
+    candidate["rule_json"]["scoring_points"][1]["evidence_phrases"] = ["closed"]
+    draft = generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate)
+    grader = PassingE4Grader()
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    finding = next(item for item in run.findings if item.code == "e4_scoring_points_invalid")
+    assert finding.evidence_json == {
+        "reason": "overlapping_phrase",
+        "scoring_point_count": 2,
+        "evidence_phrase_count": 2,
+    }
+    assert grader.grade_requests == []
+
+
+def test_e4_score_total_mismatch_is_blocked(session: Session) -> None:
+    candidate = valid_e4_candidate()
+    candidate["rule_json"]["max_score"] = 4
+    draft = generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate)
+    grader = PassingE4Grader()
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    finding = next(item for item in run.findings if item.code == "e4_score_total_invalid")
+    assert finding.evidence_json == {
+        "scoring_point_count": 2,
+        "point_score_total": 3.0,
+        "max_score": 4.0,
+    }
+    assert grader.grade_requests == []
+
+
+def test_e4_score_total_uses_floating_point_tolerance(session: Session) -> None:
+    candidate = valid_e4_candidate()
+    candidate["rule_json"]["max_score"] = 0.9
+    candidate["rule_json"]["scoring_points"][0]["score"] = 0.7
+    candidate["rule_json"]["scoring_points"][1]["score"] = 0.2
+    draft = generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate)
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=PassingE4Grader()
+    )
+
+    assert run.status is ValidationRunStatus.PASSED
+
+
+@pytest.mark.parametrize("target", ["point_score", "max_score"])
+def test_e4_non_finite_scores_are_blocked_without_grader_calls(
+    session: Session, target: str
+) -> None:
+    candidate = valid_e4_candidate()
+    if target == "point_score":
+        candidate["rule_json"]["scoring_points"][0]["score"] = float("nan")
+    else:
+        candidate["rule_json"]["max_score"] = float("nan")
+    draft = generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate)
+    grader = PassingE4Grader()
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    finding = next(item for item in run.findings if item.code == "e4_score_total_invalid")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {
+        "reason": "non_finite_score",
+        "scoring_point_count": 2,
+        "evidence_phrase_count": 2,
+    }
+    assert grader.grade_requests == []
+
+
+@pytest.mark.parametrize(
+    "grader",
+    [FailingE4Grader(), UnexpectedE4DecisionGrader(), PartialE4Grader(), NonFiniteE4Grader()],
+)
+def test_e4_invalid_grader_probes_are_safely_blocked(
+    session: Session, grader: PassingE4Grader
+) -> None:
+    draft = generation_draft(
+        session, allowed_question_types=["E4"], candidate_json=valid_e4_candidate()
+    )
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    finding = next(item for item in run.findings if item.code == "e4_grader_probe_failed")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {
+        "probe": "evidence_phrases",
+        "scoring_point_count": 2,
+        "evidence_phrase_count": 2,
+    }
+    assert "similarity dependency diagnostic" not in finding.remediation
+    assert "because the bridge was closed" not in finding.remediation
+
+
+def test_e4_schema_invalid_rules_do_not_call_the_grader(session: Session) -> None:
+    candidate = valid_e4_candidate()
+    candidate["rule_json"] = {"max_score": 1}
+    draft = generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate)
+    grader = PassingE4Grader()
 
     run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
 
