@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import httpx
@@ -83,6 +84,32 @@ class HttpGraderClient:
                 "invalid_normalizer_response", "数学规范化服务响应无效。"
             )
         return ast
+
+    def semantic_similarity(self, query: str, comparisons: list[str]) -> list[float]:
+        payload = {"query": query, "comparisons": comparisons}
+        self._validate_request(payload)
+        response = httpx.post(
+            f"{self.base_url}/v1/semantic-similarity",
+            json=payload,
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict):
+            raise ValueError("semantic similarity response is invalid")
+        scores = data.get("scores")
+        if not isinstance(scores, list) or len(scores) != len(comparisons):
+            raise ValueError("semantic similarity response is invalid")
+        if any(
+            isinstance(score, bool)
+            or not isinstance(score, int | float)
+            or not math.isfinite(score)
+            or score < 0
+            or score > 1
+            for score in scores
+        ):
+            raise ValueError("semantic similarity response is invalid")
+        return [float(score) for score in scores]
 
     def _validate_request(self, payload: dict[str, object]) -> None:
         assert_allowed_processor_url(self.base_url, settings.allowed_processor_hosts)

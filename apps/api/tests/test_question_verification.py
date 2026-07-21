@@ -2,7 +2,7 @@ import importlib.util
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from edu_grader_api.models import (
@@ -19,10 +19,14 @@ from edu_grader_api.models import (
     GenerationJob,
     GenerationJobStatus,
     GeneratedQuestionDraft,
+    GradingPolicy,
+    Question,
+    QuestionVersion,
     Role,
     Tenant,
     User,
     ValidationRunStatus,
+    VersionStatus,
 )
 from edu_grader_api.services.questions import GradeResult
 import edu_grader_api.services.question_verification as verification
@@ -55,6 +59,28 @@ class PassingGrader:
             evidence={"probe": "accepted"},
             grader_version="fake-grader-v1",
         )
+
+    def semantic_similarity(self, query: str, comparisons: list[str]) -> list[float]:
+        return [0.0] * len(comparisons)
+
+
+class SemanticGrader(PassingGrader):
+    def __init__(self, responses: list[object]) -> None:
+        self.responses = list(responses)
+        self.semantic_requests: list[tuple[str, list[str]]] = []
+
+    def semantic_similarity(self, query: str, comparisons: list[str]) -> list[float]:
+        self.semantic_requests.append((query, comparisons))
+        if not self.responses:
+            raise RuntimeError("unexpected semantic similarity call")
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response  # type: ignore[return-value]
+
+
+class MissingSemanticGrader:
+    grade = PassingGrader.grade
 
 
 class FailingGrader(PassingGrader):
@@ -491,8 +517,262 @@ def generation_draft(
     return draft
 
 
+def add_batch_draft(
+    session: Session,
+    *,
+    draft: GeneratedQuestionDraft,
+    prompt: str,
+    ordinal: int,
+) -> GeneratedQuestionDraft:
+    comparison = GeneratedQuestionDraft(
+        job_id=draft.job_id,
+        generation_attempt_id=draft.generation_attempt_id,
+        ordinal=ordinal,
+        content_hash=f"{ordinal:064x}"[-64:],
+        candidate_json={**draft.candidate_json, "prompt": prompt},
+        teacher_state="pending_review",
+    )
+    session.add(comparison)
+    session.flush()
+    return comparison
+
+
+def add_published_question(
+    session: Session,
+    *,
+    draft: GeneratedQuestionDraft,
+    prompt: str,
+    tenant: Tenant | None = None,
+) -> QuestionVersion:
+    target_tenant = tenant or draft.job.tenant
+    policy = session.scalar(
+        select(GradingPolicy).where(
+            GradingPolicy.question_type == "M1", GradingPolicy.policy_version == "1"
+        )
+    )
+    if policy is None:
+        policy = GradingPolicy(question_type="M1", policy_version="1", json_schema={})
+    if target_tenant.id == draft.job.tenant_id:
+        teacher = draft.job.teacher
+    else:
+        teacher = User(
+            tenant=target_tenant,
+            role=Role.TEACHER,
+            oidc_issuer="https://issuer.example.test",
+            oidc_subject=str(uuid4()),
+            display_name="Other Teacher",
+            work_email=f"other-teacher-{uuid4()}@example.test",
+        )
+    question = Question(tenant=target_tenant, created_by_user=teacher, title="Published question")
+    version = QuestionVersion(
+        question=question,
+        version_number=1,
+        status=VersionStatus.PUBLISHED,
+        prompt=prompt,
+        question_type="M1",
+        grading_policy=policy,
+        rule_json={"expected": 4},
+        created_by_user=teacher,
+    )
+    session.add_all([teacher, policy, question, version])
+    session.flush()
+    return version
+
+
 def finding_codes(run: object) -> set[str]:
     return {finding.code for finding in run.findings}  # type: ignore[attr-defined]
+
+
+def finding_by_code(run: object, code: str) -> object:
+    return next(finding for finding in run.findings if finding.code == code)  # type: ignore[attr-defined]
+
+
+def valid_m1_candidate(prompt: str) -> dict[str, object]:
+    return {
+        "question_type": "M1",
+        "policy_version": "1",
+        "prompt": prompt,
+        "rule_json": {"expected": 4, "tolerance": 0},
+        "explanation": "Add the two whole numbers.",
+        "knowledge_point": "whole-number addition",
+    }
+
+
+def test_exact_batch_duplicate_is_blocked_without_source_text(session: Session) -> None:
+    draft = generation_draft(session)
+    add_batch_draft(session, draft=draft, prompt="What is 2 + 2?", ordinal=2)
+    grader = SemanticGrader([])
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    finding = finding_by_code(run, "duplicate_exact_prompt")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {"comparison": "batch_candidate", "method": "exact_hash"}
+    assert finding.severity.value == "blocked"
+    assert grader.semantic_requests == []
+
+
+def test_normalized_batch_duplicate_is_blocked_without_source_text(session: Session) -> None:
+    draft = generation_draft(session)
+    add_batch_draft(session, draft=draft, prompt="  ＷＨＡＴ   IS 2 + 2?  ", ordinal=2)
+    grader = SemanticGrader([])
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    finding = finding_by_code(run, "duplicate_normalized_prompt")
+    assert finding.evidence_json == {
+        "comparison": "batch_candidate",
+        "method": "normalized_hash",
+    }
+    assert grader.semantic_requests == []
+
+
+def test_semantic_published_question_is_blocked_without_raw_comparator(
+    session: Session,
+) -> None:
+    draft = generation_draft(session, candidate_json=valid_m1_candidate("Calculate two plus two."))
+    add_published_question(session, draft=draft, prompt="What is 2 + 2?")
+    grader = SemanticGrader([[0.96]])
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    finding = finding_by_code(run, "duplicate_semantic_near_match")
+    assert finding.evidence_json == {
+        "comparison": "published_question",
+        "method": "semantic",
+        "threshold_band": "at_or_above",
+    }
+    assert "What is 2 + 2?" not in str(finding.evidence_json)
+    assert run.feature_summary_json == {
+        "finding_count": len(run.findings),
+        "fingerprint_version": "question-fingerprint-v1",
+        "similarity_threshold": 0.92,
+        "comparison_counts": {"published_question": 1, "batch_candidate": 0},
+    }
+
+
+def test_semantic_same_batch_candidate_is_blocked(session: Session) -> None:
+    draft = generation_draft(session)
+    add_batch_draft(
+        session,
+        draft=draft,
+        prompt="Calculate the sum of two and two.",
+        ordinal=2,
+    )
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=SemanticGrader([[0.92]])
+    )
+
+    finding = finding_by_code(run, "duplicate_semantic_near_match")
+    assert finding.evidence_json == {
+        "comparison": "batch_candidate",
+        "method": "semantic",
+        "threshold_band": "at_or_above",
+    }
+
+
+def test_cross_tenant_published_questions_are_never_queried(session: Session) -> None:
+    draft = generation_draft(session, candidate_json=valid_m1_candidate("Calculate two plus two."))
+    add_published_question(session, draft=draft, prompt="What is the sum of two and two?")
+    other_tenant = Tenant(slug=f"other-{uuid4()}", name="Other")
+    session.add(other_tenant)
+    session.flush()
+    add_published_question(
+        session,
+        draft=draft,
+        tenant=other_tenant,
+        prompt="Private prompt from another tenant",
+    )
+    grader = SemanticGrader([[0.1]])
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    assert not finding_codes(run) & {
+        "duplicate_exact_prompt",
+        "duplicate_normalized_prompt",
+        "duplicate_semantic_near_match",
+        "duplicate_semantic_check_unavailable",
+    }
+    assert grader.semantic_requests == [
+        ("Calculate two plus two.", ["What is the sum of two and two?"])
+    ]
+    assert run.feature_summary_json["comparison_counts"] == {
+        "published_question": 1,
+        "batch_candidate": 0,
+    }
+
+
+def test_distinct_candidate_passes_duplicate_gate(session: Session) -> None:
+    draft = generation_draft(session, candidate_json=valid_m1_candidate("Calculate two plus two."))
+    add_published_question(session, draft=draft, prompt="Name the capital of France.")
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=SemanticGrader([[0.14]])
+    )
+
+    assert run.status is ValidationRunStatus.PASSED
+    assert not finding_codes(run) & {
+        "duplicate_exact_prompt",
+        "duplicate_normalized_prompt",
+        "duplicate_semantic_near_match",
+        "duplicate_semantic_check_unavailable",
+    }
+
+
+def test_missing_semantic_client_blocks_without_diagnostics(session: Session) -> None:
+    draft = generation_draft(session, candidate_json=valid_m1_candidate("Calculate two plus two."))
+    add_published_question(session, draft=draft, prompt="What is 2 + 2?")
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=MissingSemanticGrader()
+    )
+
+    finding = finding_by_code(run, "duplicate_semantic_check_unavailable")
+    assert finding.evidence_json == {"category": "similarity_unavailable"}
+    assert "What is 2 + 2?" not in str(finding.evidence_json)
+
+
+@pytest.mark.parametrize(
+    "scores",
+    [
+        [],
+        [0.1, 0.2],
+        [float("nan")],
+        [True],
+        [-0.01],
+        [1.01],
+    ],
+)
+def test_malformed_semantic_scores_fail_closed(session: Session, scores: list[object]) -> None:
+    draft = generation_draft(session, candidate_json=valid_m1_candidate("Calculate two plus two."))
+    add_published_question(session, draft=draft, prompt="What is 2 + 2?")
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=SemanticGrader([scores])
+    )
+
+    finding = finding_by_code(run, "duplicate_semantic_check_unavailable")
+    assert finding.evidence_json == {"category": "similarity_unavailable"}
+
+
+def test_multi_chunk_semantic_failure_fails_closed(session: Session) -> None:
+    draft = generation_draft(session, candidate_json=valid_m1_candidate("Calculate two plus two."))
+    for ordinal in range(2, 131):
+        add_batch_draft(
+            session,
+            draft=draft,
+            prompt=f"Distinct comparison prompt {ordinal}",
+            ordinal=ordinal,
+        )
+    grader = SemanticGrader([[0.1] * 128, RuntimeError("private dependency diagnostic")])
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    finding = finding_by_code(run, "duplicate_semantic_check_unavailable")
+    assert finding.evidence_json == {"category": "similarity_unavailable"}
+    assert [len(comparisons) for _, comparisons in grader.semantic_requests] == [128, 1]
+    assert "private" not in finding.remediation
 
 
 def test_valid_m1_candidate_persists_a_passing_run_and_rerun(session: Session) -> None:
@@ -1160,7 +1440,7 @@ def test_duplicate_and_unsafe_content_produce_explainable_findings(session: Sess
     )
 
     assert run.status is ValidationRunStatus.BLOCKED
-    assert {"duplicate_candidate_content", "unsafe_minor_content"} <= finding_codes(run)
+    assert {"duplicate_normalized_prompt", "unsafe_minor_content"} <= finding_codes(run)
     unsafe_finding = next(
         finding for finding in run.findings if finding.code == "unsafe_minor_content"
     )

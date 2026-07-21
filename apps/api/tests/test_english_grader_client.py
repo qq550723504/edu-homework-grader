@@ -1,14 +1,19 @@
+import math
+
+import pytest
+from edu_grader_processor_policy import ProcessorPolicyError
+
 from edu_grader_api.services.grader import HttpGraderClient
 
 
 class FakeResponse:
-    def __init__(self, payload: dict[str, object]) -> None:
+    def __init__(self, payload: object) -> None:
         self._payload = payload
 
     def raise_for_status(self) -> None:
         return None
 
-    def json(self) -> dict[str, object]:
+    def json(self) -> object:
         return self._payload
 
 
@@ -61,3 +66,65 @@ def test_e4_request_preserves_policy_version_feedback_and_signals(monkeypatch) -
     assert result.evidence["feedback"] == [{"type": "grammar", "message": "Use an"}]
     assert result.evidence["signals"] == [{"kind": "scoring_point", "highest_similarity": 0.95}]
     assert result.evidence["requires_review"] is True
+
+
+def test_http_grader_client_posts_semantic_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def post(url: str, *, json: dict[str, object], timeout: float) -> FakeResponse:
+        captured.update(url=url, json=json, timeout=timeout)
+        return FakeResponse({"scores": [0.94, 0.03], "embedding": {"id": "local-model"}})
+
+    monkeypatch.setattr("edu_grader_api.services.grader.httpx.post", post)
+
+    scores = HttpGraderClient("http://grader").semantic_similarity("query", ["first", "second"])
+
+    assert scores == [0.94, 0.03]
+    assert captured == {
+        "url": "http://grader/v1/semantic-similarity",
+        "json": {"query": "query", "comparisons": ["first", "second"]},
+        "timeout": 10,
+    }
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        {},
+        {"scores": "not-a-list"},
+        {"scores": [0.5]},
+        {"scores": [True, 0.5]},
+        {"scores": [math.nan, 0.5]},
+        {"scores": [math.inf, 0.5]},
+        {"scores": [-0.01, 0.5]},
+        {"scores": [1.01, 0.5]},
+    ],
+)
+def test_http_grader_client_rejects_malformed_semantic_scores(
+    monkeypatch: pytest.MonkeyPatch, payload: object
+) -> None:
+    monkeypatch.setattr(
+        "edu_grader_api.services.grader.httpx.post", lambda *args, **kwargs: FakeResponse(payload)
+    )
+
+    with pytest.raises(ValueError, match="semantic similarity response is invalid"):
+        HttpGraderClient("http://grader").semantic_similarity("query", ["first", "second"])
+
+
+def test_http_grader_client_validates_processor_policy_before_post(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    posted = False
+
+    def post(*args: object, **kwargs: object) -> FakeResponse:
+        nonlocal posted
+        posted = True
+        return FakeResponse({"scores": [0.1]})
+
+    monkeypatch.setattr("edu_grader_api.services.grader.httpx.post", post)
+
+    with pytest.raises(ProcessorPolicyError, match="not allowlisted"):
+        HttpGraderClient("https://external.example").semantic_similarity("query", ["comparison"])
+
+    assert posted is False

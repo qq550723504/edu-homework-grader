@@ -130,6 +130,32 @@ def test_openai_provider_default_uses_the_versioned_api_endpoint() -> None:
     assert settings.generator_openai_base_url == "https://api.openai.com/v1"
 
 
+def test_ai_duplicate_similarity_threshold_defaults_to_conservative_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AI_DUPLICATE_SIMILARITY_THRESHOLD", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.ai_duplicate_similarity_threshold == 0.92
+
+
+def test_ai_duplicate_similarity_threshold_uses_environment_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_DUPLICATE_SIMILARITY_THRESHOLD", "0.87")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.ai_duplicate_similarity_threshold == 0.87
+
+
+@pytest.mark.parametrize("threshold", [-0.01, 1.01, float("nan")])
+def test_ai_duplicate_similarity_threshold_rejects_invalid_values(threshold: float) -> None:
+    with pytest.raises(ValueError):
+        Settings(ai_duplicate_similarity_threshold=threshold)
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
