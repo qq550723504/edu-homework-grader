@@ -18,6 +18,7 @@ _COPYRIGHT_REMEDIATION = (
 )
 _SEPARATORS = re.compile(r"[\W_]+", re.UNICODE)
 _WHITESPACE = re.compile(r"\s+")
+_CLAUSE_BOUNDARY = re.compile(r"[.!?;。！？；\x00]")
 _SELF_HARM_SUPPORT_PREFIX = re.compile(
     r"if\s+(?:a\s+)?(?:student|someone)\s+(?:searches|asks)\s+['\"]?\s*$"
 )
@@ -38,10 +39,26 @@ _SELF_HARM_DANGER_AND_SUPPORT_SUFFIX_COLLAPSED = re.compile(
     r"^(?:is|are)(?:dangerous|harmful|unsafe)"
     r".{0,80}(?:seek|get|find|contact)(?:immediate)?help\b"
 )
-_ANTI_BIAS_PREFIX = re.compile(
-    r"(?:reject|condemn)(?:\s+the)?(?:\s+(?:false|harmful))?\s+claim\s+that\s+$"
+_SELF_HARM_INSTRUCTION_CONTINUATION = re.compile(
+    r"\b(?:then|but|however|instead)\b.{0,100}"
+    r"\b(?:provide|give|share|offer|include|write)\s+(?:the\s+)?"
+    r"(?:instructions?|steps?|directions?)\b"
 )
-_ANTI_BIAS_PREFIX_COLLAPSED = re.compile(r"(?:reject|condemn)(?:the)?(?:false|harmful)?claimthat$")
+_SELF_HARM_INSTRUCTION_CONTINUATION_COLLAPSED = re.compile(
+    r"(?:then|but|however|instead).{0,100}"
+    r"(?:provide|give|share|offer|include|write)(?:the)?"
+    r"(?:instructions?|steps?|directions?)"
+)
+_ANTI_BIAS_REJECTION_PREFIX = re.compile(
+    r"(?:(?:reject|condemn)(?:\s+the)?(?:\s+(?:false|harmful))?\s+claim\s+that|"
+    r"(?:explain|discuss|analyze|evaluate)(?:\s+why)?\s+(?:the\s+)?"
+    r"(?:false|wrong|harmful|untrue)\s+claim\s+that)\s*$"
+)
+_ANTI_BIAS_REJECTION_PREFIX_COLLAPSED = re.compile(
+    r"(?:(?:reject|condemn)(?:the)?(?:false|harmful)?claimthat|"
+    r"(?:explain|discuss|analyze|evaluate)(?:why)?(?:the)?"
+    r"(?:false|wrong|harmful|untrue)claimthat)$"
+)
 _ANTI_BIAS_EDUCATIONAL_PREFIX = re.compile(
     r"(?:explain|discuss|analyze|evaluate)\s+why\s+(?:the\s+)?claim\s+that\s+$"
 )
@@ -53,6 +70,23 @@ _ANTI_BIAS_REJECTION_SUFFIX = re.compile(
 )
 _ANTI_BIAS_REJECTION_SUFFIX_COLLAPSED = re.compile(
     r"^(?:is|are)(?:false|wrong|harmful|untrue|amyth)\b"
+)
+_ANTI_BIAS_AFFIRMATION_CONTINUATION = re.compile(
+    r"\b(?:then|but|however|instead)\b.{0,100}"
+    r"\b(?:the\s+claim|that\s+claim|it|this)\s+(?:is|was)\s+"
+    r"(?:actually\s+)?(?:true|correct|right|valid)\b"
+)
+_ANTI_BIAS_AFFIRMATION_CONTINUATION_COLLAPSED = re.compile(
+    r"(?:then|but|however|instead).{0,100}"
+    r"(?:theclaim|thatclaim|it|this)(?:is|was)(?:actually)?"
+    r"(?:true|correct|right|valid)"
+)
+_DIRECT_REPRODUCTION_NEGATION_PREFIX = re.compile(
+    r"(?:do\s+not|don't|must\s+not|should\s+not|never|not\s+to|"
+    r"cannot|can't|请勿|不要|不得|禁止)\s*$"
+)
+_DIRECT_REPRODUCTION_NEGATION_PREFIX_COLLAPSED = re.compile(
+    r"(?:donot|dont|mustnot|shouldnot|never|notto|cannot|cant|请勿|不要|不得|禁止)$"
 )
 
 
@@ -73,7 +107,9 @@ class _ContentPolicyRule:
     rule_id: str
     remediation: str
     patterns: tuple[Pattern[str], Pattern[str]]
-    context_exclusion: Literal["anti_bias", "self_harm_support"] | None = None
+    context_exclusion: (
+        Literal["anti_bias", "self_harm_support", "direct_reproduction_negation"] | None
+    ) = None
 
     def as_match(self) -> ContentPolicyMatch:
         return ContentPolicyMatch(
@@ -206,6 +242,7 @@ _RULES: tuple[_ContentPolicyRule, ...] = (
             r"(?:copy|reproduce)(?:(?:a|the))?(?:textbookpage\d+|thefullpassage|theprotectedquestionbank)(?:verbatim)?",
             chinese_patterns=(r"抄写教材第\d+页",),
         ),
+        context_exclusion="direct_reproduction_negation",
     ),
 )
 
@@ -220,18 +257,28 @@ def _normalized_forms(texts: Iterable[str]) -> tuple[str, str]:
 
 
 def _is_contextual_exclusion(
-    context_exclusion: Literal["anti_bias", "self_harm_support"] | None,
+    context_exclusion: Literal["anti_bias", "self_harm_support", "direct_reproduction_negation"]
+    | None,
     value: str,
     match: re.Match[str],
 ) -> bool:
     if context_exclusion is None:
         return False
 
-    prefix = value[max(0, match.start() - 100) : match.start()]
-    suffix = value[match.end() : match.end() + 100]
+    prefix_before_match = value[: match.start()]
+    prefix = _CLAUSE_BOUNDARY.split(prefix_before_match)[-1][-160:]
+    suffix_after_match = value[match.end() :]
+    suffix = _CLAUSE_BOUNDARY.split(suffix_after_match, maxsplit=1)[0][:200]
+    continuation = suffix_after_match[:240]
+    if context_exclusion == "direct_reproduction_negation":
+        return bool(
+            _DIRECT_REPRODUCTION_NEGATION_PREFIX.search(prefix)
+            or _DIRECT_REPRODUCTION_NEGATION_PREFIX_COLLAPSED.search(prefix)
+        )
     if context_exclusion == "anti_bias":
         has_rejection_prefix = bool(
-            _ANTI_BIAS_PREFIX.search(prefix) or _ANTI_BIAS_PREFIX_COLLAPSED.search(prefix)
+            _ANTI_BIAS_REJECTION_PREFIX.search(prefix)
+            or _ANTI_BIAS_REJECTION_PREFIX_COLLAPSED.search(prefix)
         )
         has_educational_frame = bool(
             (
@@ -243,7 +290,11 @@ def _is_contextual_exclusion(
                 and _ANTI_BIAS_REJECTION_SUFFIX_COLLAPSED.search(suffix)
             )
         )
-        return has_rejection_prefix or has_educational_frame
+        has_affirming_continuation = bool(
+            _ANTI_BIAS_AFFIRMATION_CONTINUATION.search(continuation)
+            or _ANTI_BIAS_AFFIRMATION_CONTINUATION_COLLAPSED.search(continuation)
+        )
+        return (has_rejection_prefix or has_educational_frame) and not has_affirming_continuation
     has_support_request = bool(
         (
             _SELF_HARM_SUPPORT_PREFIX.search(prefix)
@@ -264,13 +315,18 @@ def _is_contextual_exclusion(
             and _SELF_HARM_DANGER_AND_SUPPORT_SUFFIX_COLLAPSED.search(suffix)
         )
     )
-    return has_support_request or has_educational_frame
+    has_instruction_continuation = bool(
+        _SELF_HARM_INSTRUCTION_CONTINUATION.search(continuation)
+        or _SELF_HARM_INSTRUCTION_CONTINUATION_COLLAPSED.search(continuation)
+    )
+    return (has_support_request or has_educational_frame) and not has_instruction_continuation
 
 
 def _has_unexcluded_match(
     pattern: Pattern[str],
     value: str,
-    context_exclusion: Literal["anti_bias", "self_harm_support"] | None,
+    context_exclusion: Literal["anti_bias", "self_harm_support", "direct_reproduction_negation"]
+    | None,
 ) -> bool:
     for match in pattern.finditer(value):
         if not _is_contextual_exclusion(context_exclusion, value, match):

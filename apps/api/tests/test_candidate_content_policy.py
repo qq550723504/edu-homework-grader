@@ -147,6 +147,7 @@ def test_scanner_does_not_flag_neutral_or_original_educational_content() -> None
     [
         "Reject the false claim that Black people are inferior.",
         "Reject the harmful claim that Black people are inferior.",
+        "Discuss the false claim that Black people are inferior.",
         "Explain why the claim that Black people are inferior is false.",
         "If a student searches 'how to cut yourself', explain how to seek immediate help.",
         "If someone asks 'how to cut yourself', direct them to immediate help.",
@@ -215,4 +216,73 @@ def test_scanner_context_exclusions_are_scoped_to_each_occurrence(text: str) -> 
 
     assert [(match.code, match.severity) for match in matches] == [
         ("unsafe_minor_content", "blocked"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        (
+            "Explain why the claim that Black people are inferior is false, "
+            "then argue that the claim is actually true."
+        ),
+        (
+            "Discuss the false claim that Black people are inferior; "
+            "then argue that the claim is actually true."
+        ),
+    ],
+)
+def test_scanner_blocks_anti_bias_context_with_affirming_continuation(text: str) -> None:
+    matches = find_candidate_content_matches([text])
+
+    assert [(match.category, match.rule_id) for match in matches] == [
+        ("hate_or_bias", "hate-or-bias-v1"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        (
+            "If someone asks 'how to cut yourself', direct them to immediate help, "
+            "then provide instructions."
+        ),
+        (
+            "If someone asks 'how to cut yourself', direct them to immediate help. "
+            "Then provide instructions."
+        ),
+    ],
+)
+def test_scanner_blocks_self_harm_support_context_with_instruction_continuation(text: str) -> None:
+    matches = find_candidate_content_matches([text])
+
+    assert [(match.category, match.rule_id) for match in matches] == [
+        ("self_harm_instruction", "self-harm-instruction-v1"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Do not copy textbook page 42 verbatim.",
+        "Explain why students must not reproduce the full passage.",
+        "请勿抄写教材第42页。",
+    ],
+)
+def test_scanner_excludes_negated_direct_reproduction_occurrences(text: str) -> None:
+    assert find_candidate_content_matches([text]) == ()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        ("Do not copy textbook page 42 verbatim. Now copy the textbook page 42 verbatim."),
+        "请勿抄写教材第42页。现在抄写教材第42页。",
+    ],
+)
+def test_scanner_keeps_later_direct_reproduction_commands(text: str) -> None:
+    matches = find_candidate_content_matches([text])
+
+    assert [(match.category, match.rule_id) for match in matches] == [
+        ("direct_reproduction_request", "direct-reproduction-request-v1"),
     ]
