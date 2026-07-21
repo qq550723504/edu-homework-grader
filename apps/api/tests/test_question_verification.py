@@ -2051,6 +2051,8 @@ def test_grade_complexity_warns_only_above_prompt_unit_limit(
 def test_grade_complexity_uses_cjk_units_and_largest_sentence(session: Session) -> None:
     assert verification._lexical_unit_count("One 2's 中文") == 4
     assert verification._lexical_unit_count("élève") == 1
+    assert verification._lexical_unit_count("e\u0301lève") == 1
+    assert verification._lexical_unit_count("A\u030angstrom") == 1
     assert verification._max_sentence_units("One two. Three four five.") == 3
 
     draft = generation_draft(
@@ -2115,9 +2117,10 @@ def test_grade_complexity_compares_m2_numeric_values_as_decimals_before_serializ
     assert findings[0].evidence == {
         "grade_level": "G5",
         "metric": "max_numeric_absolute_value",
-        "observed": 10.0,
+        "observed": 10.000000000000002,
         "limit": 10,
     }
+    assert findings[0].evidence["observed"] > findings[0].evidence["limit"]
 
 
 def test_grade_complexity_reuses_m2_normalization_for_safe_metrics(session: Session) -> None:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation, localcontext
+from decimal import ROUND_CEILING, Decimal, InvalidOperation, localcontext
 import math
 import re
 from typing import Callable, Protocol
@@ -492,7 +492,7 @@ def _grade_complexity_findings(
 
 
 def _lexical_unit_count(text: str) -> int:
-    return len(_LEXICAL_UNITS.findall(text))
+    return len(_LEXICAL_UNITS.findall(unicodedata.normalize("NFC", text)))
 
 
 def _max_sentence_units(text: str) -> int:
@@ -506,7 +506,12 @@ def _complexity_observed_value(value: Decimal | int) -> int | float:
         return value
     if value == value.to_integral_value():
         return int(value)
-    return float(value)
+    observed = float(value)
+    if not math.isfinite(observed):
+        return int(value.to_integral_value(rounding=ROUND_CEILING))
+    if Decimal(str(observed)) < value:
+        return math.nextafter(observed, math.inf)
+    return observed
 
 
 def _m2_complexity_metrics(ast: dict[str, object]) -> tuple[Decimal | None, int]:
