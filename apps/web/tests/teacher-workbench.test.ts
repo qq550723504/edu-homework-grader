@@ -10,6 +10,14 @@ import {
 } from '../app/lib/teacher-workbench'
 
 describe('teacher workbench UI contract', () => {
+  it('renders desktop navigation inside the workbench sidebar shell', () => {
+    const teacherPage = readFileSync(new URL('../app/pages/teacher/index.vue', import.meta.url), 'utf8')
+
+    expect(teacherPage).toContain('<aside class="teacher-workbench__sidebar">')
+    expect(teacherPage).toContain('<section class="teacher-workbench__content">')
+    expect(teacherPage).toContain('<TeacherWorkbenchNav :active-module="activeModule" />')
+  })
+
   it('mounts the workbench navigation and live workspace modules on the teacher route', () => {
     const teacherPage = readFileSync(new URL('../app/pages/teacher/index.vue', import.meta.url), 'utf8')
     const overview = readFileSync(new URL('../app/components/teacher/TeacherOverview.vue', import.meta.url), 'utf8')

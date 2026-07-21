@@ -1,7 +1,17 @@
 <template>
-  <main class="shell teacher-page">
-    <NuxtLink class="back" to="/">← 返回</NuxtLink><LogoutButton />
-    <TeacherWorkbenchNav :active-module="activeModule" />
+  <main class="teacher-workbench">
+    <aside class="teacher-workbench__sidebar">
+      <NuxtLink class="teacher-brand" to="/teacher">作业批改</NuxtLink>
+      <p class="teacher-brand__role">教师工作区</p>
+      <TeacherWorkbenchNav :active-module="activeModule" />
+    </aside>
+
+    <section class="teacher-workbench__content">
+      <div class="shell teacher-page">
+        <header class="teacher-topbar">
+          <NuxtLink class="teacher-topbar__back" to="/">← 返回首页</NuxtLink>
+          <LogoutButton />
+        </header>
     <p v-if="message" class="notice" role="status">{{ message }}</p>
     <TeacherOverview
       v-if="activeModule === 'overview'"
@@ -172,6 +182,8 @@
         <label>CSV 文件<input accept=".csv,text/csv" required type="file" @change="selectRosterFile"></label>
         <button class="button secondary" :disabled="saving" type="submit">导入 CSV</button>
       </form>
+    </section>
+      </div>
     </section>
   </main>
 </template>
