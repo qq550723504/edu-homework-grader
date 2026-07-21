@@ -181,7 +181,7 @@
   - Grammar feedback creates warning, while a dependency or envelope failure creates blocked.
   - There is no LanguageTool import or HTTP call in `apps/api` and no `QuestionVersion` mutation.
 
-- [ ] **Step 3: Record completion and open a pull request.**
+- [x] **Step 3: Record completion and open a pull request.**
 
   Mark the executed plan steps as complete, then run:
 
