@@ -12,6 +12,7 @@ export interface TeacherQuestionVersion {
   question_type: string
   policy_version: string
   status: string
+  max_score: number
 }
 
 export interface TeacherAssignment {
@@ -105,10 +106,18 @@ export interface CreateAssignmentInput {
   subject: string
   due_at: string
   submission_rule: Record<string, unknown>
+  question_version_ids: string[]
+}
+
+export interface UpdateAssignmentInput {
+  title: string
+  due_at: string
+  submission_rule: Record<string, unknown>
+  question_version_ids: string[]
 }
 
 type Request = <T>(url: string, options?: {
-  method?: 'POST'
+  method?: 'POST' | 'PUT'
   headers?: Record<string, string>
   body?: unknown
 }) => Promise<T>
@@ -230,9 +239,17 @@ export function publishQuestionVersion(
 
 export function createAssignment(
   request: Request, csrfToken: string, input: CreateAssignmentInput,
-): Promise<{ id: string; status: string }> {
+): Promise<{ id: string; status: string; positions: number[] }> {
   return request('/api/core/v1/assignments', {
     method: 'POST', headers: { 'X-CSRF-Token': csrfToken }, body: input,
+  })
+}
+
+export function updateAssignment(
+  request: Request, csrfToken: string, assignmentId: string, input: UpdateAssignmentInput,
+): Promise<{ id: string; status: string; positions: number[] }> {
+  return request(`/api/core/v1/assignments/${assignmentId}`, {
+    method: 'PUT', headers: { 'X-CSRF-Token': csrfToken }, body: input,
   })
 }
 
