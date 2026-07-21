@@ -6,6 +6,11 @@
 
 - [K–13 AI 出题实施计划](ai-question-generation-plan.md)
 - [学生知识画像与自适应练习实施计划](adaptive-learning-plan.md)
+- [Learning Event v1 数据契约](contracts/learning-events-v1.md)
+- [Student Model v1 模型卡](model-cards/student-model-v1.md)
+- [学生知识画像隐私影响评估](privacy/student-profile-impact-assessment.md)
+- [自适应学习试点实验协议](experiments/adaptive-pilot-protocol.md)
+- [ADR-0002：自适应学习安全边界](adr/0002-adaptive-learning-safety-boundaries.md)
 
 ## 第一阶段：英语与数学作业批改 MVP
 
@@ -24,14 +29,16 @@
 
 ## 当前试点准备门槛
 
-AI 出题教师端完整验收前，应先完成：
+当前状态：
 
-- #29 英语 E1–E4 结构化建题表单与策略版本；
-- #30 多题、多题型作业编排与正确科目标记；
-- #31 真实 OIDC、PostgreSQL 与 Grader 全栈浏览器验收；
-- #32 学生同步错误分类与页面生命周期清理；
-- #33 真实试点环境部署、备份恢复与上线验收；
-- #34 项目状态和发布证据自动校验。
+- [x] #29 英语 E1–E4 结构化建题表单、策略版本和完整发布路径；
+- [x] #30 多题、多题型作业编排与正确科目标记；
+- [ ] #31 真实 OIDC、PostgreSQL 与 Grader 全栈浏览器验收；
+- [ ] #32 学生同步错误分类与页面生命周期清理；
+- [ ] #33 真实试点环境部署、备份恢复与上线验收；
+- [ ] #34 项目状态和发布证据自动校验。
+
+#31–#34 是把“代码与 CI 已验证”提升为“真实试点环境已验收”的主要门槛。
 
 ## 第二阶段：K–13 课程约束型 AI 出题
 
@@ -180,6 +187,68 @@ Epic：[#36](https://github.com/qq550723504/edu-homework-grader/issues/36)
 | 12–14 | 评估与治理 | 离线回放、学习增益、延迟保持、公平性、删除和人工救济 |
 | 15 | 教师影子试点 | 推荐只展示给教师，不自动派题，收集纠正和修改原因 |
 | 16 | 有限学生试点 | 仅开放通过门槛的年级、目标和题型，不影响正式成绩 |
+
+### 实施文档包
+
+第三阶段代码启动前，以下文档作为设计和验收基线：
+
+| 文档 | 约束内容 | 进入实现的门槛 |
+| --- | --- | --- |
+| [Learning Event v1](contracts/learning-events-v1.md) | 幂等事件、证据替代、映射、重放、删除 | 数据模型与事件评审通过 |
+| [Student Model v1 模型卡](model-cards/student-model-v1.md) | 输入、输出、算法、限制、公平性和回滚 | 教学、数据和安全评审通过 |
+| [隐私影响评估](privacy/student-profile-impact-assessment.md) | 用途、角色、风险、同意、删除和外部处理器 | 隐私/合规审批通过 |
+| [试点实验协议](experiments/adaptive-pilot-protocol.md) | 对照、指标、中止、安全和退出标准 | 教师影子试点前批准 |
+| [ADR-0002](adr/0002-adaptive-learning-safety-boundaries.md) | 不可变事件、教师证据、题目审核、Provider 隔离和正式成绩边界 | 架构决策 Accepted |
+
+### 建议实施工作流
+
+后续 Issue 应按以下工作流拆分，避免一个 Epic 同时承担数据、模型、前端和试点：
+
+| 优先级 | 工作流 | 核心交付 |
+| --- | --- | --- |
+| P0 | Learning Data | Learning Event、题目—目标映射、Outbox、重放和删除 |
+| P0 | Student Model | 掌握度、不确定性、状态快照、教师覆盖和版本回滚 |
+| P1 | Diagnosis & Calibration | 错误模式、题目难度、区分度和曝光统计 |
+| P1 | Recommendation | 目标选择、难度带、题目过滤、幂等练习会话和失败保护 |
+| P1 | Teacher Web | 热力图、证据解释、状态修正和推荐助手 |
+| P1 | Student Web | 个人知识地图、适龄解释、暂停/退出和低风险练习 |
+| P1 | Inventory | 题库覆盖矩阵和去标识化 AI 补题需求 |
+| P1 | Evaluation & Governance | 学习增益、保持度、公平性、隐私、删除和高利害限制 |
+
+### 分阶段发布门禁
+
+#### Gate A：数据与治理基线
+
+- Learning Event 契约和迁移通过；
+- 状态可以从固定事件水位重建；
+- 教师改分可以 supersede 旧证据；
+- 同意撤回、隐私限制、删除和跨租户测试通过；
+- 模型卡、隐私评估和 ADR 获批。
+
+#### Gate B：教师影子画像
+
+- 只对授权教师展示；
+- 不向学生展示，不自动推荐；
+- 教师可以查看证据、覆盖和冻结状态；
+- 低证据误标掌握、异常跳变和教师纠正率达到门槛；
+- Feature Flag 与 Kill Switch 可用。
+
+#### Gate C：教师推荐助手
+
+- 推荐只使用已发布题目；
+- 教师确认后才布置；
+- 近期重复、同目标轰炸、难度和连续失败保护通过；
+- 推荐原因、策略和模型版本可解释；
+- 教师接受、修改和拒绝形成评估数据。
+
+#### Gate D：有限学生自适应试点
+
+- 试点协议批准；
+- 学生/监护人说明、退出和人工救济可用；
+- 推荐不影响正式成绩；
+- 学习效果、体验和公平性没有明显退化；
+- 无障碍、监控、告警、备份恢复和事故响应通过；
+- 未经审核 AI 题展示率为 0。
 
 ### 模型演进
 

@@ -10,6 +10,8 @@
 | 学生作答与成绩 | `student_attempts`、`attempt_answers`、`grading_runs`、`grading_signals`、`grade_publications` | 提交、评分、反馈和发布 | restricted | 本人；对应班级教师；租户管理员 | Core API、Grader | 成绩发布后 2 年 | 保存期届满或批准的删除请求 |
 | 草稿作答 | 草稿状态的 `student_attempts`、`attempt_answers` | 自动保存和断网恢复 | restricted | 本人；对应班级教师 | Core API | 提交或放弃后 30 天 | 定时清理 |
 | 申诉与订正 | `review_appeals`、`correction_attempts`、`review_decisions`、`review_tasks` | 人工复核、订正和理由留存 | restricted | 本人；对应班级教师；租户管理员 | Core API | 决定后 2 年 | 保存期届满或批准的删除请求 |
+| 学习画像证据与状态 | `learning_events`、`objective_evidence`、`student_objective_states`、`student_model_snapshots`、`misconception_states` | 版本化学习证据、目标状态、可解释性与模型重放 | restricted | 本人；对应班级教师；租户管理员；受控模型运维 | Core API、Student Model | 试点结束或最后一次有效学习活动后 12 个月，以较早者为准 | 经保全检查的已验证删除请求、同意撤回后的派生数据清理、试点结束 |
+| 推荐、实验与内容需求 | `recommendation_sessions`、`experiment_assignments`、`content_demands` | 教师确认式推荐、受控试点评估与聚合题库缺口 | restricted | 本人；对应班级教师；租户管理员；受控实验分析人员 | Core API、Student Model、AI Generator（仅满足聚合阈值的 content demand） | 推荐会话 90 天；实验分组和 content demand 至试点结束后 12 个月 | 经保全检查的已验证删除请求、退出试点、试点结束或保存期届满 |
 | 安全审计 | `audit_logs`、`audit_chain_heads` | 安全调查、受控操作留痕和链完整性校验 | confidential | 租户管理员；事件响应人员 | Core API、Keycloak 事件存储 | 3 年 | 在独立链头导出完成后的保存期届满 |
 
 ## 身份与最小化规则
