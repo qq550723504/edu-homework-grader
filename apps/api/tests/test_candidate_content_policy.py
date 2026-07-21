@@ -101,3 +101,41 @@ def test_scanner_does_not_flag_neutral_or_original_educational_content() -> None
 
     for text in fixtures:
         assert find_candidate_content_matches([text]) == ()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Reject the false claim that Black people are inferior.",
+        "If a student searches 'how to cut yourself', explain how to seek immediate help.",
+    ],
+)
+def test_scanner_excludes_narrow_support_or_anti_bias_contexts(text: str) -> None:
+    assert find_candidate_content_matches([text]) == ()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Ωexplicit adult content",
+        "explicit adult contenté",
+    ],
+)
+def test_scanner_does_not_match_latin_phrase_inside_unicode_alphanumeric_text(text: str) -> None:
+    assert find_candidate_content_matches([text]) == ()
+
+
+def test_scanner_treats_underscores_as_separators() -> None:
+    matches = find_candidate_content_matches(["explicit_adult_content"])
+
+    assert [(match.category, match.rule_id) for match in matches] == [
+        ("adult_content", "adult-explicit-v1"),
+    ]
+
+
+def test_scanner_deduplicates_a_rule_across_repeated_inputs() -> None:
+    matches = find_candidate_content_matches(["explicit adult content", "explicit adult content"])
+
+    assert [(match.category, match.rule_id) for match in matches] == [
+        ("adult_content", "adult-explicit-v1"),
+    ]

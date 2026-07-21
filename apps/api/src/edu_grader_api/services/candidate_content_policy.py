@@ -37,6 +37,7 @@ class _ContentPolicyRule:
     rule_id: str
     remediation: str
     patterns: tuple[Pattern[str], Pattern[str]]
+    exclusions: tuple[Pattern[str], Pattern[str]] | None = None
 
     def as_match(self) -> ContentPolicyMatch:
         return ContentPolicyMatch(
@@ -49,8 +50,8 @@ class _ContentPolicyRule:
 
 
 def _latin_patterns(normalized: str, collapsed: str) -> tuple[Pattern[str], Pattern[str]]:
-    boundary = r"(?<![a-z0-9])"
-    end_boundary = r"(?![a-z0-9])"
+    boundary = r"(?<![^\W_])"
+    end_boundary = r"(?![^\W_])"
     return (
         re.compile(f"{boundary}(?:{normalized}){end_boundary}"),
         re.compile(f"{boundary}(?:{collapsed}){end_boundary}"),
@@ -70,6 +71,10 @@ def _patterns(
     )
 
 
+def _exclusion_patterns(normalized: str, collapsed: str) -> tuple[Pattern[str], Pattern[str]]:
+    return re.compile(normalized), re.compile(collapsed)
+
+
 _RULES: tuple[_ContentPolicyRule, ...] = (
     _ContentPolicyRule(
         code="unsafe_minor_content",
@@ -86,6 +91,10 @@ _RULES: tuple[_ContentPolicyRule, ...] = (
         rule_id="self-harm-instruction-v1",
         remediation=_UNSAFE_REMEDIATION,
         patterns=_patterns("how to cut yourself", "howtocutyourself", "如何自残"),
+        exclusions=_exclusion_patterns(
+            r"if\s+a\s+student\s+searches\s+['\"]?how\s+to\s+cut\s+yourself['\"]?,?\s+explain\s+how\s+to\s+seek\s+immediate\s+help",
+            r"ifastudentsearcheshowtocutyourselfexplainhowtoseekimmediatehelp",
+        ),
     ),
     _ContentPolicyRule(
         code="unsafe_minor_content",
@@ -115,6 +124,10 @@ _RULES: tuple[_ContentPolicyRule, ...] = (
             "(?:disabled|black|jewish|muslim|gay) people are inferior",
             "(?:disabled|black|jewish|muslim|gay)peopleareinferior",
             "残疾人低人一等",
+        ),
+        exclusions=_exclusion_patterns(
+            r"reject\s+the\s+false\s+claim\s+that\s+black\s+people\s+are\s+inferior",
+            r"rejectthefalseclaimthatblackpeopleareinferior",
         ),
     ),
     _ContentPolicyRule(
@@ -165,13 +178,27 @@ def _normalized_forms(texts: Iterable[str]) -> tuple[str, str]:
     return "\x00".join(normalized_texts), "\x00".join(collapsed_texts)
 
 
+def _has_unexcluded_match(
+    pattern: Pattern[str], value: str, exclusion: Pattern[str] | None
+) -> bool:
+    for match in pattern.finditer(value):
+        if exclusion is None or not any(
+            context.start() <= match.start() and match.end() <= context.end()
+            for context in exclusion.finditer(value)
+        ):
+            return True
+    return False
+
+
 def find_candidate_content_matches(texts: Iterable[str]) -> tuple[ContentPolicyMatch, ...]:
     normalized = _normalized_forms(texts)
     matches: list[ContentPolicyMatch] = []
     seen: set[tuple[str, str, str]] = set()
     for rule in _RULES:
+        exclusions = rule.exclusions or (None, None)
         if any(
-            pattern.search(value) for pattern, value in zip(rule.patterns, normalized, strict=True)
+            _has_unexcluded_match(pattern, value, exclusion)
+            for pattern, value, exclusion in zip(rule.patterns, normalized, exclusions, strict=True)
         ):
             key = (rule.code, rule.category, rule.rule_id)
             if key not in seen:
