@@ -361,6 +361,13 @@ class CurriculumObjectiveRevision(Base):
             "difficulty_min >= 0 AND difficulty_max <= 1 AND difficulty_min <= difficulty_max",
             name="ck_curriculum_revision_difficulty_range",
         ),
+        Index(
+            "uq_curriculum_active_revision_per_objective",
+            "objective_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+            sqlite_where=text("status = 'active'"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -371,7 +378,7 @@ class CurriculumObjectiveRevision(Base):
     text: Mapped[str] = mapped_column(String(2_000), nullable=False)
     source_locator: Mapped[str] = mapped_column(String(500), nullable=False)
     allowed_question_types: Mapped[list[str]] = mapped_column(
-        JSON().with_variant(JSONB, "postgresql"), nullable=False
+        JSONB().with_variant(JSON(), "sqlite"), nullable=False
     )
     difficulty_min: Mapped[float] = mapped_column(Float, nullable=False)
     difficulty_max: Mapped[float] = mapped_column(Float, nullable=False)

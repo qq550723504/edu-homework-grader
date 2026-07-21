@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     oidc_tenant_slug: str = "pilot"
     bootstrap_admin_sub: str = ""
     bootstrap_admin_tenant_slug: str = ""
+    curriculum_admin_subjects: str = ""
     audit_hmac_key: str = DEFAULT_AUDIT_HMAC_KEY
     audit_hmac_key_version: str = "dev-1"
     processor_allowed_hosts: str = "grader,languagetool,localhost"
@@ -59,6 +60,12 @@ class Settings(BaseSettings):
             item.strip().casefold()
             for item in self.processor_allowed_hosts.split(",")
             if item.strip()
+        )
+
+    @property
+    def curriculum_admin_subject_set(self) -> frozenset[str]:
+        return frozenset(
+            item.strip() for item in self.curriculum_admin_subjects.split(",") if item.strip()
         )
 
 

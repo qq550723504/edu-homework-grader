@@ -167,7 +167,11 @@ def upgrade() -> None:
         sa.Column("revision_number", sa.Integer(), nullable=False),
         sa.Column("text", sa.String(length=2000), nullable=False),
         sa.Column("source_locator", sa.String(length=500), nullable=False),
-        sa.Column("allowed_question_types", sa.JSON(), nullable=False),
+        sa.Column(
+            "allowed_question_types",
+            sa.dialects.postgresql.JSONB().with_variant(sa.JSON(), "sqlite"),
+            nullable=False,
+        ),
         sa.Column("difficulty_min", sa.Float(), nullable=False),
         sa.Column("difficulty_max", sa.Float(), nullable=False),
         sa.Column("activity_type", sa.String(length=30), nullable=False),
@@ -185,6 +189,14 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "objective_id", "revision_number", name="uq_curriculum_objective_revision"
         ),
+    )
+    op.create_index(
+        "uq_curriculum_active_revision_per_objective",
+        "curriculum_objective_revisions",
+        ["objective_id"],
+        unique=True,
+        postgresql_where=sa.text("status = 'active'"),
+        sqlite_where=sa.text("status = 'active'"),
     )
     op.create_table(
         "curriculum_prerequisites",
@@ -211,6 +223,10 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("curriculum_prerequisites")
+    op.drop_index(
+        "uq_curriculum_active_revision_per_objective",
+        table_name="curriculum_objective_revisions",
+    )
     op.drop_table("curriculum_objective_revisions")
     op.drop_index(
         "ix_curriculum_objectives_profile_subject_domain", table_name="curriculum_objectives"

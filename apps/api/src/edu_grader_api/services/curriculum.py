@@ -71,20 +71,28 @@ def activate_objective_revision(
     """Activate exactly one immutable revision for an objective."""
     if revision.status is not CurriculumRevisionStatus.IN_REVIEW:
         raise CurriculumValidationError("only in-review revisions can be activated")
-    if revision.objective.profile.status is not CurriculumProfileStatus.ACTIVE:
+    objective = session.scalar(
+        select(CurriculumObjective)
+        .where(CurriculumObjective.id == revision.objective_id)
+        .with_for_update()
+    )
+    if objective is None:
+        raise CurriculumValidationError("objective does not exist")
+    if objective.profile.status is not CurriculumProfileStatus.ACTIVE:
         raise CurriculumValidationError("objective profile is not active")
-    if revision.objective.status is not CurriculumProfileStatus.ACTIVE:
+    if objective.status is not CurriculumProfileStatus.ACTIVE:
         raise CurriculumValidationError("objective is not active")
 
     active_revisions = session.scalars(
         select(CurriculumObjectiveRevision).where(
-            CurriculumObjectiveRevision.objective_id == revision.objective_id,
+            CurriculumObjectiveRevision.objective_id == objective.id,
             CurriculumObjectiveRevision.status == CurriculumRevisionStatus.ACTIVE,
             CurriculumObjectiveRevision.id != revision.id,
         )
     )
     for active_revision in active_revisions:
         active_revision.status = CurriculumRevisionStatus.RETIRED
+    session.flush()
 
     revision.status = CurriculumRevisionStatus.ACTIVE
     revision.reviewed_by_user_id = reviewer_user_id
@@ -103,6 +111,13 @@ def create_prerequisite(
     """Add a requires edge after proving it cannot create a dependency cycle."""
     if objective_revision.id == prerequisite_revision.id:
         raise CurriculumValidationError("prerequisite cannot reference itself")
+    if objective_revision.objective.profile_id != prerequisite_revision.objective.profile_id:
+        raise CurriculumValidationError("prerequisites must belong to the same profile")
+    session.scalar(
+        select(CurriculumProfile)
+        .where(CurriculumProfile.id == objective_revision.objective.profile_id)
+        .with_for_update()
+    )
     if _depends_on(session, start=prerequisite_revision.id, target=objective_revision.id):
         raise CurriculumValidationError("prerequisite cycle detected")
     prerequisite = CurriculumPrerequisite(
@@ -157,12 +172,31 @@ def _validate_revision(
         raise CurriculumValidationError(
             f"unsupported question types: {', '.join(sorted(unsupported_types))}"
         )
+    allowed_for_subject = {
+        "mathematics": {"M1", "M2"},
+        "english": {"E1", "E2", "E3", "E4"},
+    }.get(objective.subject)
+    if allowed_for_subject is None or not set(allowed_question_types).issubset(allowed_for_subject):
+        raise CurriculumValidationError("question types do not match objective subject")
     if activity_type is not CurriculumActivityType.SCORED_QUESTION:
         raise CurriculumValidationError("non-K levels require scored_question activity type")
 
 
 def text_value(question_types: list[str]) -> bool:
     return bool(question_types) and all(isinstance(item, str) and item for item in question_types)
+
+
+def validate_internal_level(profile: CurriculumProfile, internal_level: str) -> None:
+    supported_by_profile = {
+        "cn-preschool-3-6-2012": {"K3_4", "K4_5", "K5_6"},
+        "cn-compulsory-2022": {f"G{grade}" for grade in range(1, 10)},
+        "cn-high-school-2017-2020": {"G10", "G11", "G12"},
+        "cefr-2020": {f"G{grade}" for grade in range(1, 14)},
+    }
+    valid_levels = {"K3_4", "K4_5", "K5_6"} | {f"G{grade}" for grade in range(1, 14)}
+    allowed_levels = supported_by_profile.get(profile.code, valid_levels)
+    if internal_level not in allowed_levels:
+        raise CurriculumValidationError("internal level is not supported by this profile")
 
 
 def _depends_on(session: Session, *, start: UUID, target: UUID) -> bool:

@@ -3,14 +3,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import String, cast, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..audit import append_audit_event
 from ..auth import CurrentPrincipal
 from ..db import get_session
-from ..dependencies import require_any_role, require_role
+from ..dependencies import require_any_role, require_curriculum_admin
 from ..models import (
     CurriculumActivityType,
     CurriculumGradeMapping,
@@ -27,6 +27,7 @@ from ..services.curriculum import (
     activate_objective_revision,
     create_objective_revision,
     create_prerequisite,
+    validate_internal_level,
 )
 
 
@@ -175,9 +176,16 @@ def list_objectives_route(
     if knowledge_point:
         statement = statement.where(CurriculumObjective.knowledge_point == knowledge_point)
     if question_type:
-        statement = statement.where(
-            CurriculumObjectiveRevision.allowed_question_types.contains([question_type])
-        )
+        if session.bind is not None and session.bind.dialect.name == "postgresql":
+            statement = statement.where(
+                CurriculumObjectiveRevision.allowed_question_types.contains([question_type])
+            )
+        else:
+            statement = statement.where(
+                cast(CurriculumObjectiveRevision.allowed_question_types, String).like(
+                    f'%"{question_type}"%'
+                )
+            )
 
     rows = session.execute(
         statement.order_by(
@@ -212,7 +220,7 @@ def list_objectives_route(
 @admin_router.post("/profiles", status_code=status.HTTP_201_CREATED)
 def create_profile_route(
     body: CreateProfileRequest,
-    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.ADMIN))],
+    principal: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, object]:
     session.rollback()
@@ -249,7 +257,7 @@ def create_profile_route(
 def create_grade_mapping_route(
     profile_id: UUID,
     body: CreateGradeMappingRequest,
-    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.ADMIN))],
+    principal: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, object]:
     session.rollback()
@@ -257,6 +265,12 @@ def create_grade_mapping_route(
         profile = session.get(CurriculumProfile, profile_id)
         if profile is None or profile.status is CurriculumProfileStatus.RETIRED:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
+        try:
+            validate_internal_level(profile, body.internal_level)
+        except CurriculumValidationError as error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+            ) from error
         mapping = CurriculumGradeMapping(profile=profile, **body.model_dump())
         session.add(mapping)
         session.flush()
@@ -276,7 +290,7 @@ def create_grade_mapping_route(
 def create_objective_route(
     profile_id: UUID,
     body: CreateObjectiveRequest,
-    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.ADMIN))],
+    principal: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, object]:
     session.rollback()
@@ -318,7 +332,7 @@ def create_objective_route(
 def transition_profile_route(
     profile_id: UUID,
     body: CurriculumStatusTransitionRequest,
-    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.ADMIN))],
+    principal: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, object]:
     session.rollback()
@@ -343,7 +357,7 @@ def transition_profile_route(
 def transition_objective_route(
     objective_id: UUID,
     body: CurriculumStatusTransitionRequest,
-    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.ADMIN))],
+    principal: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, object]:
     session.rollback()
@@ -368,7 +382,7 @@ def transition_objective_route(
 def create_objective_revision_route(
     objective_id: UUID,
     body: CreateObjectiveRevisionRequest,
-    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.ADMIN))],
+    principal: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, object]:
     try:
@@ -414,7 +428,7 @@ def create_objective_revision_route(
 @admin_router.post("/objective-revisions/{revision_id}/activate")
 def activate_objective_revision_route(
     revision_id: UUID,
-    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.ADMIN))],
+    principal: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, object]:
     try:
@@ -454,7 +468,7 @@ def activate_objective_revision_route(
 def transition_objective_revision_route(
     revision_id: UUID,
     body: CurriculumRevisionStatusTransitionRequest,
-    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.ADMIN))],
+    principal: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, object]:
     session.rollback()
@@ -481,7 +495,7 @@ def transition_objective_revision_route(
 def create_prerequisite_route(
     revision_id: UUID,
     body: CreatePrerequisiteRequest,
-    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.ADMIN))],
+    principal: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, str]:
     try:

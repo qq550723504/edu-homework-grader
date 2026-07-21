@@ -3,7 +3,8 @@ from uuid import uuid4
 import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -259,3 +260,29 @@ def test_prerequisite_rejects_an_indirect_cycle(session: Session) -> None:
             objective_revision=second_revision,
             prerequisite_revision=first_revision,
         )
+
+
+def test_only_one_active_revision_can_exist_per_objective(session: Session) -> None:
+    profile = active_profile(session)
+    objective = CurriculumObjective(
+        profile=profile,
+        grade_mapping=grade_mapping(session, profile),
+        code="MATH-G1-NUM-001",
+        subject="mathematics",
+        domain="number",
+        status=CurriculumProfileStatus.ACTIVE,
+    )
+    session.add_all([objective, revision(objective, 1), revision(objective, 2)])
+
+    with pytest.raises(IntegrityError):
+        session.commit()
+
+
+def test_question_type_filter_uses_postgresql_jsonb_containment() -> None:
+    statement = select(CurriculumObjectiveRevision).where(
+        CurriculumObjectiveRevision.allowed_question_types.contains(["M1"])
+    )
+
+    compiled = str(statement.compile(dialect=postgresql.dialect()))
+
+    assert " @> " in compiled

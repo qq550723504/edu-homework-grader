@@ -133,6 +133,7 @@ def curriculum_context(session: Session, monkeypatch: pytest.MonkeyPatch) -> Cur
 
     monkeypatch.setattr(settings, "oidc_issuer", ISSUER)
     monkeypatch.setattr(settings, "oidc_tenant_slug", "pilot")
+    monkeypatch.setattr(settings, "curriculum_admin_subjects", "admin-subject")
     app.dependency_overrides[get_session] = lambda: session
     app.dependency_overrides[get_token_verifier] = lambda: StaticVerifier(
         {
@@ -234,6 +235,49 @@ def test_second_tenant_teacher_reads_the_same_global_catalogue(
 
     assert response.status_code == 200
     assert response.json()["items"][0]["code"] == "cn-compulsory-2022"
+
+
+def test_second_tenant_admin_cannot_write_the_global_catalogue(
+    curriculum_context: CurriculumContext, session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    second_tenant = Tenant(slug="pilot-2", name="Pilot 2")
+    second_admin = User(
+        tenant=second_tenant,
+        role=Role.ADMIN,
+        oidc_issuer=ISSUER,
+        oidc_subject="second-admin-subject",
+        display_name="Second admin",
+        work_email="admin-2@example.test",
+    )
+    session.add_all([second_tenant, second_admin])
+    session.commit()
+    monkeypatch.setattr(settings, "oidc_tenant_slug", "pilot-2")
+    app.dependency_overrides[get_token_verifier] = lambda: StaticVerifier(
+        {
+            "second-admin-token": VerifiedIdentity(
+                issuer=ISSUER, subject="second-admin-subject", school_id=None
+            )
+        }
+    )
+
+    response = curriculum_context.client.post(
+        "/v1/admin/curriculum/profiles",
+        json={
+            "code": "unauthorized-profile",
+            "name": "Unauthorized",
+            "jurisdiction": "district-2",
+            "version_label": "2026",
+            "source": {
+                "issuer": "District 2",
+                "title": "Curriculum",
+                "canonical_url": "https://example.test/unauthorized",
+                "version_label": "2026",
+            },
+        },
+        headers=headers("second-admin-token"),
+    )
+
+    assert response.status_code == 404
 
 
 def test_admin_creates_a_profile_grade_mapping_and_objective(
@@ -353,6 +397,23 @@ def test_admin_creates_and_activates_an_append_only_revision(
     )
 
 
+def test_admin_gets_422_for_an_internal_level_not_supported_by_profile(
+    curriculum_context: CurriculumContext,
+) -> None:
+    profile_id = curriculum_context.client.get(
+        "/v1/curriculum-profiles", headers=headers("admin-token")
+    ).json()["items"][0]["id"]
+
+    response = curriculum_context.client.post(
+        f"/v1/admin/curriculum/profiles/{profile_id}/grade-mappings",
+        json={"internal_level": "G13", "external_label": "十三年级", "position": 20},
+        headers=headers("admin-token"),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "internal level is not supported by this profile"
+
+
 def test_admin_gets_422_for_scored_question_revision_on_kindergarten_objective(
     curriculum_context: CurriculumContext, session: Session
 ) -> None:
@@ -393,6 +454,27 @@ def test_admin_gets_422_for_scored_question_revision_on_kindergarten_objective(
 
     assert response.status_code == 422
     assert response.json()["detail"] == "K levels only allow learning_activity-v1"
+
+
+def test_admin_gets_422_for_question_type_from_another_subject(
+    curriculum_context: CurriculumContext,
+) -> None:
+    response = curriculum_context.client.post(
+        f"/v1/admin/curriculum/objectives/{curriculum_context.objective_id}/revisions",
+        json={
+            "revision_number": 2,
+            "text": "Use whole numbers in practical situations.",
+            "source_locator": "section 1.1",
+            "allowed_question_types": ["E1"],
+            "difficulty_min": 0.1,
+            "difficulty_max": 0.5,
+            "activity_type": "scored_question",
+        },
+        headers=headers("admin-token"),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "question types do not match objective subject"
 
 
 def test_admin_creates_requires_prerequisite_and_rejects_a_cycle(
