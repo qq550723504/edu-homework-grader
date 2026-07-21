@@ -28,10 +28,32 @@ _SELF_HARM_SUPPORT_SUFFIX = re.compile(
 _SELF_HARM_SUPPORT_SUFFIX_COLLAPSED = re.compile(
     r"^(?:explainhowtoseek|direct(?:them|thereader)to)(?:immediate)?help"
 )
+_SELF_HARM_EDUCATIONAL_PREFIX = re.compile(r"(?:explain|discuss|describe)(?:\s+why)?\s+['\"]?\s*$")
+_SELF_HARM_EDUCATIONAL_PREFIX_COLLAPSED = re.compile(r"(?:explain|discuss|describe)(?:why)?$")
+_SELF_HARM_DANGER_AND_SUPPORT_SUFFIX = re.compile(
+    r"^['\"]?\s+(?:is|are)\s+(?:dangerous|harmful|unsafe)\b"
+    r".{0,80}\b(?:seek|get|find|contact)\s+(?:immediate\s+)?help\b"
+)
+_SELF_HARM_DANGER_AND_SUPPORT_SUFFIX_COLLAPSED = re.compile(
+    r"^(?:is|are)(?:dangerous|harmful|unsafe)"
+    r".{0,80}(?:seek|get|find|contact)(?:immediate)?help\b"
+)
 _ANTI_BIAS_PREFIX = re.compile(
     r"(?:reject|condemn)(?:\s+the)?(?:\s+(?:false|harmful))?\s+claim\s+that\s+$"
 )
 _ANTI_BIAS_PREFIX_COLLAPSED = re.compile(r"(?:reject|condemn)(?:the)?(?:false|harmful)?claimthat$")
+_ANTI_BIAS_EDUCATIONAL_PREFIX = re.compile(
+    r"(?:explain|discuss|analyze|evaluate)\s+why\s+(?:the\s+)?claim\s+that\s+$"
+)
+_ANTI_BIAS_EDUCATIONAL_PREFIX_COLLAPSED = re.compile(
+    r"(?:explain|discuss|analyze|evaluate)why(?:the)?claimthat$"
+)
+_ANTI_BIAS_REJECTION_SUFFIX = re.compile(
+    r"^\s+(?:is|are)\s+(?:false|wrong|harmful|untrue|a\s+myth)\b"
+)
+_ANTI_BIAS_REJECTION_SUFFIX_COLLAPSED = re.compile(
+    r"^(?:is|are)(?:false|wrong|harmful|untrue|amyth)\b"
+)
 
 
 @dataclass(frozen=True)
@@ -73,12 +95,15 @@ def _latin_patterns(normalized: str, collapsed: str) -> tuple[Pattern[str], Patt
 
 
 def _patterns(
-    normalized: str, collapsed: str, *chinese_phrases: str
+    normalized: str,
+    collapsed: str,
+    *chinese_phrases: str,
+    chinese_patterns: tuple[str, ...] = (),
 ) -> tuple[Pattern[str], Pattern[str]]:
     normal_latin, collapsed_latin = _latin_patterns(normalized, collapsed)
-    if not chinese_phrases:
+    if not chinese_phrases and not chinese_patterns:
         return normal_latin, collapsed_latin
-    chinese = "|".join(re.escape(phrase) for phrase in chinese_phrases)
+    chinese = "|".join([*(re.escape(phrase) for phrase in chinese_phrases), *chinese_patterns])
     return (
         re.compile(f"(?:{normal_latin.pattern}|{chinese})"),
         re.compile(f"(?:{collapsed_latin.pattern}|{chinese})"),
@@ -92,7 +117,11 @@ _RULES: tuple[_ContentPolicyRule, ...] = (
         category="adult_content",
         rule_id="adult-explicit-v1",
         remediation=_UNSAFE_REMEDIATION,
-        patterns=_patterns("explicit adult content", "explicitadultcontent", "露骨成人内容"),
+        patterns=_patterns(
+            "(?:explicit adult content|pornographic|sexual content)",
+            "(?:explicitadultcontent|pornographic|sexualcontent)",
+            "露骨成人内容",
+        ),
     ),
     _ContentPolicyRule(
         code="unsafe_minor_content",
@@ -100,7 +129,11 @@ _RULES: tuple[_ContentPolicyRule, ...] = (
         category="self_harm_instruction",
         rule_id="self-harm-instruction-v1",
         remediation=_UNSAFE_REMEDIATION,
-        patterns=_patterns("how to cut yourself", "howtocutyourself", "如何自残"),
+        patterns=_patterns(
+            "(?:how to cut yourself|self-harm instructions)",
+            "(?:howtocutyourself|selfharminstructions)",
+            "如何自残",
+        ),
         context_exclusion="self_harm_support",
     ),
     _ContentPolicyRule(
@@ -109,7 +142,11 @@ _RULES: tuple[_ContentPolicyRule, ...] = (
         category="graphic_violence",
         rule_id="graphic-violence-v1",
         remediation=_UNSAFE_REMEDIATION,
-        patterns=_patterns("graphic dismemberment", "graphicdismemberment", "血腥肢解"),
+        patterns=_patterns(
+            "(?:graphic dismemberment|graphic violence)",
+            "(?:graphicdismemberment|graphicviolence)",
+            "血腥肢解",
+        ),
     ),
     _ContentPolicyRule(
         code="unsafe_minor_content",
@@ -165,9 +202,9 @@ _RULES: tuple[_ContentPolicyRule, ...] = (
         rule_id="direct-reproduction-request-v1",
         remediation=_COPYRIGHT_REMEDIATION,
         patterns=_patterns(
-            r"(?:copy|reproduce)\s+(?:a\s+)?(?:textbook\s+page\s+\d+|the\s+full\s+passage|the\s+protected\s+question\s+bank)(?:\s+verbatim)?",
-            r"(?:copy|reproduce)(?:a)?(?:textbookpage\d+|thefullpassage|theprotectedquestionbank)(?:verbatim)?",
-            "抄写教材第12页",
+            r"(?:copy|reproduce)\s+(?:(?:a|the)\s+)?(?:textbook\s+page\s+\d+|the\s+full\s+passage|the\s+protected\s+question\s+bank)(?:\s+verbatim)?",
+            r"(?:copy|reproduce)(?:(?:a|the))?(?:textbookpage\d+|thefullpassage|theprotectedquestionbank)(?:verbatim)?",
+            chinese_patterns=(r"抄写教材第\d+页",),
         ),
     ),
 )
@@ -193,8 +230,21 @@ def _is_contextual_exclusion(
     prefix = value[max(0, match.start() - 100) : match.start()]
     suffix = value[match.end() : match.end() + 100]
     if context_exclusion == "anti_bias":
-        return bool(_ANTI_BIAS_PREFIX.search(prefix) or _ANTI_BIAS_PREFIX_COLLAPSED.search(prefix))
-    return bool(
+        has_rejection_prefix = bool(
+            _ANTI_BIAS_PREFIX.search(prefix) or _ANTI_BIAS_PREFIX_COLLAPSED.search(prefix)
+        )
+        has_educational_frame = bool(
+            (
+                _ANTI_BIAS_EDUCATIONAL_PREFIX.search(prefix)
+                and _ANTI_BIAS_REJECTION_SUFFIX.search(suffix)
+            )
+            or (
+                _ANTI_BIAS_EDUCATIONAL_PREFIX_COLLAPSED.search(prefix)
+                and _ANTI_BIAS_REJECTION_SUFFIX_COLLAPSED.search(suffix)
+            )
+        )
+        return has_rejection_prefix or has_educational_frame
+    has_support_request = bool(
         (
             _SELF_HARM_SUPPORT_PREFIX.search(prefix)
             or _SELF_HARM_SUPPORT_PREFIX_COLLAPSED.search(prefix)
@@ -204,6 +254,17 @@ def _is_contextual_exclusion(
             or _SELF_HARM_SUPPORT_SUFFIX_COLLAPSED.search(suffix)
         )
     )
+    has_educational_frame = bool(
+        (
+            _SELF_HARM_EDUCATIONAL_PREFIX.search(prefix)
+            and _SELF_HARM_DANGER_AND_SUPPORT_SUFFIX.search(suffix)
+        )
+        or (
+            _SELF_HARM_EDUCATIONAL_PREFIX_COLLAPSED.search(prefix)
+            and _SELF_HARM_DANGER_AND_SUPPORT_SUFFIX_COLLAPSED.search(suffix)
+        )
+    )
+    return has_support_request or has_educational_frame
 
 
 def _has_unexcluded_match(

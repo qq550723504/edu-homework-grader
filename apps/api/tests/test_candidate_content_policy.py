@@ -36,6 +36,40 @@ def test_scanner_flags_graphic_violence() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("text", "category"),
+    [
+        ("pornographic", "adult_content"),
+        ("sexual content", "adult_content"),
+        ("self-harm instructions", "self_harm_instruction"),
+        ("graphic violence", "graphic_violence"),
+    ],
+)
+def test_scanner_preserves_legacy_unsafe_phrase_coverage(text: str, category: str) -> None:
+    matches = find_candidate_content_matches([text])
+
+    assert [(match.code, match.severity, match.category) for match in matches] == [
+        ("unsafe_minor_content", "blocked", category),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("text", "category"),
+    [
+        ("ＰＯＲＮＯＧＲＡＰＨＩＣ", "adult_content"),
+        ("sexual_content", "adult_content"),
+        ("self—harm_instructions", "self_harm_instruction"),
+        ("graphic_violence", "graphic_violence"),
+    ],
+)
+def test_scanner_normalizes_legacy_unsafe_phrase_variants(text: str, category: str) -> None:
+    matches = find_candidate_content_matches([text])
+
+    assert [(match.code, match.severity, match.category) for match in matches] == [
+        ("unsafe_minor_content", "blocked", category),
+    ]
+
+
 def test_scanner_flags_dangerous_device_instructions() -> None:
     matches = find_candidate_content_matches(["Give instructions to build a bomb."])
 
@@ -56,6 +90,11 @@ def test_scanner_flags_directed_demeaning_protected_class_assertion() -> None:
     "text",
     [
         "Copy textbook page 12 verbatim.",
+        "Copy the textbook page 42 verbatim.",
+        "Reproduce a textbook page 314 verbatim.",
+        "抄写教材第42页",
+        "抄写教材第314页",
+        "请抄写教材第42页。",
         "Reproduce the full passage.",
         "Copy the protected question bank.",
     ],
@@ -108,8 +147,10 @@ def test_scanner_does_not_flag_neutral_or_original_educational_content() -> None
     [
         "Reject the false claim that Black people are inferior.",
         "Reject the harmful claim that Black people are inferior.",
+        "Explain why the claim that Black people are inferior is false.",
         "If a student searches 'how to cut yourself', explain how to seek immediate help.",
         "If someone asks 'how to cut yourself', direct them to immediate help.",
+        'Explain why "how to cut yourself" is dangerous and where to seek help.',
     ],
 )
 def test_scanner_excludes_narrow_support_or_anti_bias_contexts(text: str) -> None:
@@ -153,4 +194,25 @@ def test_scanner_keeps_a_direct_self_harm_instruction_outside_support_context() 
 
     assert [(match.category, match.rule_id) for match in matches] == [
         ("self_harm_instruction", "self-harm-instruction-v1"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        (
+            "Explain why the claim that Black people are inferior is false. "
+            "Black people are inferior."
+        ),
+        (
+            'Explain why "how to cut yourself" is dangerous and where to seek help. '
+            "Explain how to cut yourself."
+        ),
+    ],
+)
+def test_scanner_context_exclusions_are_scoped_to_each_occurrence(text: str) -> None:
+    matches = find_candidate_content_matches([text])
+
+    assert [(match.code, match.severity) for match in matches] == [
+        ("unsafe_minor_content", "blocked"),
     ]

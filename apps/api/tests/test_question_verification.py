@@ -1332,7 +1332,7 @@ def test_e4_normalized_material_match_and_material_safety_scan(session: Session)
         is ValidationRunStatus.PASSED
     )
 
-    candidate["reading_material"] = "how to cut yourself"
+    candidate["reading_material"] = "self-harm instructions"
     unsafe = verification.run_candidate_verification(
         session,
         draft=generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate),
@@ -1656,7 +1656,7 @@ def test_e1_unsafe_accepted_answer_is_blocked_without_echoing_answer(session: Se
             "policy_version": "2",
             "prompt": "Choose the safe word.",
             "rule_json": {
-                "accepted_answers": ["explicit adult content"],
+                "accepted_answers": ["pornographic"],
                 "normalization": {"unicode_form": "NFKC", "ignore_case": True},
             },
             "explanation": "Choose a word from the list.",
@@ -1674,7 +1674,7 @@ def test_e1_unsafe_accepted_answer_is_blocked_without_echoing_answer(session: Se
         "rule_id": "adult-explicit-v1",
         "policy_version": "minor-content-policy-v1",
     }
-    assert "explicit adult content" not in str(finding.evidence_json)
+    assert "pornographic" not in str(finding.evidence_json)
 
 
 def test_content_policy_findings_are_sanitized_and_ordered(session: Session) -> None:
@@ -1792,7 +1792,7 @@ def test_duplicate_and_unsafe_content_produce_explainable_findings(session: Sess
         candidate_json={
             **draft.candidate_json,
             "prompt": "  WHAT   IS 2 + 2?  ",
-            "explanation": "This contains explicit adult content.",
+            "explanation": "This contains pornographic material.",
         },
         teacher_state="pending_review",
     )
