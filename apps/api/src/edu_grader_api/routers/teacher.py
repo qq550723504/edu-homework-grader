@@ -188,7 +188,11 @@ def list_students(
     )
     return {
         "items": [
-            {"id": str(student.id), "school_id": student.school_id, "display_name": student.display_name}
+            {
+                "id": str(student.id),
+                "school_id": student.school_id,
+                "display_name": student.display_name,
+            }
             for student in students
         ]
     }
@@ -253,7 +257,11 @@ def update_student(
             target_id=student.id,
             metadata={"class_id": str(class_id)},
         )
-    return {"id": str(student.id), "school_id": student.school_id or "", "display_name": student.display_name}
+    return {
+        "id": str(student.id),
+        "school_id": student.school_id or "",
+        "display_name": student.display_name,
+    }
 
 
 @router.delete("/classes/{class_id}/students/{student_id}", status_code=status.HTTP_204_NO_CONTENT)

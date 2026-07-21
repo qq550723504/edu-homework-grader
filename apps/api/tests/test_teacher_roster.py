@@ -182,7 +182,11 @@ def test_teacher_lists_students_in_owned_class(
     assert response.status_code == 200
     assert response.json() == {
         "items": [
-            {"id": str(student.id), "school_id": student.school_id, "display_name": student.display_name}
+            {
+                "id": str(student.id),
+                "school_id": student.school_id,
+                "display_name": student.display_name,
+            }
             for student in students
         ]
     }
@@ -213,13 +217,16 @@ def test_teacher_updates_a_student_display_name_in_owned_class(
 
     assert response.status_code == 200
     assert response.json() == {
-        "id": str(student.id), "school_id": "S-001", "display_name": "Ada Lovelace"
+        "id": str(student.id),
+        "school_id": "S-001",
+        "display_name": "Ada Lovelace",
     }
     session.refresh(student)
     assert student.display_name == "Ada Lovelace"
-    assert session.scalar(
-        select(AuditLog).where(AuditLog.event_type == "roster.student_name_updated")
-    ) is not None
+    assert (
+        session.scalar(select(AuditLog).where(AuditLog.event_type == "roster.student_name_updated"))
+        is not None
+    )
 
 
 def test_teacher_removes_a_student_from_an_owned_class_without_deleting_the_account(
@@ -247,9 +254,10 @@ def test_teacher_removes_a_student_from_an_owned_class_without_deleting_the_acco
     assert response.status_code == 204
     assert session.get(Enrollment, (classroom.id, student.id)) is None
     assert session.get(User, student.id) is not None
-    assert session.scalar(
-        select(AuditLog).where(AuditLog.event_type == "roster.student_removed")
-    ) is not None
+    assert (
+        session.scalar(select(AuditLog).where(AuditLog.event_type == "roster.student_removed"))
+        is not None
+    )
 
 
 def test_teacher_imports_csv_for_owned_class(

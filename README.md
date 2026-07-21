@@ -90,6 +90,15 @@ npm ci
 npm run dev
 ```
 
+首次配置开发环境后，启用提交前质量检查：
+
+```bash
+pre-commit install
+```
+
+该钩子会在提交 Python 变更前自动运行 Ruff 修复与格式化；CI 仍会执行同一套
+Ruff 校验作为最终门禁。
+
 分别启动后端：
 
 ```bash
