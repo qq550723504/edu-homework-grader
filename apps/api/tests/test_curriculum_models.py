@@ -7,6 +7,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from edu_grader_api.services.curriculum import (
+    CurriculumValidationError,
+    create_objective_revision,
+    list_active_objective_revisions,
+    retire_objective_revision,
+)
 from edu_grader_api.models import (
     Base,
     CurriculumActivityType,
@@ -144,3 +150,54 @@ def test_curriculum_foundation_is_the_alembic_head() -> None:
     script = ScriptDirectory.from_config(config)
 
     assert script.get_current_head() == "0013_curriculum_profile_foundation"
+
+
+def test_k_grade_rejects_scored_question_types(session: Session) -> None:
+    profile = active_profile(session)
+    mapping = CurriculumGradeMapping(
+        profile=profile,
+        internal_level="K3_4",
+        external_label="3–4 岁",
+        position=1,
+    )
+    objective = CurriculumObjective(
+        profile=profile,
+        grade_mapping=mapping,
+        code="K-NUMBER-001",
+        subject="early_learning",
+        domain="number_sense",
+        status=CurriculumProfileStatus.ACTIVE,
+    )
+    session.add_all([mapping, objective])
+    session.flush()
+
+    with pytest.raises(CurriculumValidationError, match="K levels only allow learning_activity-v1"):
+        create_objective_revision(
+            session,
+            objective=objective,
+            revision_number=1,
+            text="Count three objects.",
+            source_locator="number sense",
+            allowed_question_types=["M1"],
+            difficulty_min=0,
+            difficulty_max=0.2,
+            activity_type=CurriculumActivityType.SCORED_QUESTION,
+        )
+
+
+def test_retired_revision_is_excluded_from_active_objective_selection(session: Session) -> None:
+    profile = active_profile(session)
+    objective = CurriculumObjective(
+        profile=profile,
+        grade_mapping=grade_mapping(session, profile),
+        code="MATH-G1-NUM-001",
+        subject="mathematics",
+        domain="number",
+        status=CurriculumProfileStatus.ACTIVE,
+    )
+    item = revision(objective, 1)
+    session.add_all([objective, item])
+    session.commit()
+
+    retire_objective_revision(session, item)
+    assert item.id not in {revision.id for revision in list_active_objective_revisions(session)}
