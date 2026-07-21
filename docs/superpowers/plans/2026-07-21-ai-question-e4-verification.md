@@ -192,7 +192,7 @@
   - E4 probe success remains `needs_review`; no code auto-accepts or publishes E4.
   - `apps/api` gained no direct HTTP, LanguageTool, or similarity-model call and no `QuestionVersion` mutation.
 
-- [ ] **Step 3: Record delivery and open a pull request.**
+- [x] **Step 3: Record delivery and open a pull request.**
 
   Mark completed plan steps, then run:
 
