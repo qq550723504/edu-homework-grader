@@ -162,6 +162,7 @@ def generation_draft(
         "difficulty": 0.2,
     }
     candidate_content.setdefault("objective_revision_id", str(revision.id))
+    candidate_content.setdefault("difficulty", 0.2)
     draft = GeneratedQuestionDraft(
         job_id=job.id,
         generation_attempt_id=attempt.id,
