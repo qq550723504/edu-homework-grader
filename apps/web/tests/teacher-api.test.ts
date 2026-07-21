@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { batchConfirmReviewTasks, createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, decideReviewTask, decideTeacherAppeal, fetchQuestionPolicyCatalog, fetchQuestionTestCaseTemplates, fetchTeacherRosterClasses, fetchTeacherWorkspace, importTeacherRoster, previewQuestionTestCase, publishAssignment, publishAttemptResults, publishQuestionVersion, runQuestionTests, updateAssignment } from '../app/lib/teacher-api'
+import { batchConfirmReviewTasks, createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, decideReviewTask, decideTeacherAppeal, fetchQuestionPolicyCatalog, fetchQuestionTestCaseTemplates, fetchTeacherRosterClasses, fetchTeacherRosterStudents, fetchTeacherWorkspace, importTeacherRoster, previewQuestionTestCase, publishAssignment, publishAttemptResults, publishQuestionVersion, removeTeacherRosterStudent, runQuestionTests, updateAssignment, updateTeacherRosterStudent } from '../app/lib/teacher-api'
 
 describe('teacher workspace API', () => {
   it('loads classes, question versions, assignments and review metrics through the BFF', async () => {
@@ -132,6 +132,35 @@ describe('teacher roster API', () => {
     await expect(fetchTeacherRosterClasses(request))
       .resolves.toEqual([{ id: 'class-1', code: '7A', name: 'Year 7 A', student_count: 3 }])
     expect(request).toHaveBeenCalledWith('/api/core/v1/teacher/classes')
+  })
+
+  it('loads students for the selected roster class through the authenticated BFF', async () => {
+    const request = vi.fn().mockResolvedValue({
+      items: [{ id: 'student-1', school_id: 'S-001', display_name: 'Ada' }],
+    })
+
+    await expect(fetchTeacherRosterStudents(request, 'class-1'))
+      .resolves.toEqual([{ id: 'student-1', school_id: 'S-001', display_name: 'Ada' }])
+    expect(request).toHaveBeenCalledWith('/api/core/v1/teacher/classes/class-1/students')
+  })
+
+  it('protects roster student management writes with the session CSRF token', async () => {
+    const request = vi.fn()
+      .mockResolvedValueOnce({ id: 'student-1', school_id: 'S-001', display_name: 'Ada Lovelace' })
+      .mockResolvedValueOnce(undefined)
+
+    await expect(updateTeacherRosterStudent(
+      request, 'csrf-token', 'class-1', 'student-1', { display_name: 'Ada Lovelace' },
+    )).resolves.toEqual({ id: 'student-1', school_id: 'S-001', display_name: 'Ada Lovelace' })
+    await expect(removeTeacherRosterStudent(request, 'csrf-token', 'class-1', 'student-1'))
+      .resolves.toBeUndefined()
+
+    expect(request).toHaveBeenNthCalledWith(1, '/api/core/v1/teacher/classes/class-1/students/student-1', {
+      method: 'PATCH', headers: { 'X-CSRF-Token': 'csrf-token' }, body: { display_name: 'Ada Lovelace' },
+    })
+    expect(request).toHaveBeenNthCalledWith(2, '/api/core/v1/teacher/classes/class-1/students/student-1', {
+      method: 'DELETE', headers: { 'X-CSRF-Token': 'csrf-token' },
+    })
   })
 
   it('protects roster writes with the session CSRF token', async () => {

@@ -11,7 +11,7 @@ from ..audit import append_audit_event
 from ..auth import CurrentPrincipal
 from ..db import get_session
 from ..dependencies import require_role
-from ..models import ClassTeacher, Classroom, Enrollment, GuardianConsentStatus, Role
+from ..models import ClassTeacher, Classroom, Enrollment, GuardianConsentStatus, Role, User
 from ..services.roster import (
     RosterRow,
     RosterValidationError,
@@ -38,6 +38,10 @@ class CreateStudentRequest(BaseModel):
     guardian_consent_evidence_reference: str | None = Field(default=None, max_length=100)
 
 
+class UpdateStudentRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=200)
+
+
 def owned_class_or_404(session: Session, principal: CurrentPrincipal, class_id: UUID) -> Classroom:
     classroom = session.scalar(
         select(Classroom).where(
@@ -47,6 +51,26 @@ def owned_class_or_404(session: Session, principal: CurrentPrincipal, class_id: 
     if classroom is None or session.get(ClassTeacher, (class_id, UUID(principal.user_id))) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
     return classroom
+
+
+def enrolled_student_or_404(
+    session: Session, principal: CurrentPrincipal, class_id: UUID, student_id: UUID
+) -> tuple[User, Enrollment]:
+    owned_class_or_404(session, principal, class_id)
+    student = session.scalar(
+        select(User)
+        .join(Enrollment, Enrollment.student_id == User.id)
+        .where(
+            Enrollment.class_id == class_id,
+            User.id == student_id,
+            User.tenant_id == UUID(principal.tenant_id),
+            User.role == Role.STUDENT,
+        )
+    )
+    enrollment = session.get(Enrollment, (class_id, student_id))
+    if student is None or enrollment is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
+    return student, enrollment
 
 
 def raise_roster_validation_error(error: RosterValidationError) -> None:
@@ -143,6 +167,37 @@ def create_class(
     }
 
 
+@router.get("/classes/{class_id}/students")
+def list_students(
+    class_id: UUID,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    owned_class_or_404(session, principal, class_id)
+    students = list(
+        session.scalars(
+            select(User)
+            .join(Enrollment, Enrollment.student_id == User.id)
+            .where(
+                Enrollment.class_id == class_id,
+                User.tenant_id == UUID(principal.tenant_id),
+                User.role == Role.STUDENT,
+            )
+            .order_by(User.school_id, User.id)
+        )
+    )
+    return {
+        "items": [
+            {
+                "id": str(student.id),
+                "school_id": student.school_id,
+                "display_name": student.display_name,
+            }
+            for student in students
+        ]
+    }
+
+
 @router.post("/classes/{class_id}/students", status_code=status.HTTP_201_CREATED)
 def create_student(
     class_id: UUID,
@@ -179,6 +234,56 @@ def create_student(
     except RosterValidationError as error:
         raise_roster_validation_error(error)
     return {"imported": imported}
+
+
+@router.patch("/classes/{class_id}/students/{student_id}")
+def update_student(
+    class_id: UUID,
+    student_id: UUID,
+    body: UpdateStudentRequest,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, str]:
+    session.rollback()
+    with session.begin():
+        student, _ = enrolled_student_or_404(session, principal, class_id, student_id)
+        student.display_name = body.display_name
+        append_audit_event(
+            session,
+            tenant_id=UUID(principal.tenant_id),
+            actor_user_id=UUID(principal.user_id),
+            event_type="roster.student_name_updated",
+            target_type="student",
+            target_id=student.id,
+            metadata={"class_id": str(class_id)},
+        )
+    return {
+        "id": str(student.id),
+        "school_id": student.school_id or "",
+        "display_name": student.display_name,
+    }
+
+
+@router.delete("/classes/{class_id}/students/{student_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_student(
+    class_id: UUID,
+    student_id: UUID,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> None:
+    session.rollback()
+    with session.begin():
+        student, enrollment = enrolled_student_or_404(session, principal, class_id, student_id)
+        session.delete(enrollment)
+        append_audit_event(
+            session,
+            tenant_id=UUID(principal.tenant_id),
+            actor_user_id=UUID(principal.user_id),
+            event_type="roster.student_removed",
+            target_type="student",
+            target_id=student.id,
+            metadata={"class_id": str(class_id)},
+        )
 
 
 @router.post("/classes/{class_id}/students/import")

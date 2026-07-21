@@ -314,6 +314,12 @@ export interface TeacherRosterClass {
   student_count: number
 }
 
+export interface TeacherRosterStudent {
+  id: string
+  school_id: string
+  display_name: string
+}
+
 export interface CreateTeacherRosterClass {
   code: string
   name: string
@@ -330,6 +336,34 @@ export interface CreateTeacherRosterStudent {
 
 export async function fetchTeacherRosterClasses(request: Request): Promise<TeacherRosterClass[]> {
   return (await request<{ items: TeacherRosterClass[] }>('/api/core/v1/teacher/classes')).items
+}
+
+export async function fetchTeacherRosterStudents(
+  request: Request, classId: string,
+): Promise<TeacherRosterStudent[]> {
+  return (await request<{ items: TeacherRosterStudent[] }>(
+    `/api/core/v1/teacher/classes/${classId}/students`,
+  )).items
+}
+
+export function updateTeacherRosterStudent(
+  request: Request,
+  csrfToken: string,
+  classId: string,
+  studentId: string,
+  input: Pick<TeacherRosterStudent, 'display_name'>,
+): Promise<TeacherRosterStudent> {
+  return request(`/api/core/v1/teacher/classes/${classId}/students/${studentId}`, {
+    method: 'PATCH', headers: { 'X-CSRF-Token': csrfToken }, body: input,
+  })
+}
+
+export function removeTeacherRosterStudent(
+  request: Request, csrfToken: string, classId: string, studentId: string,
+): Promise<void> {
+  return request(`/api/core/v1/teacher/classes/${classId}/students/${studentId}`, {
+    method: 'DELETE', headers: { 'X-CSRF-Token': csrfToken },
+  })
 }
 
 export function createTeacherRosterClass(

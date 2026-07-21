@@ -1,7 +1,17 @@
 <template>
-  <main class="shell teacher-page">
-    <NuxtLink class="back" to="/">← 返回</NuxtLink><LogoutButton />
-    <TeacherWorkbenchNav :active-module="activeModule" />
+  <main class="teacher-workbench">
+    <aside class="teacher-workbench__sidebar">
+      <NuxtLink class="teacher-brand" to="/teacher">作业批改</NuxtLink>
+      <p class="teacher-brand__role">教师工作区</p>
+      <TeacherWorkbenchNav :active-module="activeModule" />
+    </aside>
+
+    <section class="teacher-workbench__content">
+      <div class="shell teacher-page">
+        <header class="teacher-topbar">
+          <NuxtLink class="teacher-topbar__back" to="/">← 返回首页</NuxtLink>
+          <LogoutButton />
+        </header>
     <p v-if="message" class="notice" role="status">{{ message }}</p>
     <TeacherOverview
       v-if="activeModule === 'overview'"
@@ -149,12 +159,26 @@
         <label>班级名称<input v-model.trim="rosterClassDraft.name" required maxlength="200" placeholder="例如：七年级 A 班"></label>
         <button class="button primary" :disabled="saving" type="submit">创建班级</button>
       </form>
-      <div v-if="rosterClasses.length" class="stack">
-        <h3>我的班级</h3>
-        <button v-for="classroom in rosterClasses" :key="classroom.id" class="button secondary" type="button" @click="selectedRosterClassId = classroom.id">
+       <div v-if="rosterClasses.length" class="stack">
+         <h3>我的班级</h3>
+        <button v-for="classroom in rosterClasses" :key="classroom.id" class="button secondary" type="button" @click="selectRosterClass(classroom.id)">
           {{ classroom.code }} · {{ classroom.name }} · {{ classroom.student_count }} 名学生
         </button>
       </div>
+      <section v-if="selectedRosterClassId" class="stack" aria-labelledby="roster-students-heading">
+        <h3 id="roster-students-heading">班级学生</h3>
+        <template v-for="student in rosterStudents" :key="student.id">
+          <article class="assignment">
+            <div><span class="subject">{{ student.school_id }}</span><h4>{{ student.display_name }}</h4></div>
+            <div class="actions"><button class="button secondary" :disabled="saving" type="button" @click="beginRosterStudentEdit(student)">编辑姓名</button><button class="button secondary" :disabled="saving" type="button" @click="removeRosterStudent(student)">移出班级</button></div>
+          </article>
+          <form v-if="editingRosterStudentId === student.id" class="stack" @submit.prevent="saveRosterStudentName(student.id)">
+            <label>学生姓名<input v-model.trim="editingRosterStudentName" required maxlength="200"></label>
+            <div class="actions"><button class="button primary" :disabled="saving" type="submit">保存姓名</button><button class="button secondary" :disabled="saving" type="button" @click="cancelRosterStudentEdit">取消</button></div>
+          </form>
+        </template>
+        <p v-if="rosterStudents.length === 0" class="notice">该班暂未录入学生。</p>
+      </section>
       <form v-if="selectedRosterClassId" class="stack" @submit.prevent="submitRosterStudent">
         <h3>录入学生</h3>
         <label>学号<input v-model.trim="rosterStudentDraft.school_id" required maxlength="100"></label>
@@ -173,12 +197,14 @@
         <button class="button secondary" :disabled="saving" type="submit">导入 CSV</button>
       </form>
     </section>
+      </div>
+    </section>
   </main>
 </template>
 
 <script setup lang="ts">
 import { fetchCurrentPrincipal } from '../../lib/student-api'
-import { createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, fetchQuestionPolicyCatalog, fetchQuestionTestCaseTemplates, fetchTeacherRosterClasses, fetchTeacherWorkspace, importTeacherRoster, previewQuestionTestCase, publishAssignment, publishQuestionVersion, runQuestionTests, updateAssignment, type CreateQuestionInput, type QuestionPolicyCatalogEntry, type QuestionTestCaseTemplate, type QuestionTestRun, type TeacherAssignment, type TeacherQuestionVersion, type TeacherRosterClass } from '../../lib/teacher-api'
+import { createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, fetchQuestionPolicyCatalog, fetchQuestionTestCaseTemplates, fetchTeacherRosterClasses, fetchTeacherRosterStudents, fetchTeacherWorkspace, importTeacherRoster, previewQuestionTestCase, publishAssignment, publishQuestionVersion, removeTeacherRosterStudent, runQuestionTests, updateAssignment, updateTeacherRosterStudent, type CreateQuestionInput, type QuestionPolicyCatalogEntry, type QuestionTestCaseTemplate, type QuestionTestRun, type TeacherAssignment, type TeacherQuestionVersion, type TeacherRosterClass, type TeacherRosterStudent } from '../../lib/teacher-api'
 import { addQuestionToComposition, availableQuestionsForSubject, compositionSummary, moveQuestion, removeQuestion, type AssignmentSubject } from '../../lib/assignment-composition'
 import { buildEnglishQuestionRule, defaultEnglishDraft, fieldForPolicyError, type EnglishQuestionType } from '../../lib/english-question-authoring'
 import { teacherModules, type TeacherModule } from '../../lib/teacher-workbench'
@@ -186,7 +212,10 @@ import { clearGuardianConsentEvidence, guardianConsentFieldsRequired, teacherErr
 
 const workspace = ref<{ classes: Array<{ id: string; code: string; name: string }>; questionVersions: TeacherQuestionVersion[]; assignments: TeacherAssignment[]; reviewMetrics: Record<string, unknown>; reviewTasks: Array<{ id: string }> }>({ classes: [], questionVersions: [], assignments: [], reviewMetrics: {}, reviewTasks: [] })
 const rosterClasses = ref<TeacherRosterClass[]>([])
+const rosterStudents = ref<TeacherRosterStudent[]>([])
 const selectedRosterClassId = ref('')
+const editingRosterStudentId = ref<string | null>(null)
+const editingRosterStudentName = ref('')
 const rosterFile = ref<File | null>(null)
 const rosterClassDraft = reactive({ code: '', name: '' })
 const rosterStudentDraft = reactive({ school_id: '', display_name: '', under_14: false, guardian_consent_status: 'not_required' as 'not_required' | 'pending' | 'granted' | 'withdrawn', guardian_consent_notice_version: '', guardian_consent_evidence_reference: '' })
@@ -258,7 +287,11 @@ async function loadWorkspace() {
   workspace.value = nextWorkspace
   rosterClasses.value = nextRosterClasses
   questionPolicies.value = nextQuestionPolicies
-  if (selectedRosterClassId.value && !nextRosterClasses.some((item) => item.id === selectedRosterClassId.value)) selectedRosterClassId.value = ''
+  if (selectedRosterClassId.value && !nextRosterClasses.some((item) => item.id === selectedRosterClassId.value)) {
+    selectedRosterClassId.value = ''
+    rosterStudents.value = []
+  }
+  await loadRosterStudents()
 }
 
 function applyRuleTemplate() {
@@ -375,6 +408,57 @@ async function submitRosterClass() {
     rosterClassDraft.name = ''
     selectedRosterClassId.value = classroom.id
     message.value = '班级已创建。'
+    await loadWorkspace()
+  } catch (error: unknown) { message.value = teacherErrorMessage(error) }
+  finally { saving.value = false }
+}
+
+async function selectRosterClass(classId: string) {
+  selectedRosterClassId.value = classId
+  try { await loadRosterStudents(classId) }
+  catch (error: unknown) { message.value = teacherErrorMessage(error) }
+}
+
+async function loadRosterStudents(classId = selectedRosterClassId.value) {
+  if (!classId) {
+    rosterStudents.value = []
+    return
+  }
+  const students = await fetchTeacherRosterStudents($fetch, classId)
+  if (selectedRosterClassId.value === classId) rosterStudents.value = students
+}
+
+function beginRosterStudentEdit(student: TeacherRosterStudent) {
+  editingRosterStudentId.value = student.id
+  editingRosterStudentName.value = student.display_name
+}
+
+function cancelRosterStudentEdit() {
+  editingRosterStudentId.value = null
+  editingRosterStudentName.value = ''
+}
+
+async function saveRosterStudentName(studentId: string) {
+  if (!selectedRosterClassId.value) return
+  saving.value = true
+  try {
+    await updateTeacherRosterStudent($fetch, await csrfToken(), selectedRosterClassId.value, studentId, {
+      display_name: editingRosterStudentName.value,
+    })
+    cancelRosterStudentEdit()
+    message.value = '学生姓名已更新。'
+    await loadWorkspace()
+  } catch (error: unknown) { message.value = teacherErrorMessage(error) }
+  finally { saving.value = false }
+}
+
+async function removeRosterStudent(student: TeacherRosterStudent) {
+  if (!selectedRosterClassId.value || !window.confirm(`确定将 ${student.display_name} 移出当前班级吗？`)) return
+  saving.value = true
+  try {
+    await removeTeacherRosterStudent($fetch, await csrfToken(), selectedRosterClassId.value, student.id)
+    cancelRosterStudentEdit()
+    message.value = '学生已移出当前班级。'
     await loadWorkspace()
   } catch (error: unknown) { message.value = teacherErrorMessage(error) }
   finally { saving.value = false }
