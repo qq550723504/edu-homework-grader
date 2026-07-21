@@ -15,6 +15,7 @@ from .routers.guardian_consents import router as guardian_consents_router
 from .routers.assignments import router as assignments_router
 from .routers.assignments import student_router as student_assignments_router
 from .routers.questions import router as questions_router
+from .routers.questions import policy_catalog_router
 from .routers.questions import version_router as question_versions_router
 from .routers.privacy_requests import router as privacy_requests_router
 from .routers.reviews import router as reviews_router
@@ -39,6 +40,7 @@ app.include_router(privacy_requests_router)
 app.include_router(assignments_router)
 app.include_router(student_assignments_router)
 app.include_router(questions_router)
+app.include_router(policy_catalog_router)
 app.include_router(question_versions_router)
 app.include_router(reviews_router)
 app.include_router(publication_router)
