@@ -39,6 +39,11 @@ class FakeGenerationProvider:
                     "explanation": f"Generated for {request.grade} using objective practice.",
                     "knowledge_point": f"{request.subject} objective practice",
                     "difficulty": round(((stable_value % 7) + 1) / 10, 1),
+                    "reading_material": (
+                        "The student gave a complete response about the practice item."
+                        if question_type == "E4"
+                        else None
+                    ),
                 }
             )
         return GeneratedCandidateEnvelope.from_provider_payload(

@@ -7,7 +7,7 @@ from edu_grader_processor_policy import (
     ProcessorPolicyError,
     assert_deidentified_payload,
 )
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 
 QuestionType = Literal["M1", "M2", "E1", "E2", "E3", "E4"]
@@ -60,6 +60,18 @@ class GeneratedCandidate(BaseModel):
     explanation: str = Field(min_length=1, max_length=4_000)
     knowledge_point: str = Field(min_length=1, max_length=200)
     difficulty: float = Field(ge=0, le=1)
+    reading_material: str | None = Field(
+        default=None, max_length=8_000, json_schema_extra={"maxLength": 8_000}
+    )
+
+    @model_validator(mode="after")
+    def _validate_reading_material(self) -> "GeneratedCandidate":
+        if self.question_type == "E4":
+            if self.reading_material is None or not self.reading_material.strip():
+                raise ValueError("E4 candidates require nonblank reading_material")
+        elif self.reading_material is not None:
+            raise ValueError("only E4 candidates may include reading_material")
+        return self
 
 
 class GeneratedCandidateEnvelope(BaseModel):
