@@ -358,6 +358,11 @@ watch(() => rosterStudentDraft.guardian_consent_status, (status) => {
   rosterStudentDraft.guardian_consent_evidence_reference = evidence.evidenceReference
 })
 
+watch(() => selectedVersionId.value, () => {
+  suggestedTestCases.value = []
+  latestTestRun.value = null
+})
+
 watch(() => assignmentForm.subject, () => {
   selectedAssignmentQuestions.value = []
 })

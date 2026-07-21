@@ -36,14 +36,30 @@ def test_e2e_grader_covers_english_authoring_policy_boundaries() -> None:
         {"format": "text-v1", "text": "I go."},
         policy_version="1",
     )
-    e4_review = client.grade(
+    e4_matched = client.grade(
         "E4",
-        {"scoring_points": [{"id": "cause", "evidence_phrases": ["bridge closed"], "score": 1}]},
+        {
+            "scoring_points": [{"id": "cause", "evidence_phrases": ["bridge closed"], "score": 1}],
+            "max_score": 1,
+        },
         {"format": "text-v1", "text": "The bridge closed."},
+        policy_version="2",
+    )
+    e4_unmatched = client.grade(
+        "E4",
+        {
+            "scoring_points": [{"id": "cause", "evidence_phrases": ["bridge closed"], "score": 1}],
+            "max_score": 1,
+        },
+        {"format": "text-v1", "text": "The road opened."},
         policy_version="2",
     )
 
     assert (e1_accepted.decision, e1_accepted.score) == ("auto_accepted", 1.0)
     assert (e2_rejected.decision, e2_rejected.score) == ("auto_rejected", 0.0)
     assert (e3_review.decision, e3_review.score) == ("needs_review", 0.0)
-    assert (e4_review.decision, e4_review.score) == ("needs_review", 0.0)
+    assert (e4_matched.decision, e4_matched.score) == ("needs_review", 1.0)
+    assert (e4_unmatched.decision, e4_unmatched.score) == ("needs_review", 0.0)
+    assert e4_matched.evidence["criteria"] == [
+        {"code": "cause", "passed": True, "score": 1.0, "max_score": 1.0}
+    ]

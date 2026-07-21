@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -163,6 +163,30 @@ def test_teacher_previews_a_draft_test_answer_without_persisting_it(
     )
 
 
+def test_teacher_preview_preserves_not_found_for_an_unknown_version(
+    client: TestClient, session: Session
+) -> None:
+    tenant = Tenant(slug="pilot", name="Pilot")
+    teacher = User(
+        tenant=tenant,
+        role=Role.TEACHER,
+        oidc_issuer=ISSUER,
+        oidc_subject="teacher",
+        display_name="Teacher",
+    )
+    session.add_all([tenant, teacher])
+    session.commit()
+
+    response = client.post(
+        f"/v1/question-versions/{uuid4()}/test-case-preview",
+        headers=authorize(client, teacher),
+        json={"answer": {"format": "text-v1", "text": "5"}},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "resource not found"}
+
+
 def test_teacher_receives_editable_english_test_case_templates(
     client: TestClient, session: Session
 ) -> None:
@@ -211,6 +235,51 @@ def test_teacher_receives_editable_english_test_case_templates(
             {"category": "boundary", "answer": {"format": "text-v1", "text": " cat. "}},
         ]
     }
+
+
+def test_teacher_e4_templates_keep_the_incorrect_answer_free_of_evidence_phrase(
+    client: TestClient, session: Session
+) -> None:
+    tenant = Tenant(slug="pilot", name="Pilot")
+    teacher = User(
+        tenant=tenant,
+        role=Role.TEACHER,
+        oidc_issuer=ISSUER,
+        oidc_subject="teacher",
+        display_name="Teacher",
+    )
+    session.add_all([tenant, teacher])
+    session.commit()
+    headers = authorize(client, teacher)
+    created = client.post(
+        "/v1/questions",
+        headers=headers,
+        json={
+            "title": "Reading evidence",
+            "prompt": "Why was the bridge closed?",
+            "question_type": "E4",
+            "policy_version": "2",
+            "rule": {
+                "scoring_points": [
+                    {"id": "cause", "evidence_phrases": ["bridge closed"], "score": 1}
+                ],
+                "max_score": 1,
+            },
+        },
+    )
+
+    response = client.get(
+        f"/v1/question-versions/{created.json()['id']}/test-case-templates", headers=headers
+    )
+
+    assert response.status_code == 200
+    incorrect = next(
+        template["answer"]["text"]
+        for template in response.json()["templates"]
+        if template["category"] == "incorrect"
+    )
+    assert incorrect == "x"
+    assert "bridge closed" not in incorrect.casefold()
 
 
 def test_teacher_lists_and_filters_question_versions(client: TestClient, session: Session) -> None:

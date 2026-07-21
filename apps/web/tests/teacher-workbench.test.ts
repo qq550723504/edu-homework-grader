@@ -61,6 +61,8 @@ describe('teacher workbench UI contract', () => {
     expect(teacherPage).toContain('buildEnglishQuestionRule')
     expect(teacherPage).toContain('加载建议测试')
     expect(teacherPage).toContain('刷新测试预览')
+    expect(teacherPage).toContain('watch(() => selectedVersionId.value')
+    expect(teacherPage).toContain('suggestedTestCases.value = []')
   })
 
   it('requires the visible assignment creation fields', () => {

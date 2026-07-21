@@ -277,6 +277,8 @@ def preview_test_case_route(
         ) from None
     except QuestionVersionStateError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY, detail="grader preview failed"

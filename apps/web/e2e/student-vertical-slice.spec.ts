@@ -198,11 +198,11 @@ test('teacher creates, tests, and publishes guided E1 through E4 questions with 
       await page.getByLabel('评分点名称').fill('cause')
       await page.getByLabel('证据短语').fill('bridge closed')
     }, cases: [
-      ['correct', 'The bridge closed.', 'needs_review', 0, { criterion: 'scoring_point_review', requires_review: true }],
-      ['incorrect', 'The road opened.', 'needs_review', 0, { criterion: 'scoring_point_review', requires_review: true }],
-      ['empty', '', 'needs_review', 0, { criterion: 'scoring_point_review', requires_review: true }],
-      ['boundary', 'The bridge closed.', 'needs_review', 0, { criterion: 'scoring_point_review', requires_review: true }],
-      ['needs_review', 'The bridge closed.', 'needs_review', 0, { criterion: 'scoring_point_review', requires_review: true }],
+      ['correct', 'The bridge closed.', 'needs_review', 1, { criterion: 'scoring_point_review', requires_review: true, max_score: 1, criteria: [{ code: 'cause', passed: true, score: 1, max_score: 1 }] }],
+      ['incorrect', 'The road opened.', 'needs_review', 0, { criterion: 'scoring_point_review', requires_review: true, max_score: 1, criteria: [{ code: 'cause', passed: false, score: 0, max_score: 1 }] }],
+      ['empty', '', 'needs_review', 0, { criterion: 'scoring_point_review', requires_review: true, max_score: 1, criteria: [{ code: 'cause', passed: false, score: 0, max_score: 1 }] }],
+      ['boundary', 'The bridge closed.', 'needs_review', 1, { criterion: 'scoring_point_review', requires_review: true, max_score: 1, criteria: [{ code: 'cause', passed: true, score: 1, max_score: 1 }] }],
+      ['needs_review', 'The bridge closed.', 'needs_review', 1, { criterion: 'scoring_point_review', requires_review: true, max_score: 1, criteria: [{ code: 'cause', passed: true, score: 1, max_score: 1 }] }],
     ] },
   ]
 

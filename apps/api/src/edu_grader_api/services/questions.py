@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Protocol
+import unicodedata
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -354,14 +355,16 @@ def suggested_question_test_cases(
         return _text_test_templates(answer) + [_text_test_template("grammar_feedback", answer)]
     if draft.question_type == "E4":
         answer = _first_e4_evidence_phrase(draft.rule_json)
-        return _text_test_templates(answer) + [_text_test_template("needs_review", answer)]
+        return _text_test_templates(answer, incorrect=_e4_incorrect_answer(answer)) + [
+            _text_test_template("needs_review", answer)
+        ]
     raise QuestionVersionStateError("test templates are available for English questions only")
 
 
-def _text_test_templates(answer: str) -> list[dict[str, object]]:
+def _text_test_templates(answer: str, *, incorrect: str | None = None) -> list[dict[str, object]]:
     return [
         _text_test_template("correct", answer),
-        _text_test_template("incorrect", f"not {answer}"),
+        _text_test_template("incorrect", incorrect if incorrect is not None else f"not {answer}"),
         _text_test_template("empty", ""),
         _text_test_template("boundary", f" {answer}. "),
     ]
@@ -390,6 +393,20 @@ def _first_e4_evidence_phrase(rule_json: dict[str, object]) -> str:
             if phrase:
                 return phrase
     return "evidence"
+
+
+def _e4_incorrect_answer(evidence_phrase: str) -> str:
+    """Return a compact answer guaranteed not to contain the scoring evidence phrase."""
+
+    normalized_phrase = unicodedata.normalize("NFKC", evidence_phrase).casefold()
+    for candidate in "xqzjkvbw":
+        if candidate not in normalized_phrase:
+            return candidate
+    for codepoint in range(0xE000, 0xF900):
+        candidate = chr(codepoint)
+        if candidate not in normalized_phrase:
+            return candidate
+    raise QuestionVersionStateError("unable to create an E4 incorrect test template")
 
 
 def publish_question_version(
