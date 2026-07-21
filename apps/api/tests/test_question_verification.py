@@ -1191,6 +1191,34 @@ def test_m1_negative_numbers_use_safe_decimal_probe_text(session: Session) -> No
             )
         ),
         *(
+            (
+                probe_id,
+                GradeResult("auto_accepted", None, {"secret": "grader evidence"}, "fake-m1-v1"),
+            )
+            for probe_id in (
+                "expected_answer",
+                "empty_answer",
+                "lower_tolerance_boundary",
+                "upper_tolerance_boundary",
+                "below_tolerance_boundary",
+                "above_tolerance_boundary",
+            )
+        ),
+        *(
+            (
+                probe_id,
+                GradeResult("auto_accepted", "1", {"secret": "grader evidence"}, "fake-m1-v1"),
+            )
+            for probe_id in (
+                "expected_answer",
+                "empty_answer",
+                "lower_tolerance_boundary",
+                "upper_tolerance_boundary",
+                "below_tolerance_boundary",
+                "above_tolerance_boundary",
+            )
+        ),
+        *(
             (probe_id, RuntimeError("grader exception secret"))
             for probe_id in (
                 "expected_answer",

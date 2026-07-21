@@ -350,12 +350,14 @@ def _m1_findings(
         except Exception:
             return [_blocked("m1_grader_probe_failed", {"probe": probe.name}, remediation)]
         score_is_finite = isinstance(result.score, int | float) and math.isfinite(result.score)
+        if not score_is_finite:
+            return [_blocked("m1_grader_probe_failed", {"probe": probe.name}, remediation)]
         result_is_expected = (
             result.decision == "auto_accepted" and result.score > 0
             if probe.expects_acceptance
             else result.decision == "auto_rejected" and result.score == 0
         )
-        if not score_is_finite or not result_is_expected:
+        if not result_is_expected:
             return [_blocked("m1_grader_probe_failed", {"probe": probe.name}, remediation)]
     return []
 
