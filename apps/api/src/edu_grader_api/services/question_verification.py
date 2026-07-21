@@ -48,7 +48,15 @@ _LEXICAL_UNITS = re.compile(
     r"[A-Za-z0-9\u00c0-\u024f\u1e00-\u1eff\u2c60-\u2c7f\ua720-\ua7ff\uab30-\uab6f]+(?:'[A-Za-z0-9\u00c0-\u024f\u1e00-\u1eff\u2c60-\u2c7f\ua720-\ua7ff\uab30-\uab6f]+)*|[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002ebef\U00030000-\U000323af]"
 )
 _SENTENCE_SEPARATORS = re.compile(r"[.!?。！？]+")
-_M2_AST_CHILD_KEYS = frozenset({"args", "arg", "numerator", "denominator", "base", "exponent"})
+_M2_AST_FIELDS_BY_TYPE = {
+    "add": frozenset({"type", "args"}),
+    "mul": frozenset({"type", "args"}),
+    "neg": frozenset({"type", "arg"}),
+    "div": frozenset({"type", "numerator", "denominator"}),
+    "pow": frozenset({"type", "base", "exponent"}),
+    "number": frozenset({"type", "value"}),
+    "symbol": frozenset({"type", "value"}),
+}
 _GRADE_COMPLEXITY_METRICS = (
     "max_prompt_units",
     "max_sentence_units",
@@ -534,25 +542,27 @@ def _m2_complexity_metrics(ast: dict[str, object]) -> tuple[Decimal | None, int]
         node_type = node.get("type")
         if not isinstance(node_type, str) or node_type not in child_keys_by_type:
             raise ValueError("safe MathJSON node type is invalid")
+        if set(node) != _M2_AST_FIELDS_BY_TYPE[node_type]:
+            raise ValueError("safe MathJSON node fields are invalid")
         child_keys = child_keys_by_type[node_type]
-        if any(key in node and key not in child_keys for key in _M2_AST_CHILD_KEYS):
-            raise ValueError("safe MathJSON child shape is invalid")
         if node_type in {"add", "mul", "neg", "div", "pow"}:
             operation_nodes += 1
         if node_type == "number":
             try:
-                value = Decimal(str(node["value"]))
-            except (InvalidOperation, KeyError, ValueError) as error:
+                value = _safe_ast_number_value(node["value"])
+            except (InvalidOperation, ValueError) as error:
                 raise ValueError("safe MathJSON number is invalid") from error
             if not value.is_finite():
                 raise ValueError("safe MathJSON number is not finite")
             absolute_value = abs(value)
             if maximum_numeric_value is None or absolute_value > maximum_numeric_value:
                 maximum_numeric_value = absolute_value
+        if node_type == "symbol" and (not isinstance(node["value"], str) or not node["value"]):
+            raise ValueError("safe MathJSON symbol is invalid")
         for child_key in child_keys:
             child = node.get(child_key)
             if child_key == "args":
-                if not isinstance(child, list) or not child:
+                if not isinstance(child, list) or len(child) < 2:
                     raise ValueError("safe MathJSON operation arguments are invalid")
                 for argument in child:
                     visit(argument)
@@ -564,6 +574,25 @@ def _m2_complexity_metrics(ast: dict[str, object]) -> tuple[Decimal | None, int]
         None if maximum_numeric_value is None else maximum_numeric_value,
         operation_nodes,
     )
+
+
+def _safe_ast_number_value(value: object) -> Decimal:
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        raise ValueError("safe MathJSON number value is invalid")
+    value_text = str(value)
+    if value_text.count("/") == 1:
+        numerator_text, denominator_text = value_text.split("/", maxsplit=1)
+        numerator = Decimal(numerator_text)
+        denominator = Decimal(denominator_text)
+        if not numerator.is_finite() or not denominator.is_finite() or denominator == 0:
+            raise ValueError("safe MathJSON rational value is invalid")
+        with localcontext() as context:
+            context.prec = max(
+                len(numerator.as_tuple().digits) + len(denominator.as_tuple().digits) + 1,
+                28,
+            )
+            return numerator / denominator
+    return Decimal(value_text)
 
 
 def _m2_findings(

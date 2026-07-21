@@ -406,7 +406,7 @@ class PassingM2Grader:
         return {
             "type": "add",
             "args": [
-                {"type": "symbol", "name": "x"},
+                {"type": "symbol", "value": "x"},
                 {"type": "number", "value": "1"},
             ],
         }
@@ -485,12 +485,12 @@ class ComplexM2Grader(PassingM2Grader):
         return {
             "type": "add",
             "args": [
-                {"type": "symbol", "name": "x"},
+                {"type": "symbol", "value": "x"},
                 {
                     "type": "mul",
                     "args": [
                         {"type": "number", "value": "2"},
-                        {"type": "symbol", "name": "x"},
+                        {"type": "symbol", "value": "x"},
                     ],
                 },
             ],
@@ -501,6 +501,16 @@ class InvalidSafeAstM2Grader(PassingM2Grader):
     def normalize_math_answer(self, answer_json: dict[str, object]) -> dict[str, object]:
         self.normalization_requests.append(answer_json)
         return {"kind": "expression", "value": "x_plus_1"}
+
+
+class SafeAstM2Grader(PassingM2Grader):
+    def __init__(self, ast: dict[str, object]) -> None:
+        super().__init__()
+        self.ast = ast
+
+    def normalize_math_answer(self, answer_json: dict[str, object]) -> dict[str, object]:
+        self.normalization_requests.append(answer_json)
+        return self.ast
 
 
 def valid_m2_candidate() -> dict[str, object]:
@@ -2230,6 +2240,50 @@ def test_m2_unexpected_safe_ast_is_blocked_before_grader_probe(session: Session)
     assert run.status is ValidationRunStatus.BLOCKED
     assert finding.evidence_json == {"probe": "expected_mathjson"}
     assert grader.grade_requests == []
+
+
+def test_m2_rational_safe_ast_supports_numeric_complexity(session: Session) -> None:
+    draft = generation_draft(
+        session, allowed_question_types=["M2"], candidate_json=valid_m2_candidate()
+    )
+    configure_grade_complexity_rules(session, draft, {"max_numeric_absolute_value": 1})
+    grader = SafeAstM2Grader({"type": "number", "value": "3/2"})
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    assert "m2_mathjson_invalid" not in finding_codes(run)
+    finding = next(item for item in run.findings if item.code == "grade_complexity_warning")
+    assert finding.evidence_json == {
+        "grade_level": "G5",
+        "metric": "max_numeric_absolute_value",
+        "observed": 1.5,
+        "limit": 1,
+    }
+    assert grader.normalization_requests == [{"mathjson": ["Add", "x", 1], "variables": ["x"]}]
+
+
+@pytest.mark.parametrize(
+    "ast",
+    [
+        {"type": "symbol"},
+        {"type": "number", "value": "1", "arg": {"type": "symbol", "value": "x"}},
+        {"type": "symbol", "value": "x", "unexpected": "field"},
+    ],
+)
+def test_m2_incomplete_or_unknown_safe_ast_is_blocked_before_grader_probe(
+    session: Session, ast: dict[str, object]
+) -> None:
+    draft = generation_draft(
+        session, allowed_question_types=["M2"], candidate_json=valid_m2_candidate()
+    )
+    grader = SafeAstM2Grader(ast)
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding_codes(run) == {"m2_mathjson_invalid"}
+    assert grader.grade_requests == []
+    assert len(grader.normalization_requests) == 1
 
 
 def test_invalid_m2_schema_preserves_policy_finding(session: Session) -> None:
