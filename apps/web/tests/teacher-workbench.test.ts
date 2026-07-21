@@ -43,6 +43,18 @@ describe('teacher workbench UI contract', () => {
     expect(isQuestionDraftReady({ title: '加法练习', prompt: '计算 2 + 3', questionType: 'math', answer: '5' })).toBe(true)
   })
 
+  it('guides English question authoring and keeps raw JSON behind an explicit advanced mode', () => {
+    const teacherPage = readFileSync(new URL('../app/pages/teacher/index.vue', import.meta.url), 'utf8')
+
+    expect(teacherPage).toContain('可接受答案')
+    expect(teacherPage).toContain('词元')
+    expect(teacherPage).toContain('启用语法反馈')
+    expect(teacherPage).toContain('评分点')
+    expect(teacherPage).toContain('高级 JSON 模式')
+    expect(teacherPage).toContain('fetchQuestionPolicyCatalog')
+    expect(teacherPage).toContain('buildEnglishQuestionRule')
+  })
+
   it('requires the visible assignment creation fields', () => {
     expect(isAssignmentDraftReady({ title: '周末练习', className: '', dueAt: '2026-07-21T18:00', allowLate: false })).toBe(false)
     expect(isAssignmentDraftReady({ title: '周末练习', className: '三年级 2 班', dueAt: '', allowLate: false })).toBe(false)
