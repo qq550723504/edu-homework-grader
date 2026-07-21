@@ -19,10 +19,11 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 from sqlalchemy.types import JSON, Uuid
 
 from .db import Base
+from .services.question_fingerprints import FINGERPRINT_VERSION, fingerprint_prompt
 
 
 class Role(StrEnum):
@@ -681,6 +682,18 @@ class GeneratedQuestionDraft(Base):
     __table_args__ = (
         UniqueConstraint("job_id", "ordinal", name="uq_generated_question_draft_ordinal"),
         Index("ix_generated_question_drafts_content_hash", "content_hash"),
+        Index(
+            "ix_generated_question_drafts_job_fingerprint_exact",
+            "job_id",
+            "fingerprint_version",
+            "exact_prompt_hash",
+        ),
+        Index(
+            "ix_generated_question_drafts_job_fingerprint_normalized",
+            "job_id",
+            "fingerprint_version",
+            "normalized_prompt_hash",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -692,6 +705,15 @@ class GeneratedQuestionDraft(Base):
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     candidate_json: Mapped[dict[str, object]] = mapped_column(
         JSON().with_variant(JSONB, "postgresql"), nullable=False
+    )
+    fingerprint_version: Mapped[str] = mapped_column(
+        String(100), nullable=False, default=FINGERPRINT_VERSION
+    )
+    exact_prompt_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=lambda: fingerprint_prompt("").exact_hash
+    )
+    normalized_prompt_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=lambda: fingerprint_prompt("").normalized_hash
     )
     validation_errors_json: Mapped[list[dict[str, object]] | None] = mapped_column(
         JSON().with_variant(JSONB, "postgresql")
@@ -708,6 +730,17 @@ class GeneratedQuestionDraft(Base):
         back_populates="draft",
         order_by="GenerationValidationRun.run_number",
     )
+
+    @validates("candidate_json")
+    def _refresh_prompt_fingerprints(self, _key: str, candidate_json: object) -> dict[str, object]:
+        if isinstance(candidate_json, dict) and isinstance(
+            prompt := candidate_json.get("prompt"), str
+        ):
+            fingerprints = fingerprint_prompt(prompt)
+            self.fingerprint_version = fingerprints.version
+            self.exact_prompt_hash = fingerprints.exact_hash
+            self.normalized_prompt_hash = fingerprints.normalized_hash
+        return candidate_json
 
 
 class GenerationValidationRun(Base):
@@ -804,6 +837,7 @@ class GradingPolicy(Base):
 
 class Question(Base):
     __tablename__ = "questions"
+    __table_args__ = (Index("ix_questions_tenant_id", "tenant_id"),)
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
@@ -823,6 +857,16 @@ class QuestionVersion(Base):
     __tablename__ = "question_versions"
     __table_args__ = (
         UniqueConstraint("question_id", "version_number", name="uq_question_version_number"),
+        Index(
+            "ix_question_versions_fingerprint_exact",
+            "fingerprint_version",
+            "exact_prompt_hash",
+        ),
+        Index(
+            "ix_question_versions_fingerprint_normalized",
+            "fingerprint_version",
+            "normalized_prompt_hash",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -837,6 +881,9 @@ class QuestionVersion(Base):
         nullable=False,
     )
     prompt: Mapped[str] = mapped_column(String(10_000))
+    fingerprint_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    exact_prompt_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    normalized_prompt_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     question_type: Mapped[str] = mapped_column(String(20))
     grading_policy_id: Mapped[UUID] = mapped_column(
         ForeignKey("grading_policies.id"), nullable=False
@@ -854,6 +901,14 @@ class QuestionVersion(Base):
     test_runs: Mapped[list[QuestionTestRun]] = relationship(back_populates="question_version")
     assignment_items: Mapped[list[AssignmentItem]] = relationship(back_populates="question_version")
     grading_runs: Mapped[list[GradingRun]] = relationship(back_populates="question_version")
+
+    @validates("prompt")
+    def _refresh_prompt_fingerprints(self, _key: str, prompt: str) -> str:
+        fingerprints = fingerprint_prompt(prompt)
+        self.fingerprint_version = fingerprints.version
+        self.exact_prompt_hash = fingerprints.exact_hash
+        self.normalized_prompt_hash = fingerprints.normalized_hash
+        return prompt
 
 
 class QuestionTestCase(Base):

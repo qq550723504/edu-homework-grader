@@ -150,11 +150,11 @@ def test_objective_belongs_to_one_profile_grade_mapping(session: Session) -> Non
     assert objective.grade_mapping_id == grade_mapping.id
 
 
-def test_ai_question_validation_runs_is_the_alembic_head() -> None:
+def test_question_prompt_fingerprints_is_the_alembic_head() -> None:
     config = Config("apps/api/alembic.ini")
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "0016_ai_question_validation_runs"
+    assert script.get_current_head() == "0017_question_prompt_fingerprints"
 
 
 def test_import_batch_keeps_row_location_and_lifecycle(session: Session) -> None:
