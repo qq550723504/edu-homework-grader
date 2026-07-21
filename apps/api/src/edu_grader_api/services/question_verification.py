@@ -37,15 +37,15 @@ from .question_fingerprints import FINGERPRINT_VERSION, PromptFingerprints, fing
 from .questions import GradeResult
 
 
-VALIDATOR_VERSION = "verification-v4"
-RULESET_VERSION = "rules-v4"
+VALIDATOR_VERSION = "verification-v5"
+RULESET_VERSION = "rules-v5"
 _SEMANTIC_CHUNK_SIZE = 128
 _DUPLICATE_REMEDIATION = "Revise the prompt to make the candidate meaningfully distinct."
 _WHITESPACE = re.compile(r"\s+")
 _E2_TERMINAL_PUNCTUATION = re.compile(r"[.!?。！？]+$")
 _M1_PROBE_TEXT_LIMIT = 100
 _LEXICAL_UNITS = re.compile(
-    r"[A-Za-z0-9]+(?:'[A-Za-z0-9]+)*|[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002ebef\U00030000-\U000323af]"
+    r"[A-Za-z0-9\u00c0-\u024f\u1e00-\u1eff\u2c60-\u2c7f\ua720-\ua7ff\uab30-\uab6f]+(?:'[A-Za-z0-9\u00c0-\u024f\u1e00-\u1eff\u2c60-\u2c7f\ua720-\ua7ff\uab30-\uab6f]+)*|[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002ebef\U00030000-\U000323af]"
 )
 _SENTENCE_SEPARATORS = re.compile(r"[.!?。！？]+")
 _M2_AST_CHILD_KEYS = frozenset({"args", "arg", "numerator", "denominator", "base", "exponent"})
@@ -453,7 +453,7 @@ def _grade_complexity_findings(
     """Return stable, non-blocking findings for configured grade-complexity limits."""
 
     findings: list[VerificationFinding] = []
-    observed_metrics: dict[str, int | float] = {
+    observed_metrics: dict[str, Decimal | int] = {
         "max_prompt_units": _lexical_unit_count(prompt),
         "max_sentence_units": _max_sentence_units(prompt),
     }
@@ -464,9 +464,7 @@ def _grade_complexity_findings(
             if _is_finite_number(value)
         ]
         if numeric_values:
-            observed_metrics["max_numeric_absolute_value"] = _complexity_observed_value(
-                max(numeric_values)
-            )
+            observed_metrics["max_numeric_absolute_value"] = max(numeric_values)
     elif question_type == "M2" and normalized_m2_ast is not None:
         maximum_numeric_value, operation_nodes = _m2_complexity_metrics(normalized_m2_ast)
         if maximum_numeric_value is not None:
@@ -476,7 +474,7 @@ def _grade_complexity_findings(
     for metric in _GRADE_COMPLEXITY_METRICS:
         limit = rules.get(metric)
         observed = observed_metrics.get(metric)
-        if isinstance(limit, int) and observed is not None and observed > limit:
+        if isinstance(limit, int) and observed is not None and observed > Decimal(limit):
             findings.append(
                 VerificationFinding(
                     code="grade_complexity_warning",
@@ -484,7 +482,7 @@ def _grade_complexity_findings(
                     evidence={
                         "grade_level": grade_level,
                         "metric": metric,
-                        "observed": observed,
+                        "observed": _complexity_observed_value(observed),
                         "limit": limit,
                     },
                     remediation="Revise the candidate to fit the selected grade complexity limit.",
@@ -503,13 +501,15 @@ def _max_sentence_units(text: str) -> int:
     )
 
 
-def _complexity_observed_value(value: Decimal) -> int | float:
+def _complexity_observed_value(value: Decimal | int) -> int | float:
+    if isinstance(value, int):
+        return value
     if value == value.to_integral_value():
         return int(value)
     return float(value)
 
 
-def _m2_complexity_metrics(ast: dict[str, object]) -> tuple[int | None, int]:
+def _m2_complexity_metrics(ast: dict[str, object]) -> tuple[Decimal | None, int]:
     maximum_numeric_value: Decimal | None = None
     operation_nodes = 0
     child_keys_by_type = {
@@ -556,9 +556,7 @@ def _m2_complexity_metrics(ast: dict[str, object]) -> tuple[int | None, int]:
 
     visit(ast)
     return (
-        None
-        if maximum_numeric_value is None
-        else _complexity_observed_value(maximum_numeric_value),
+        None if maximum_numeric_value is None else maximum_numeric_value,
         operation_nodes,
     )
 

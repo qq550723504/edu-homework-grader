@@ -2050,6 +2050,7 @@ def test_grade_complexity_warns_only_above_prompt_unit_limit(
 
 def test_grade_complexity_uses_cjk_units_and_largest_sentence(session: Session) -> None:
     assert verification._lexical_unit_count("One 2's 中文") == 4
+    assert verification._lexical_unit_count("élève") == 1
     assert verification._max_sentence_units("One two. Three four five.") == 3
 
     draft = generation_draft(
@@ -2100,6 +2101,25 @@ def test_grade_complexity_measures_m1_numeric_values_without_echoing_rule_fields
     assert "tolerance" not in finding.remediation
 
 
+def test_grade_complexity_compares_m2_numeric_values_as_decimals_before_serializing() -> None:
+    findings = verification._grade_complexity_findings(
+        rules={"max_numeric_absolute_value": 10},
+        grade_level="G5",
+        prompt="Find the value.",
+        question_type="M2",
+        rule_json={},
+        normalized_m2_ast={"type": "number", "value": "10.0000000000000001"},
+    )
+
+    assert [finding.code for finding in findings] == ["grade_complexity_warning"]
+    assert findings[0].evidence == {
+        "grade_level": "G5",
+        "metric": "max_numeric_absolute_value",
+        "observed": 10.0,
+        "limit": 10,
+    }
+
+
 def test_grade_complexity_reuses_m2_normalization_for_safe_metrics(session: Session) -> None:
     draft = generation_draft(
         session, allowed_question_types=["M2"], candidate_json=complex_m2_candidate()
@@ -2132,6 +2152,8 @@ def test_grade_complexity_reuses_m2_normalization_for_safe_metrics(session: Sess
         assert "ast" not in finding.evidence_json
         assert "args" not in finding.evidence_json
         assert "value" not in finding.evidence_json
+    assert run.validator_version == "verification-v5"
+    assert run.ruleset_version == "rules-v5"
 
 
 def test_grade_complexity_uses_stable_metric_order_and_skips_absent_rules(session: Session) -> None:
@@ -2389,8 +2411,8 @@ def test_content_policy_findings_are_sanitized_and_ordered(session: Session) -> 
         for sensitive_text in ("explicit adult content", "how to cut yourself")
         for value in persisted_values
     )
-    assert run.validator_version == "verification-v4"
-    assert run.ruleset_version == "rules-v4"
+    assert run.validator_version == "verification-v5"
+    assert run.ruleset_version == "rules-v5"
     assert run.feature_summary_json["content_policy_version"] == "minor-content-policy-v1"
 
 
