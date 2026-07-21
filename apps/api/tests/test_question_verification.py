@@ -666,6 +666,7 @@ def test_semantic_published_question_is_blocked_without_raw_comparator(
     assert "What is 2 + 2?" not in str(finding.evidence_json)
     assert run.feature_summary_json == {
         "finding_count": len(run.findings),
+        "content_policy_version": "minor-content-policy-v1",
         "fingerprint_version": "question-fingerprint-v1",
         "candidate_prompt_fingerprint": {
             "version": "question-fingerprint-v1",
@@ -761,6 +762,7 @@ def test_duplicate_feature_summary_uses_the_gate_snapshot(
     assert run.status is ValidationRunStatus.PASSED
     assert run.feature_summary_json == {
         "finding_count": 0,
+        "content_policy_version": "minor-content-policy-v1",
         "fingerprint_version": "question-fingerprint-v1",
         "candidate_prompt_fingerprint": {
             "version": "question-fingerprint-v1",
@@ -1330,7 +1332,7 @@ def test_e4_normalized_material_match_and_material_safety_scan(session: Session)
         is ValidationRunStatus.PASSED
     )
 
-    candidate["reading_material"] = "self-harm instructions"
+    candidate["reading_material"] = "how to cut yourself"
     unsafe = verification.run_candidate_verification(
         session,
         draft=generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate),
@@ -1338,7 +1340,11 @@ def test_e4_normalized_material_match_and_material_safety_scan(session: Session)
     )
     assert next(
         item for item in unsafe.findings if item.code == "unsafe_minor_content"
-    ).evidence_json == {"category": "self_harm"}
+    ).evidence_json == {
+        "category": "self_harm_instruction",
+        "rule_id": "self-harm-instruction-v1",
+        "policy_version": "minor-content-policy-v1",
+    }
 
 
 def test_e4_normalized_duplicate_point_ids_are_blocked(session: Session) -> None:
@@ -1650,7 +1656,7 @@ def test_e1_unsafe_accepted_answer_is_blocked_without_echoing_answer(session: Se
             "policy_version": "2",
             "prompt": "Choose the safe word.",
             "rule_json": {
-                "accepted_answers": ["pornographic"],
+                "accepted_answers": ["explicit adult content"],
                 "normalization": {"unicode_form": "NFKC", "ignore_case": True},
             },
             "explanation": "Choose a word from the list.",
@@ -1663,8 +1669,115 @@ def test_e1_unsafe_accepted_answer_is_blocked_without_echoing_answer(session: Se
 
     finding = next(finding for finding in run.findings if finding.code == "unsafe_minor_content")
     assert run.status is ValidationRunStatus.BLOCKED
-    assert finding.evidence_json == {"category": "adult_content"}
-    assert "pornographic" not in str(finding.evidence_json)
+    assert finding.evidence_json == {
+        "category": "adult_content",
+        "rule_id": "adult-explicit-v1",
+        "policy_version": "minor-content-policy-v1",
+    }
+    assert "explicit adult content" not in str(finding.evidence_json)
+
+
+def test_content_policy_findings_are_sanitized_and_ordered(session: Session) -> None:
+    candidate = {
+        "question_type": "E1",
+        "policy_version": "2",
+        "prompt": "Choose the safe word.",
+        "reading_material": "explicit adult content",
+        "rule_json": {
+            "accepted_answers": ["how to cut yourself"],
+            "normalization": {"unicode_form": "NFKC", "ignore_case": True},
+        },
+        "explanation": "Choose a word from the list.",
+    }
+    draft = generation_draft(session, allowed_question_types=["E1"], candidate_json=candidate)
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=PassingGrader()
+    )
+
+    safety_findings = [
+        finding for finding in run.findings if finding.code == "unsafe_minor_content"
+    ]
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert [finding.evidence_json for finding in safety_findings] == [
+        {
+            "category": "adult_content",
+            "rule_id": "adult-explicit-v1",
+            "policy_version": "minor-content-policy-v1",
+        },
+        {
+            "category": "self_harm_instruction",
+            "rule_id": "self-harm-instruction-v1",
+            "policy_version": "minor-content-policy-v1",
+        },
+    ]
+    persisted_values = [
+        *(finding.evidence_json for finding in safety_findings),
+        *(finding.remediation for finding in safety_findings),
+        run.feature_summary_json,
+    ]
+    assert all(
+        sensitive_text not in str(value)
+        for sensitive_text in ("explicit adult content", "how to cut yourself")
+        for value in persisted_values
+    )
+    assert run.feature_summary_json["content_policy_version"] == "minor-content-policy-v1"
+
+
+def test_content_policy_mature_theme_requires_teacher_review(session: Session) -> None:
+    candidate = {
+        "question_type": "E1",
+        "policy_version": "2",
+        "prompt": "Discuss drug use in a historical context.",
+        "rule_json": {
+            "accepted_answers": ["history"],
+            "normalization": {"unicode_form": "NFKC", "ignore_case": True},
+        },
+        "explanation": "Select the subject being discussed.",
+    }
+    draft = generation_draft(session, allowed_question_types=["E1"], candidate_json=candidate)
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=PassingGrader()
+    )
+
+    finding = next(
+        finding for finding in run.findings if finding.code == "mature_theme_requires_review"
+    )
+    assert run.status is ValidationRunStatus.WARNING
+    assert finding.evidence_json == {
+        "category": "substance_use",
+        "rule_id": "substance-use-v1",
+        "policy_version": "minor-content-policy-v1",
+    }
+
+
+def test_content_policy_blocks_direct_reproduction_requests(session: Session) -> None:
+    candidate = {
+        "question_type": "E1",
+        "policy_version": "2",
+        "prompt": "Copy textbook page 42 verbatim.",
+        "rule_json": {
+            "accepted_answers": ["done"],
+            "normalization": {"unicode_form": "NFKC", "ignore_case": True},
+        },
+        "explanation": "Follow the instruction.",
+    }
+    draft = generation_draft(session, allowed_question_types=["E1"], candidate_json=candidate)
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=PassingGrader()
+    )
+
+    finding = next(
+        finding for finding in run.findings if finding.code == "copyright_reproduction_risk"
+    )
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {
+        "category": "direct_reproduction_request",
+        "rule_id": "direct-reproduction-request-v1",
+        "policy_version": "minor-content-policy-v1",
+    }
 
 
 def test_duplicate_and_unsafe_content_produce_explainable_findings(session: Session) -> None:
@@ -1677,7 +1790,7 @@ def test_duplicate_and_unsafe_content_produce_explainable_findings(session: Sess
         candidate_json={
             **draft.candidate_json,
             "prompt": "  WHAT   IS 2 + 2?  ",
-            "explanation": "This contains pornographic material.",
+            "explanation": "This contains explicit adult content.",
         },
         teacher_state="pending_review",
     )
@@ -1693,7 +1806,11 @@ def test_duplicate_and_unsafe_content_produce_explainable_findings(session: Sess
     unsafe_finding = next(
         finding for finding in run.findings if finding.code == "unsafe_minor_content"
     )
-    assert unsafe_finding.evidence_json == {"category": "adult_content"}
+    assert unsafe_finding.evidence_json == {
+        "category": "adult_content",
+        "rule_id": "adult-explicit-v1",
+        "policy_version": "minor-content-policy-v1",
+    }
 
 
 def test_missing_prompt_or_explanation_is_blocked(session: Session) -> None:
