@@ -1,0 +1,173 @@
+from dataclasses import dataclass
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
+
+from edu_grader_api.auth import VerifiedIdentity, get_token_verifier
+from edu_grader_api.db import Base, get_session
+from edu_grader_api.main import app
+from edu_grader_api.models import (
+    CurriculumActivityType,
+    CurriculumGradeMapping,
+    CurriculumObjective,
+    CurriculumObjectiveRevision,
+    CurriculumProfile,
+    CurriculumProfileStatus,
+    CurriculumRevisionStatus,
+    CurriculumSourceRecord,
+    QuestionVersion,
+    Role,
+    Tenant,
+    User,
+)
+from edu_grader_api.settings import settings
+
+
+ISSUER = "http://localhost:8080/realms/edu-grader"
+
+
+@dataclass
+class StaticVerifier:
+    identity: VerifiedIdentity
+
+    def verify(self, token: str) -> VerifiedIdentity:
+        return self.identity
+
+
+@pytest.fixture
+def session() -> Session:
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session = Session(engine)
+    yield session
+    session.close()
+
+
+@pytest.fixture
+def client(session: Session, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.setattr(settings, "oidc_issuer", ISSUER)
+    monkeypatch.setattr(settings, "oidc_tenant_slug", "pilot")
+    app.dependency_overrides[get_session] = lambda: session
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+
+
+def authorize(client: TestClient, user: User) -> dict[str, str]:
+    client.app.dependency_overrides[get_token_verifier] = lambda: StaticVerifier(
+        VerifiedIdentity(issuer=ISSUER, subject=user.oidc_subject or "", school_id=user.school_id)
+    )
+    return {"Authorization": "Bearer test-token"}
+
+
+def teacher_and_objective(session: Session) -> tuple[User, CurriculumObjectiveRevision]:
+    tenant = Tenant(slug="pilot", name="Pilot")
+    teacher = User(
+        tenant=tenant,
+        role=Role.TEACHER,
+        oidc_issuer=ISSUER,
+        oidc_subject="teacher-subject",
+        display_name="Teacher",
+        work_email="teacher@example.test",
+    )
+    profile = CurriculumProfile(
+        code="pilot-math-2026",
+        name="Pilot Mathematics",
+        jurisdiction="pilot",
+        version_label="2026",
+        status=CurriculumProfileStatus.ACTIVE,
+        source_record=CurriculumSourceRecord(
+            issuer="Example Board",
+            title="Math curriculum",
+            canonical_url="https://curriculum.example.test/math",
+            version_label="2026",
+        ),
+    )
+    grade = CurriculumGradeMapping(
+        profile=profile,
+        internal_level="G5",
+        external_label="Grade 5",
+        position=5,
+    )
+    objective = CurriculumObjective(
+        profile=profile,
+        grade_mapping=grade,
+        code="MATH-G5-001",
+        subject="mathematics",
+        domain="number",
+        status=CurriculumProfileStatus.ACTIVE,
+    )
+    revision = CurriculumObjectiveRevision(
+        objective=objective,
+        revision_number=1,
+        text="Use whole numbers under 100.",
+        source_locator="section 1",
+        allowed_question_types=["M1"],
+        difficulty_min=0,
+        difficulty_max=1,
+        activity_type=CurriculumActivityType.SCORED_QUESTION,
+        status=CurriculumRevisionStatus.ACTIVE,
+    )
+    session.add_all([teacher, revision])
+    session.commit()
+    return teacher, revision
+
+
+def test_teacher_job_request_is_idempotent_and_never_publishes(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    headers = authorize(client, teacher) | {"Idempotency-Key": "same-request"}
+    payload = {
+        "curriculum_objective_revision_id": str(revision.id),
+        "grade": "Grade 5",
+        "subject": "mathematics",
+        "question_types": ["M1"],
+        "requested_count": 1,
+        "policy_catalog_version": "2026.07",
+        "prompt_version": "generator-v1",
+    }
+
+    first = client.post("/v1/ai-question-generation/jobs", json=payload, headers=headers)
+    second = client.post("/v1/ai-question-generation/jobs", json=payload, headers=headers)
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json()["id"] == second.json()["id"]
+    questions = client.get(
+        f"/v1/ai-question-generation/jobs/{first.json()['id']}/questions", headers=headers
+    )
+    assert questions.status_code == 200
+    assert questions.json()["items"][0]["teacher_state"] == "pending_review"
+    assert session.scalars(select(QuestionVersion)).all() == []
+
+
+def test_generation_job_rejects_a_batch_over_the_configured_limit(
+    client: TestClient, session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    monkeypatch.setattr(settings, "generator_max_batch_size", 1)
+
+    response = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=authorize(client, teacher) | {"Idempotency-Key": "oversized-request"},
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "grade": "Grade 5",
+            "subject": "mathematics",
+            "question_types": ["M1"],
+            "requested_count": 2,
+            "policy_catalog_version": "2026.07",
+            "prompt_version": "generator-v1",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "generation_batch_limit_exceeded"

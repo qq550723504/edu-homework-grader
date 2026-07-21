@@ -77,6 +77,19 @@ make api-lint
 make question-test
 ```
 
+### 受控 AI 出题候选
+
+`POST /v1/ai-question-generation/jobs` 会基于课程目标修订版本生成**待教师审核**的候选题；
+请求必须带 `Idempotency-Key`，候选草稿可通过 `GET
+/v1/ai-question-generation/jobs/{id}/questions` 分页读取。候选不会创建或发布 `QuestionVersion`，取消使用
+`POST /v1/ai-question-generation/jobs/{id}/cancel`，重新生成单个候选使用
+`POST /v1/ai-generated-questions/{draft_id}/regenerate`。
+
+本地默认 `GENERATION_PROVIDER=fake`，不会访问外部模型。部署到受控环境时才设置
+`GENERATION_PROVIDER=openai`，并由 Secret Manager 注入 `OPENAI_API_KEY`；同时必须显式设置经过审批的固定
+`GENERATOR_OPENAI_MODEL`（不要使用浮动别名）和 `GENERATOR_PROVIDER_ALLOWED_HOSTS`。真实连接测试默认跳过，
+仅在受控 CI 中同时设置 `LIVE_OPENAI_GENERATION=1`、密钥和模型时运行。
+
 ### 不使用 Docker
 
 Python 需要 3.12 或更高版本，Node.js 建议使用 22 LTS。

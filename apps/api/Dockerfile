@@ -5,11 +5,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 COPY packages/processor-policy /tmp/processor-policy
+COPY services/generator /tmp/generator
 COPY apps/api/pyproject.toml ./
 COPY apps/api/alembic.ini ./
 COPY apps/api/alembic ./alembic
 COPY apps/api/src ./src
-RUN python -m pip install --no-cache-dir /tmp/processor-policy .
+RUN python -m pip install --no-cache-dir /tmp/processor-policy "/tmp/generator[openai]" .
 
 EXPOSE 8000
 CMD ["uvicorn", "edu_grader_api.main:app", "--host", "0.0.0.0", "--port", "8000"]

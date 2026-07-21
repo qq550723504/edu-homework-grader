@@ -125,6 +125,16 @@ class CurriculumActivityType(StrEnum):
     SCORED_QUESTION = "scored_question"
 
 
+class GenerationJobStatus(StrEnum):
+    QUEUED = "queued"
+    GENERATING = "generating"
+    VALIDATING = "validating"
+    READY_FOR_REVIEW = "ready_for_review"
+    PARTIALLY_FAILED = "partially_failed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
 ACTIVE_PRIVACY_REQUEST_STATUSES = (
     PrivacyRequestStatus.REQUESTED.value,
     PrivacyRequestStatus.LEGAL_HOLD.value,
@@ -567,6 +577,121 @@ class PrivacyRequest(Base):
     eligible_for_deletion_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class GenerationJob(Base):
+    __tablename__ = "generation_jobs"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_generation_job_idempotency"),
+        CheckConstraint("requested_count > 0", name="ck_generation_job_requested_count_positive"),
+        Index("ix_generation_jobs_tenant_status", "tenant_id", "status"),
+        Index("ix_generation_jobs_teacher_created", "teacher_user_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    teacher_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    curriculum_profile_id: Mapped[UUID | None] = mapped_column(ForeignKey("curriculum_profiles.id"))
+    curriculum_objective_revision_id: Mapped[UUID] = mapped_column(
+        ForeignKey("curriculum_objective_revisions.id"), nullable=False
+    )
+    grade: Mapped[str | None] = mapped_column(String(100))
+    subject: Mapped[str | None] = mapped_column(String(100))
+    distribution_json: Mapped[dict[str, object]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), default=dict
+    )
+    requested_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[GenerationJobStatus] = mapped_column(
+        Enum(
+            GenerationJobStatus,
+            native_enum=False,
+            values_callable=lambda values: [value.value for value in values],
+        ),
+        nullable=False,
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    policy_version: Mapped[str | None] = mapped_column(String(100))
+    prompt_version: Mapped[str | None] = mapped_column(String(100))
+    request_digest: Mapped[str | None] = mapped_column(String(64))
+    succeeded_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_cost_usd: Mapped[float | None] = mapped_column(Float)
+    total_duration_ms: Mapped[int | None] = mapped_column(Integer)
+    failure_code: Mapped[str | None] = mapped_column(String(100))
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+    tenant: Mapped[Tenant] = relationship()
+    teacher: Mapped[User] = relationship(foreign_keys=[teacher_user_id])
+    curriculum_profile: Mapped[CurriculumProfile | None] = relationship()
+    curriculum_objective_revision: Mapped[CurriculumObjectiveRevision] = relationship()
+    attempts: Mapped[list[GenerationAttempt]] = relationship(back_populates="job")
+    drafts: Mapped[list[GeneratedQuestionDraft]] = relationship(back_populates="job")
+
+
+class GenerationAttempt(Base):
+    __tablename__ = "generation_attempts"
+    __table_args__ = (
+        UniqueConstraint("job_id", "attempt_number", name="uq_generation_attempt_number"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    job_id: Mapped[UUID] = mapped_column(ForeignKey("generation_jobs.id"), nullable=False)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    provider_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(200), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    seed: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    request_summary: Mapped[dict[str, object] | None] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql")
+    )
+    response_summary: Mapped[dict[str, object] | None] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql")
+    )
+    failure_code: Mapped[str | None] = mapped_column(String(100))
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    cost_usd: Mapped[float | None] = mapped_column(Float)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    job: Mapped[GenerationJob] = relationship(back_populates="attempts")
+    drafts: Mapped[list[GeneratedQuestionDraft]] = relationship(back_populates="generation_attempt")
+
+
+class GeneratedQuestionDraft(Base):
+    __tablename__ = "generated_question_drafts"
+    __table_args__ = (
+        UniqueConstraint("job_id", "ordinal", name="uq_generated_question_draft_ordinal"),
+        Index("ix_generated_question_drafts_content_hash", "content_hash"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    job_id: Mapped[UUID] = mapped_column(ForeignKey("generation_jobs.id"), nullable=False)
+    generation_attempt_id: Mapped[UUID] = mapped_column(
+        ForeignKey("generation_attempts.id"), nullable=False
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    candidate_json: Mapped[dict[str, object]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False
+    )
+    validation_errors_json: Mapped[list[dict[str, object]] | None] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql")
+    )
+    teacher_state: Mapped[str] = mapped_column(String(30), nullable=False, default="pending_review")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+    job: Mapped[GenerationJob] = relationship(back_populates="drafts")
+    generation_attempt: Mapped[GenerationAttempt] = relationship(back_populates="drafts")
 
 
 class GradingPolicy(Base):
