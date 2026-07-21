@@ -113,6 +113,13 @@ class CurriculumRevisionStatus(StrEnum):
     RETIRED = "retired"
 
 
+class CurriculumImportStatus(StrEnum):
+    DRAFT = "draft"
+    IN_REVIEW = "in_review"
+    ACTIVE = "active"
+    RETIRED = "retired"
+
+
 class CurriculumActivityType(StrEnum):
     LEARNING_ACTIVITY = "learning_activity"
     SCORED_QUESTION = "scored_question"
@@ -268,6 +275,9 @@ class CurriculumSourceRecord(Base):
     effective_from: Mapped[datetime | None] = mapped_column(Date)
     effective_until: Mapped[datetime | None] = mapped_column(Date)
     editorial_note: Mapped[str | None] = mapped_column(String(1_000))
+    license: Mapped[str | None] = mapped_column(String(200))
+    document_number: Mapped[str | None] = mapped_column(String(100))
+    curated_at: Mapped[datetime | None] = mapped_column(Date)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     profiles: Mapped[list[CurriculumProfile]] = relationship(back_populates="source_record")
@@ -299,6 +309,7 @@ class CurriculumProfile(Base):
     source_record: Mapped[CurriculumSourceRecord] = relationship(back_populates="profiles")
     grade_mappings: Mapped[list[CurriculumGradeMapping]] = relationship(back_populates="profile")
     objectives: Mapped[list[CurriculumObjective]] = relationship(back_populates="profile")
+    import_batches: Mapped[list[CurriculumImportBatch]] = relationship(back_populates="profile")
 
 
 class CurriculumGradeMapping(Base):
@@ -391,6 +402,8 @@ class CurriculumObjectiveRevision(Base):
     )
     reviewed_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    change_summary: Mapped[str | None] = mapped_column(String(1_000))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     objective: Mapped[CurriculumObjective] = relationship(back_populates="revisions")
@@ -417,6 +430,67 @@ class CurriculumPrerequisite(Base):
     )
     relation_type: Mapped[str] = mapped_column(String(50), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class CurriculumImportBatch(Base):
+    __tablename__ = "curriculum_import_batches"
+    __table_args__ = (
+        Index("ix_curriculum_import_batches_profile_status", "profile_id", "status"),
+        Index("ix_curriculum_import_batches_digest_status", "content_digest", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    profile_id: Mapped[UUID] = mapped_column(ForeignKey("curriculum_profiles.id"), nullable=False)
+    input_format: Mapped[str] = mapped_column(String(10), nullable=False)
+    content_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    baseline_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[CurriculumImportStatus] = mapped_column(
+        Enum(CurriculumImportStatus, native_enum=False, values_callable=role_values),
+        nullable=False,
+    )
+    submitted_by_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    reviewed_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    activated_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    change_summary: Mapped[str] = mapped_column(String(1_000), nullable=False)
+    summary_json: Mapped[dict[str, int]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    profile: Mapped[CurriculumProfile] = relationship(back_populates="import_batches")
+    issues: Mapped[list[CurriculumImportIssue]] = relationship(
+        back_populates="batch", cascade="all, delete-orphan"
+    )
+
+
+class CurriculumImportIssue(Base):
+    __tablename__ = "curriculum_import_issues"
+    __table_args__ = (
+        UniqueConstraint(
+            "batch_id",
+            "source_path",
+            "source_row",
+            "source_column",
+            "code",
+            name="uq_curriculum_import_issue_location",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    batch_id: Mapped[UUID] = mapped_column(
+        ForeignKey("curriculum_import_batches.id"), nullable=False
+    )
+    source_path: Mapped[str | None] = mapped_column(String(500))
+    source_row: Mapped[int | None] = mapped_column(Integer)
+    source_column: Mapped[str | None] = mapped_column(String(100))
+    code: Mapped[str] = mapped_column(String(100), nullable=False)
+    category: Mapped[str] = mapped_column(String(50), nullable=False)
+    message: Mapped[str] = mapped_column(String(1_000), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    batch: Mapped[CurriculumImportBatch] = relationship(back_populates="issues")
 
 
 class StudentGuardianConsent(Base):
