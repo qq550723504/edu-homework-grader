@@ -14,7 +14,7 @@
 - Reuse `VerificationGraderClient.grade` and the existing Grader for every answer decision; do not add Core MathJSON parsing, SymPy, `eval`, a solver, an endpoint, a migration, or a dependency.
 - Keep the one existing expected-answer `normalize_math_answer` call before probes; never normalize a probe in Core.
 - Probe IDs and order are exactly `expected_mathjson`, `one_unit_offset`, `empty_mathjson`, `zero_denominator`, `resource_limit`.
-- Expected outcomes are: expected = `auto_accepted`/full finite score; offset = `auto_rejected`/zero finite score; the final three = `needs_review`/zero finite score.
+- Expected outcomes are: expected = `auto_accepted`/full finite score; offset = non-accepting (`auto_rejected` or `needs_review`)/zero finite score; the final three = `needs_review`/zero finite score.
 - Continue through all five probes even after a failure, record only the first failure, and block with `m2_grader_probe_failed` evidence exactly `{"probe": "<id>"}`.
 - Never persist prompt text, expected/probe MathJSON, AST, Grader evidence/feedback/version, or exception text in a finding/remediation.
 - Preserve malformed expected behavior as `m2_mathjson_invalid`, fail closed on any exception/non-finite/unexpected response, and never create or mutate `QuestionVersion`.
@@ -94,7 +94,7 @@
 
 **Interfaces:**
 
-- `_M2Probe(name: str, mathjson: object, decision: str, score_kind: Literal["full", "zero"])` represents an in-memory candidate verification probe.
+- `_M2Probe(name: str, mathjson: object, decisions: frozenset[str], score_kind: Literal["full", "zero"])` represents an in-memory candidate verification probe.
 - `_m2_probes(expected: object) -> tuple[_M2Probe, ...]` returns the five global-contract probes in their fixed order.
 - `_m2_findings(...)` normalizes the expected expression once, then grades all five probes and returns one sanitized failure finding at most.
 
@@ -138,8 +138,10 @@
   with exactly 21 operators; do not inspect or transform `expected` beyond
   embedding it as an operand in `["Add", expected, 1]`. For each response,
   require a string decision and a finite numeric score; require `max_score` for
-  the expected probe, exactly zero for every other probe, and the decision in
-  the interface contract. Catch every injected-Grader exception as a failed
+  the expected probe, exactly zero for every other probe, and a decision in the
+  interface contract. The offset accepts either `auto_rejected` or
+  `needs_review` because wrapping a depth-limit-valid expected expression adds a
+  nesting level and may correctly hit the Grader resource guard. Catch every injected-Grader exception as a failed
   probe, but continue iterating. Do not call `normalize_math_answer` again.
 
 - [ ] **Step 4: Run focused and complete verifier checks.**

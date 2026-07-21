@@ -41,17 +41,21 @@ continues after a failure so the external call shape remains deterministic.
 | Probe ID | Student MathJSON | Required Grader result |
 | --- | --- | --- |
 | `expected_mathjson` | the rule's `expected` value | `auto_accepted` and full `max_score` |
-| `one_unit_offset` | `["Add", expected, 1]` | `auto_rejected` and score `0` |
+| `one_unit_offset` | `["Add", expected, 1]` | non-accepting (`auto_rejected` or `needs_review`) and score `0` |
 | `empty_mathjson` | `null` | `needs_review` and score `0` |
 | `zero_denominator` | `["Divide", 1, 0]` | `needs_review` and score `0` |
 | `resource_limit` | 21 nested `["Negate", …]` nodes | `needs_review` and score `0` |
 
 The offset is mathematically distinct from every supported real-valued expected
 expression, including constants, rationals, and expressions in the declared
-variables. It deliberately is not labelled a learner ``common misconception``:
-inferring one from arbitrary generated prose or expressions would be unsupported
-semantic classification. Curated misconception corpora and outcome calibration
-remain #42 work.
+variables. When an already-valid expected expression is at the Grader's depth
+limit, wrapping it once can instead trigger that existing resource guard. Both a
+rejection and review are non-accepting zero-score outcomes, so both prove the
+candidate does not incorrectly accept the offset without disallowing a
+Grader-supported depth-limit expression. The probe deliberately is not labelled
+a learner ``common misconception``: inferring one from arbitrary generated prose
+or expressions would be unsupported semantic classification. Curated
+misconception corpora and outcome calibration remain #42 work.
 
 `null` must travel through `HttpGraderClient` to the Grader instead of being
 rejected locally. The Grader has an explicit `Any` request field and produces the
