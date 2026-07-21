@@ -33,7 +33,7 @@
 
 **Interfaces:** `PromptFingerprints(version: str, exact_hash: str, normalized_hash: str)`; `normalize_prompt(prompt: str) -> str`; `fingerprint_prompt(prompt: str) -> PromptFingerprints`; non-null `fingerprint_version`, `exact_prompt_hash`, `normalized_prompt_hash` on `GeneratedQuestionDraft` and `QuestionVersion`.
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
 
 ```python
 def test_fingerprint_prompt_distinguishes_raw_and_normalized_surfaces() -> None:
@@ -50,9 +50,9 @@ def test_prompt_assignment_refreshes_version_fingerprints(session: Session) -> N
     assert version.exact_prompt_hash == fingerprint_prompt("Changed prompt").exact_hash
 ```
 
-- [ ] **Step 2: Verify the tests fail.** Run `python -m pytest apps/api/tests/test_question_fingerprints.py apps/api/tests/test_generation_models.py apps/api/tests/test_question_models.py -q`. Expected: failure because the module and fields are absent.
+- [x] **Step 2: Verify the tests fail.** Run `python -m pytest apps/api/tests/test_question_fingerprints.py apps/api/tests/test_generation_models.py apps/api/tests/test_question_models.py -q`. Expected: failure because the module and fields are absent.
 
-- [ ] **Step 3: Implement the module and model field population.**
+- [x] **Step 3: Implement the module and model field population.**
 
 ```python
 FINGERPRINT_VERSION = "question-fingerprint-v1"
@@ -71,11 +71,11 @@ def fingerprint_prompt(prompt: str) -> PromptFingerprints:
 
 Use SQLAlchemy validators on `QuestionVersion.prompt` and `GeneratedQuestionDraft.candidate_json` to set all three fields only when a prompt is a string. Preserve malformed draft records so the current verifier, rather than persistence, blocks them.
 
-- [ ] **Step 4: Add migration `0017_question_prompt_fingerprints`.** Set `revision = "0017_question_prompt_fingerprints"` and `down_revision = "0016_ai_question_validation_runs"`. Add nullable fields, stream `QuestionVersion.prompt` and `GeneratedQuestionDraft.candidate_json["prompt"]`, compute equivalent migration-local v1 hashes, then make every field non-null. Use empty prompt only for malformed legacy JSON. Add draft indexes `(job_id, fingerprint_version, exact_prompt_hash)` and `(job_id, fingerprint_version, normalized_prompt_hash)`, version fingerprint indexes, and a `questions.tenant_id` index for tenant lookup. Downgrade removes indexes before fields.
+- [x] **Step 4: Add migration `0017_question_prompt_fingerprints`.** Set `revision = "0017_question_prompt_fingerprints"` and `down_revision = "0016_ai_question_validation_runs"`. Add nullable fields, stream `QuestionVersion.prompt` and `GeneratedQuestionDraft.candidate_json["prompt"]`, compute equivalent migration-local v1 hashes, then make every field non-null. Use empty prompt only for malformed legacy JSON. Add draft indexes `(job_id, fingerprint_version, exact_prompt_hash)` and `(job_id, fingerprint_version, normalized_prompt_hash)`, version fingerprint indexes, and a `questions.tenant_id` index for tenant lookup. Downgrade removes indexes before fields.
 
-- [ ] **Step 5: Verify the persistence slice.** Run `python -m pytest apps/api/tests/test_question_fingerprints.py apps/api/tests/test_generation_models.py apps/api/tests/test_question_models.py apps/api/tests/test_curriculum_models.py -q`. Expected: PASS and the Alembic-head test expects `0017_question_prompt_fingerprints`.
+- [x] **Step 5: Verify the persistence slice.** Run `python -m pytest apps/api/tests/test_question_fingerprints.py apps/api/tests/test_generation_models.py apps/api/tests/test_question_models.py apps/api/tests/test_curriculum_models.py -q`. Expected: PASS and the Alembic-head test expects `0017_question_prompt_fingerprints`.
 
-- [ ] **Step 6: Commit.** Run `git add apps/api/src/edu_grader_api/services/question_fingerprints.py apps/api/src/edu_grader_api/models.py apps/api/alembic/versions/0017_question_prompt_fingerprints.py apps/api/tests/test_question_fingerprints.py apps/api/tests/test_generation_models.py apps/api/tests/test_question_models.py`, then `git commit -m "feat: fingerprint generated question prompts"`.
+- [x] **Step 6: Commit.** Run `git add apps/api/src/edu_grader_api/services/question_fingerprints.py apps/api/src/edu_grader_api/models.py apps/api/alembic/versions/0017_question_prompt_fingerprints.py apps/api/tests/test_question_fingerprints.py apps/api/tests/test_generation_models.py apps/api/tests/test_question_models.py`, then `git commit -m "feat: fingerprint generated question prompts"`.
 
 ### Task 2: Bounded local batch similarity endpoint in Grader
 
@@ -87,7 +87,7 @@ Use SQLAlchemy validators on `QuestionVersion.prompt` and `GeneratedQuestionDraf
 
 **Interfaces:** `SemanticSimilarity.score_many(query: str, comparisons: list[str]) -> list[float]`; `POST /v1/semantic-similarity` accepts a query and 1..128 comparison strings, all 1..10,000 characters; response is `{"scores": list[float], "embedding": dict[str, str]}` in comparison order.
 
-- [ ] **Step 1: Write failing Grader tests.**
+- [x] **Step 1: Write failing Grader tests.**
 
 ```python
 def test_static_similarity_scores_every_comparison() -> None:
@@ -101,9 +101,9 @@ def test_similarity_endpoint_returns_ordered_scores(monkeypatch) -> None:
     assert response.json()["scores"] == [0.9, 0.1]
 ```
 
-- [ ] **Step 2: Verify failure.** Run `python -m pytest services/grader/tests/test_english_dependencies.py services/grader/tests/test_english_lifecycle.py -q`. Expected: failure because the batch method and endpoint are absent.
+- [x] **Step 2: Verify failure.** Run `python -m pytest services/grader/tests/test_english_dependencies.py services/grader/tests/test_english_lifecycle.py -q`. Expected: failure because the batch method and endpoint are absent.
 
-- [ ] **Step 3: Implement batch scoring and the private endpoint.**
+- [x] **Step 3: Implement batch scoring and the private endpoint.**
 
 ```python
 def score_many(self, query: str, comparisons: list[str]) -> list[float]:
@@ -114,9 +114,9 @@ def score_many(self, query: str, comparisons: list[str]) -> list[float]:
 
 Extend `SemanticSimilarity`, `StaticSimilarity`, and `UnavailableSimilarity`. Add Pydantic request/response models in `main.py`; validate `request.model_dump()` with `assert_deidentified_payload`. Return HTTP 503 for unavailable models, scoring errors, non-finite values, or a score-count mismatch. Return embedding metadata but never request text.
 
-- [ ] **Step 4: Verify.** Run `python -m pytest services/grader/tests/test_english_dependencies.py services/grader/tests/test_english_lifecycle.py services/grader/tests/test_english_orchestrator.py -q`. Expected: PASS, including E4 behaviour.
+- [x] **Step 4: Verify.** Run `python -m pytest services/grader/tests/test_english_dependencies.py services/grader/tests/test_english_lifecycle.py services/grader/tests/test_english_orchestrator.py -q`. Expected: PASS, including E4 behaviour.
 
-- [ ] **Step 5: Commit.** Run `git add services/grader/src/edu_grader/english_dependencies.py services/grader/src/edu_grader/main.py services/grader/tests/test_english_dependencies.py services/grader/tests/test_english_lifecycle.py`, then `git commit -m "feat: add internal semantic similarity endpoint"`.
+- [x] **Step 5: Commit.** Run `git add services/grader/src/edu_grader/english_dependencies.py services/grader/src/edu_grader/main.py services/grader/tests/test_english_dependencies.py services/grader/tests/test_english_lifecycle.py`, then `git commit -m "feat: add internal semantic similarity endpoint"`.
 
 ### Task 3: Core API adapter and duplicate verification gate
 
@@ -130,7 +130,7 @@ Extend `SemanticSimilarity`, `StaticSimilarity`, and `UnavailableSimilarity`. Ad
 
 **Interfaces:** `HttpGraderClient.semantic_similarity(query: str, comparisons: list[str]) -> list[float]`; the same method on `VerificationGraderClient`; `_duplicate_findings(session, draft, tenant_id, prompt, grader_client) -> list[VerificationFinding]`; codes `duplicate_exact_prompt`, `duplicate_normalized_prompt`, `duplicate_semantic_near_match`, `duplicate_semantic_check_unavailable`.
 
-- [ ] **Step 1: Write failing adapter and verifier tests.**
+- [x] **Step 1: Write failing adapter and verifier tests.**
 
 ```python
 def test_http_grader_client_posts_semantic_batch(monkeypatch) -> None:
@@ -149,9 +149,9 @@ def test_semantic_published_question_is_blocked_without_raw_comparator(session: 
     assert finding.evidence_json == {"comparison": "published_question", "method": "semantic", "threshold_band": "at_or_above"}
 ```
 
-- [ ] **Step 2: Verify failure.** Run `python -m pytest apps/api/tests/test_english_grader_client.py apps/api/tests/test_question_verification.py -q`. Expected: failure because the adapter, protocol method, and codes are absent.
+- [x] **Step 2: Verify failure.** Run `python -m pytest apps/api/tests/test_english_grader_client.py apps/api/tests/test_question_verification.py -q`. Expected: failure because the adapter, protocol method, and codes are absent.
 
-- [ ] **Step 3: Implement request validation and complete comparator coverage.**
+- [x] **Step 3: Implement request validation and complete comparator coverage.**
 
 ```python
 def semantic_similarity(self, query: str, comparisons: list[str]) -> list[float]:
@@ -169,9 +169,9 @@ def semantic_similarity(self, query: str, comparisons: list[str]) -> list[float]
 
 Add `ai_duplicate_similarity_threshold: float = Field(default=0.92, ge=0, le=1)` to Core API settings and its `AI_DUPLICATE_SIMILARITY_THRESHOLD` environment alias, with settings tests for default, override, and invalid values. Replace `_has_normalized_duplicate` with `_duplicate_findings`. Query matching fingerprints first. Retrieve remaining published prompts by `Question.tenant_id` plus `QuestionVersion.status == PUBLISHED`, and current-job draft prompts excluding the candidate. De-duplicate comparator strings by normalized hash; mark each `published_question` or `batch_candidate`; score every item in chunks of 128. Use the validated settings threshold, require every score in `[0, 1]`, and store threshold and comparison counts in feature summary without text or IDs. Exact/normalized matches block before Grader calls. Any exception, malformed response, invalid score, or missed chunk returns `duplicate_semantic_check_unavailable` with `{"category": "similarity_unavailable"}`. Duplicate remediation is `"Revise the prompt to make the candidate meaningfully distinct."`.
 
-- [ ] **Step 4: Verify.** Run `python -m pytest apps/api/tests/test_english_grader_client.py apps/api/tests/test_question_verification.py apps/api/tests/test_ai_question_generation_api.py -q`. Expected: PASS with extended fake Grader clients.
+- [x] **Step 4: Verify.** Run `python -m pytest apps/api/tests/test_english_grader_client.py apps/api/tests/test_question_verification.py apps/api/tests/test_ai_question_generation_api.py -q`. Expected: PASS with extended fake Grader clients.
 
-- [ ] **Step 5: Commit.** Run `git add apps/api/src/edu_grader_api/services/grader.py apps/api/src/edu_grader_api/services/question_verification.py apps/api/tests/test_english_grader_client.py apps/api/tests/test_question_verification.py`, then `git commit -m "feat: block duplicate AI question candidates"`.
+- [x] **Step 5: Commit.** Run `git add apps/api/src/edu_grader_api/services/grader.py apps/api/src/edu_grader_api/services/question_verification.py apps/api/tests/test_english_grader_client.py apps/api/tests/test_question_verification.py`, then `git commit -m "feat: block duplicate AI question candidates"`.
 
 ### Task 4: Full verification and PR-first delivery
 
@@ -179,7 +179,7 @@ Add `ai_duplicate_similarity_threshold: float = Field(default=0.92, ge=0, le=1)`
 - Modify: `docs/superpowers/plans/2026-07-22-ai-candidate-semantic-duplicates.md` (completed boxes only)
 - Modify: GitHub Issue #40 body after merge only
 
-- [ ] **Step 1: Run all verification.** Run `python -m ruff format --check apps/api services/grader`; run `python -m ruff check apps/api services/grader`; run `python -m pytest packages/processor-policy/tests services/generator/tests apps/api/tests services/grader/tests -q`; run `git diff --check`. Expected: exit 0; the known Alembic `path_separator` deprecation warning may remain.
+- [x] **Step 1: Run all verification.** Run `python -m ruff format --check apps/api services/grader`; run `python -m ruff check apps/api services/grader`; run `python -m pytest packages/processor-policy/tests services/generator/tests apps/api/tests services/grader/tests -q`; run `git diff --check`. Expected: exit 0; the known Alembic `path_separator` deprecation warning may remain.
 
 - [ ] **Step 2: Commit completed plan boxes.** Run `git add docs/superpowers/plans/2026-07-22-ai-candidate-semantic-duplicates.md`, then `git commit -m "docs: record duplicate detection verification"`. Confirm with `git log --oneline origin/main..HEAD` that no generated artifact is included.
 
