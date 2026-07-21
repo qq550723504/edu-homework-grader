@@ -17,6 +17,7 @@ from ..models import (
     Role,
     VersionStatus,
 )
+from ..policies import question_policy_catalog
 from ..services.grader import HttpGraderClient
 from ..services.questions import (
     PublishConflict,
@@ -34,6 +35,7 @@ from ..settings import settings
 
 router = APIRouter(prefix="/v1/questions", tags=["questions"])
 version_router = APIRouter(prefix="/v1/question-versions", tags=["questions"])
+policy_catalog_router = APIRouter(prefix="/v1/question-policy-catalog", tags=["questions"])
 
 
 class CreateQuestionRequest(BaseModel):
@@ -55,6 +57,13 @@ class CreateTestCaseRequest(BaseModel):
     expected_decision: str = Field(min_length=1, max_length=30)
     expected_score: float = Field(ge=0)
     expected_evidence: dict[str, object]
+
+
+@policy_catalog_router.get("")
+def question_policy_catalog_route(
+    _: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+) -> dict[str, list[dict[str, str]]]:
+    return {"policies": question_policy_catalog()}
 
 
 @router.get("")
