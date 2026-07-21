@@ -87,6 +87,12 @@ def grade_mapping(session: Session, profile: CurriculumProfile) -> CurriculumGra
     return mapping
 
 
+def test_grade_mapping_defaults_complexity_rules_to_empty_object(session: Session) -> None:
+    mapping = grade_mapping(session, active_profile(session))
+
+    assert mapping.complexity_rules_json == {}
+
+
 def test_objective_revision_number_is_unique_per_objective(session: Session) -> None:
     profile = active_profile(session)
     objective = CurriculumObjective(
@@ -150,11 +156,11 @@ def test_objective_belongs_to_one_profile_grade_mapping(session: Session) -> Non
     assert objective.grade_mapping_id == grade_mapping.id
 
 
-def test_question_prompt_fingerprints_is_the_alembic_head() -> None:
+def test_latest_alembic_revision_is_the_head() -> None:
     config = Config("apps/api/alembic.ini")
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "0017_question_prompt_fingerprints"
+    assert script.get_current_head() == "0018_curriculum_grade_complexity_rules"
 
 
 def test_import_batch_keeps_row_location_and_lifecycle(session: Session) -> None:

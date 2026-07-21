@@ -1,6 +1,7 @@
 from copy import deepcopy
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
@@ -21,6 +22,7 @@ from edu_grader_api.services.curriculum_imports import (
     StaleImportBaselineError,
     analyse_import,
     apply_import,
+    export_active_profile,
     parse_csv_document,
 )
 
@@ -57,6 +59,13 @@ MINIMAL_DOCUMENT = {
         }
     ],
     "prerequisites": [],
+}
+
+VALID_COMPLEXITY_RULES = {
+    "max_prompt_units": 80,
+    "max_sentence_units": 20,
+    "max_numeric_absolute_value": 1_000,
+    "max_math_operation_nodes": 8,
 }
 
 
@@ -98,6 +107,55 @@ def test_json_and_csv_produce_the_same_normalized_document() -> None:
     )
 
     assert csv_document.model_dump(mode="json") == document.model_dump(mode="json")
+
+
+@pytest.mark.parametrize(
+    "rules",
+    [
+        {"unknown": 1},
+        {"max_prompt_units": 0},
+        {"max_prompt_units": True},
+        {"max_prompt_units": 1.5},
+        {"max_prompt_units": -1},
+        [],
+        None,
+    ],
+)
+def test_import_rejects_invalid_grade_complexity_rules(rules: object) -> None:
+    document_data = deepcopy(MINIMAL_DOCUMENT)
+    document_data["grade_mappings"][0]["complexity_rules"] = rules
+
+    with pytest.raises(ValidationError):
+        ImportDocument.model_validate(document_data)
+
+
+def test_import_and_export_round_trip_grade_complexity_rules(session: Session) -> None:
+    document_data = deepcopy(MINIMAL_DOCUMENT)
+    document_data["grade_mappings"][0] = {
+        "internal_level": "G5",
+        "external_label": "Grade 5",
+        "position": 5,
+        "complexity_rules": VALID_COMPLEXITY_RULES,
+    }
+    document_data["objectives"][0]["grade_level"] = "G5"
+    document = ImportDocument.model_validate(document_data)
+    actor = admin_user(session)
+    apply_import(
+        session, document=document, analysis=analyse_import(session, document), actor=actor
+    )
+    profile = session.scalar(select(CurriculumProfile))
+    objective = session.scalar(select(CurriculumObjective))
+    revision = session.scalar(select(CurriculumObjectiveRevision))
+    assert profile is not None and objective is not None and revision is not None
+    profile.status = CurriculumProfileStatus.ACTIVE
+    objective.status = CurriculumProfileStatus.ACTIVE
+    revision.status = CurriculumRevisionStatus.ACTIVE
+    session.flush()
+
+    exported = export_active_profile(session, profile_code=profile.code)
+
+    assert exported is not None
+    assert exported.grade_mappings[0].complexity_rules == VALID_COMPLEXITY_RULES
 
 
 def test_analysis_reports_a_prerequisite_cycle_with_json_pointer(session: Session) -> None:

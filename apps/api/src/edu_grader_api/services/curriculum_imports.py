@@ -6,7 +6,7 @@ import io
 import json
 from datetime import date
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -50,10 +50,37 @@ class ImportSource(BaseModel):
     curated_at: date
 
 
+_COMPLEXITY_RULE_KEYS = frozenset(
+    {
+        "max_prompt_units",
+        "max_sentence_units",
+        "max_numeric_absolute_value",
+        "max_math_operation_nodes",
+    }
+)
+
+
+def validate_complexity_rules(value: object) -> dict[str, int]:
+    if not isinstance(value, dict) or set(value) - _COMPLEXITY_RULE_KEYS:
+        raise ValueError("invalid complexity rules")
+    rules: dict[str, int] = {}
+    for key, limit in value.items():
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("invalid complexity limit")
+        rules[key] = limit
+    return rules
+
+
 class ImportGradeMapping(BaseModel):
     internal_level: str = Field(min_length=1, max_length=10)
     external_label: str = Field(min_length=1, max_length=200)
     position: int = Field(ge=0)
+    complexity_rules: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("complexity_rules")
+    @classmethod
+    def validate_rules(cls, value: object) -> dict[str, int]:
+        return validate_complexity_rules(value)
 
 
 class ImportObjective(BaseModel):
@@ -187,6 +214,7 @@ def catalogue_fingerprint(session: Session, profile_code: str) -> str:
                     "internal_level": mapping.internal_level,
                     "external_label": mapping.external_label,
                     "position": mapping.position,
+                    "complexity_rules": mapping.complexity_rules_json,
                 }
                 for mapping in mappings
             ],
@@ -267,6 +295,7 @@ def apply_import(
             internal_level=item.internal_level,
             external_label=item.external_label,
             position=item.position,
+            complexity_rules_json=item.complexity_rules,
         )
         for item in document.grade_mappings
     }
@@ -348,9 +377,14 @@ def _apply_profile_update(
                 internal_level=mapping_data.internal_level,
                 external_label=mapping_data.external_label,
                 position=mapping_data.position,
+                complexity_rules_json=mapping_data.complexity_rules,
             )
             session.add(mapping)
             mappings[mapping_data.internal_level] = mapping
+        else:
+            mapping.external_label = mapping_data.external_label
+            mapping.position = mapping_data.position
+            mapping.complexity_rules_json = mapping_data.complexity_rules
     session.flush()
 
     objectives = {
@@ -569,6 +603,7 @@ def export_active_profile(session: Session, *, profile_code: str) -> ImportDocum
                 internal_level=mapping.internal_level,
                 external_label=mapping.external_label,
                 position=mapping.position,
+                complexity_rules=mapping.complexity_rules_json,
             )
             for mapping in mappings
         ],

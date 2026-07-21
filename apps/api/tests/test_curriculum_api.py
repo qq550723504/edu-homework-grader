@@ -14,6 +14,7 @@ from edu_grader_api.models import (
     AuditLog,
     CurriculumActivityType,
     CurriculumGradeMapping,
+    CurriculumImportBatch,
     CurriculumObjective,
     CurriculumObjectiveRevision,
     CurriculumProfile,
@@ -41,6 +42,7 @@ class StaticVerifier:
 @dataclass
 class CurriculumContext:
     client: TestClient
+    session: Session
     objective_id: UUID
     active_revision_id: UUID
 
@@ -160,6 +162,7 @@ def curriculum_context(session: Session, monkeypatch: pytest.MonkeyPatch) -> Cur
     with TestClient(app) as client:
         yield CurriculumContext(
             client=client,
+            session=session,
             objective_id=objective.id,
             active_revision_id=active_revision.id,
         )
@@ -639,6 +642,103 @@ def test_admin_can_read_import_schema_and_export_an_active_profile(
     assert exported.status_code == 200
     assert exported.json()["profile"]["code"] == "cn-compulsory-2022"
     assert exported.json()["objectives"][0]["code"] == "MATH-G1-NUM-001"
+
+
+def test_admin_grade_mapping_creation_and_active_export_round_trip_complexity_rules(
+    curriculum_context: CurriculumContext,
+) -> None:
+    profile_id = curriculum_context.client.get(
+        "/v1/curriculum-profiles", headers=headers("admin-token")
+    ).json()["items"][0]["id"]
+    rules = {
+        "max_prompt_units": 80,
+        "max_sentence_units": 20,
+        "max_numeric_absolute_value": 1_000,
+        "max_math_operation_nodes": 8,
+    }
+
+    created = curriculum_context.client.post(
+        f"/v1/admin/curriculum/profiles/{profile_id}/grade-mappings",
+        json={
+            "internal_level": "G5",
+            "external_label": "五年级",
+            "position": 5,
+            "complexity_rules": rules,
+        },
+        headers=headers("admin-token"),
+    )
+    exported = curriculum_context.client.get(
+        "/v1/admin/curriculum/profiles/cn-compulsory-2022/export",
+        headers=headers("admin-token"),
+    )
+
+    assert created.status_code == 201
+    assert created.json()["complexity_rules"] == rules
+    assert exported.status_code == 200
+    assert exported.json()["grade_mappings"][-1]["complexity_rules"] == rules
+
+
+@pytest.mark.parametrize(
+    "rules",
+    [
+        {"unknown": 1},
+        {"max_prompt_units": 0},
+        {"max_prompt_units": True},
+        {"max_prompt_units": 1.5},
+        {"max_prompt_units": -1},
+        [],
+        None,
+    ],
+)
+def test_admin_rejects_invalid_grade_complexity_rules_without_writing_a_mapping(
+    curriculum_context: CurriculumContext, rules: object
+) -> None:
+    profile_id = curriculum_context.client.get(
+        "/v1/curriculum-profiles", headers=headers("admin-token")
+    ).json()["items"][0]["id"]
+    before = curriculum_context.client.get(
+        "/v1/curriculum-profiles/cn-compulsory-2022/grade-mappings",
+        headers=headers("admin-token"),
+    ).json()["items"]
+
+    response = curriculum_context.client.post(
+        f"/v1/admin/curriculum/profiles/{profile_id}/grade-mappings",
+        json={
+            "internal_level": "G5",
+            "external_label": "五年级",
+            "position": 5,
+            "complexity_rules": rules,
+        },
+        headers=headers("admin-token"),
+    )
+    after = curriculum_context.client.get(
+        "/v1/curriculum-profiles/cn-compulsory-2022/grade-mappings",
+        headers=headers("admin-token"),
+    ).json()["items"]
+
+    assert response.status_code == 422
+    assert after == before
+
+
+def test_admin_rejects_invalid_import_complexity_rules_without_writing_a_profile_or_batch(
+    curriculum_context: CurriculumContext,
+) -> None:
+    document = import_document()
+    document["grade_mappings"][0]["complexity_rules"] = {"max_prompt_units": 0}
+    profile_count = len(curriculum_context.session.scalars(select(CurriculumProfile)).all())
+    batch_count = len(curriculum_context.session.scalars(select(CurriculumImportBatch)).all())
+
+    response = curriculum_context.client.post(
+        "/v1/admin/curriculum/imports",
+        json={"format": "json", "document": document},
+        headers=headers("admin-token"),
+    )
+
+    assert response.status_code == 422
+    assert len(curriculum_context.session.scalars(select(CurriculumProfile)).all()) == profile_count
+    assert (
+        len(curriculum_context.session.scalars(select(CurriculumImportBatch)).all()) == batch_count
+    )
 
 
 def test_retirement_impact_is_explicit_before_retiring_a_profile(

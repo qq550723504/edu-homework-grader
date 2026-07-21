@@ -348,6 +348,9 @@ class CurriculumGradeMapping(Base):
     external_label: Mapped[str] = mapped_column(String(200), nullable=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     note: Mapped[str | None] = mapped_column(String(500))
+    complexity_rules_json: Mapped[dict[str, object]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
+    )
 
     profile: Mapped[CurriculumProfile] = relationship(back_populates="grade_mappings")
     objectives: Mapped[list[CurriculumObjective]] = relationship(back_populates="grade_mapping")
