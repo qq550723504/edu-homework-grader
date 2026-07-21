@@ -297,6 +297,7 @@ POST /v1/ai-question-generation/jobs/{job_id}/bulk-accept
 - 精确重复、规范化重复和语义近重复；
 - 版权/来源风险；
 - 输出长度和结构复杂度。
+- 年级复杂度阈值只由目标 curriculum profile 的 grade mapping 持有：可分别配置题干词元数、最长句词元数、数值绝对值和安全 M2 AST 的运算节点数。超过阈值只产生 `grade_complexity_warning`，其稳定证据仅含 `grade_level`、`metric`、`observed` 和 `limit`；不会携带题干、MathJSON、AST 或 Provider 内容，也不会自动发布或替代教师决定。M2 只复用 Grader 已规范化的一份安全 AST；阈值校准、黄金评估和质量门槛仍由 #42 负责，教师确认 warning 的工作流仍由 #41 负责。
 
 ### 10.2 数学
 

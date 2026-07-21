@@ -1,7 +1,7 @@
 # Profile-configured grade-complexity verification design
 
 **Issue:** #40
-**Status:** Proposed
+**Status:** Implemented
 **Scope:** Deterministic age/grade suitability rules for generated candidate questions.
 
 ## Goal
@@ -26,8 +26,9 @@ automatic publication decision.
 
 `CurriculumGradeMapping` gains a non-null `complexity_rules_json` document, initially
 populated by the migration with an empty object. Curriculum import and profile-management
-payloads may set it only while the surrounding profile is draft or in review, following the
-existing curriculum lifecycle. Activating a profile validates every grade mapping's document.
+payloads validate it before persistence, following the existing curriculum lifecycle. Candidate
+verification revalidates the persisted document and fails closed if a malformed legacy value
+is encountered.
 
 The document is optional per metric so a profile can adopt rules incrementally:
 
@@ -41,9 +42,9 @@ The document is optional per metric so a profile can adopt rules incrementally:
 ```
 
 Every supplied value is a positive integer. Unknown keys, booleans, fractions, negatives,
-zero, malformed documents, and absent rules for an active configured profile are rejected at
-the curriculum boundary. An empty document deliberately means that this grade has no adopted
-complexity threshold yet; it does not silently inherit a global default.
+zero, and malformed documents are rejected at the curriculum boundary. An empty document
+deliberately means that this grade has no adopted complexity threshold yet; it does not
+silently inherit a global default.
 
 ## Deterministic metrics
 
@@ -97,8 +98,8 @@ complexity warning.
 
 ## Testing and delivery
 
-Tests cover migration defaults, import/API validation, profile lifecycle validation, each
-metric at its exact boundary and one unit beyond, CJK/Latin lexical counting, multiple
+Tests cover migration defaults, import/API validation and export round-trip, each metric at
+its exact boundary and one unit beyond, CJK/Latin lexical counting, multiple
 sentences, M1 numeric magnitude, M2 normalized operation-node counting, no configured rule,
 multiple deterministic warnings in stable order, sanitized evidence, and fail-closed malformed
 configuration/normalizer behavior. The suite also verifies that the former global mapping is
@@ -106,3 +107,5 @@ removed and no `QuestionVersion` is created.
 
 This slice does not estimate semantic reading level, infer prerequisite mastery, classify
 misconceptions, calibrate thresholds from outcomes, or create the #42 golden evaluation set.
+It also does not implement #41 teacher acknowledgement or a publication workflow; warnings
+remain non-publication decisions until that workflow exists.

@@ -39,7 +39,7 @@
 - `validate_complexity_rules(value: object) -> dict[str, int]` is the sole shape validator, defined in `services/curriculum_imports.py` and used by importer/router inputs before persistence.
 - `ImportGradeMapping` and `CreateGradeMappingRequest` accept `complexity_rules: dict[str, object] = Field(default_factory=dict)`; exports return it as `complexity_rules`.
 
-- [ ] **Step 1: Write failing persistence and boundary tests.**
+- [x] **Step 1: Write failing persistence and boundary tests.**
 
   Add tests that create a grade mapping without rules and observe `{}`, import/export a G5 mapping with all four limits, and reject each invalid configuration without writing a profile:
 
@@ -65,7 +65,7 @@
 
   Cover admin grade-mapping creation and active-profile export round-trip; assert a rejected request produces no new mapping or import batch.
 
-- [ ] **Step 2: Run the focused tests and confirm RED.**
+- [x] **Step 2: Run the focused tests and confirm RED.**
 
   ```powershell
   $env:PYTHONPATH = (Join-Path $PWD 'src')
@@ -74,7 +74,7 @@
 
   Expected: failures because there is no rules column, payload field, or validator.
 
-- [ ] **Step 3: Add the migration, model field, and one strict validator.**
+- [x] **Step 3: Add the migration, model field, and one strict validator.**
 
   Add Alembic revision `0018` with `down_revision = "0017"`, a non-null JSON/JSONB `complexity_rules_json` column and server/default `{}` for existing rows. Add the model field with `default=dict`.
 
@@ -103,7 +103,7 @@
 
   Wire the validated value through JSON imports, CSV companion grade mappings, create-grade-mapping input, and active-profile export. Do not create an unrelated configuration endpoint.
 
-- [ ] **Step 4: Run focused tests and migration/static checks.**
+- [x] **Step 4: Run focused tests and migration/static checks.**
 
   ```powershell
   $env:PYTHONPATH = (Join-Path $PWD 'src')
@@ -114,7 +114,7 @@
 
   Expected: all focused tests pass and Ruff reports no change.
 
-- [ ] **Step 5: Commit Task 1.**
+- [x] **Step 5: Commit Task 1.**
 
   ```powershell
   git add apps/api/alembic/versions/0018_curriculum_grade_complexity_rules.py apps/api/src/edu_grader_api/models.py apps/api/src/edu_grader_api/services/curriculum_imports.py apps/api/src/edu_grader_api/routers/curriculum.py apps/api/tests/test_curriculum_models.py apps/api/tests/test_curriculum_imports.py apps/api/tests/test_curriculum_api.py
@@ -134,7 +134,7 @@
 - `_m2_findings(rule_json: dict[str, object], policy_version: object, grader_client: VerificationGraderClient) -> tuple[list[VerificationFinding], dict[str, object] | None]` normalizes exactly once and returns the safe AST only on successful normalization.
 - `_lexical_unit_count(text: str) -> int`, `_max_sentence_units(text: str) -> int`, and `_m2_complexity_metrics(ast: dict[str, object]) -> tuple[int | None, int]` are private, deterministic helpers.
 
-- [ ] **Step 1: Add RED tests for exact boundaries and sanitized output.**
+- [x] **Step 1: Add RED tests for exact boundaries and sanitized output.**
 
   Give the G5 fixture these rules:
 
@@ -151,7 +151,7 @@
 
   Assert valid absent/empty rule documents produce no complexity finding; multiple exceeded metrics retain deterministic metric order. Assert evidence/remediation contains no prompt, MathJSON array, AST, or raw number text. Add a malformed persisted rules fixture and assert only `grade_complexity_rules_invalid` blocked evidence `{"grade_level": "G5"}`.
 
-- [ ] **Step 2: Run focused tests and confirm RED.**
+- [x] **Step 2: Run focused tests and confirm RED.**
 
   ```powershell
   $env:PYTHONPATH = (Join-Path $PWD 'src')
@@ -160,7 +160,7 @@
 
   Expected: failure because only the legacy global prompt-character lookup exists and M2 discards the normalizer output.
 
-- [ ] **Step 3: Replace the global lookup with deterministic profile rules.**
+- [x] **Step 3: Replace the global lookup with deterministic profile rules.**
 
   Remove `_GRADE_TEXT_LIMITS`. Tokenize with one precompiled expression that treats a contiguous Latin/alphanumeric/apostrophe sequence as one unit and each CJK ideograph as one unit; split sentences only on the six specified separators. Never include source text in findings.
 
@@ -168,7 +168,7 @@
 
   Invoke `_grade_complexity_findings` after common policy validation and the one M2 normalizer call. Append metrics in this fixed order: `max_prompt_units`, `max_sentence_units`, `max_numeric_absolute_value`, `max_math_operation_nodes`. Preserve existing M1/M2 Grader probes, duplicate/safety gates, immutable-run persistence, and `QuestionVersion` boundary.
 
-- [ ] **Step 4: Run focused tests, full verifier tests, and formatting.**
+- [x] **Step 4: Run focused tests, full verifier tests, and formatting.**
 
   ```powershell
   $env:PYTHONPATH = (Join-Path $PWD 'src')
@@ -181,7 +181,7 @@
 
   Expected: every complexity boundary and existing M1/M2 verifier test passes.
 
-- [ ] **Step 5: Commit Task 2.**
+- [x] **Step 5: Commit Task 2.**
 
   ```powershell
   git add apps/api/src/edu_grader_api/services/question_verification.py apps/api/tests/test_question_verification.py
@@ -200,11 +200,11 @@
 
 - Documents that rules are profile/grade specific, are warnings rather than auto-publication decisions, use a safe M2 AST, and do not replace #42 calibration or #41 acknowledgement.
 
-- [ ] **Step 1: Update documentation and task checkboxes.**
+- [x] **Step 1: Update documentation and task checkboxes.**
 
   Add a compact statement to the AI generation plan identifying the four configured metrics, stable warning evidence, profile owner, and deferred #42 calibration. Mark only completed task checkboxes in the spec/plan.
 
-- [ ] **Step 2: Run complete relevant verification.**
+- [x] **Step 2: Run complete relevant verification.**
 
   ```powershell
   $env:PYTHONPATH = "$(Join-Path $PWD 'apps\api\src');$(Join-Path $PWD 'services\generator\src');$(Join-Path $PWD 'packages\processor-policy\src');$(Join-Path $PWD 'services\grader\src')"
@@ -216,11 +216,11 @@
 
   Expected: all tests pass; only the established Alembic `path_separator` deprecation warning is allowed.
 
-- [ ] **Step 3: Audit delivery boundaries.**
+- [x] **Step 3: Audit delivery boundaries.**
 
   Confirm the final diff has no new NLP/model dependency, no raw candidate material in evidence, no Core MathJSON parser/evaluator, no second M2 normalizer call, no global grade fallback, no `QuestionVersion` mutation, and no #41 teacher-acknowledgement behavior.
 
-- [ ] **Step 4: Commit Task 3 and hand off for review.**
+- [x] **Step 4: Commit Task 3 and hand off for review.**
 
   ```powershell
   git add docs/ai-question-generation-plan.md docs/superpowers/specs/2026-07-22-profile-grade-complexity-design.md docs/superpowers/plans/2026-07-22-profile-grade-complexity-rules.md
