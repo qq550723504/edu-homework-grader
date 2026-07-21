@@ -51,6 +51,8 @@ _GRADE_TEXT_LIMITS = {
 
 
 class VerificationGraderClient(Protocol):
+    def normalize_math_answer(self, answer_json: dict[str, object]) -> dict[str, object]: ...
+
     def grade(
         self,
         question_type: str,
@@ -155,12 +157,14 @@ def _evaluate_candidate(
 
     policy_version = candidate.get("policy_version")
     rule_json = candidate.get("rule_json")
-    if (
-        not isinstance(question_type, str)
-        or not isinstance(policy_version, str)
-        or not isinstance(rule_json, dict)
-        or validate_policy(question_type, policy_version, rule_json)
-    ):
+    policy_errors = (
+        validate_policy(question_type, policy_version, rule_json)
+        if isinstance(question_type, str)
+        and isinstance(policy_version, str)
+        and isinstance(rule_json, dict)
+        else [{"path": "/", "message": "candidate policy fields are invalid"}]
+    )
+    if policy_errors:
         findings.append(
             _blocked(
                 "policy_schema_invalid",
@@ -220,6 +224,8 @@ def _evaluate_candidate(
 
     if question_type == "M1" and isinstance(rule_json, dict):
         findings.extend(_m1_findings(rule_json, policy_version, grader_client))
+    if question_type == "M2" and isinstance(rule_json, dict) and not policy_errors:
+        findings.extend(_m2_findings(rule_json, policy_version, grader_client))
     if question_type == "E1" and isinstance(rule_json, dict):
         findings.extend(_e1_findings(rule_json))
     return findings
@@ -264,6 +270,54 @@ def _m1_findings(
                 "m1_grader_probe_failed",
                 {"probe": "expected_answer"},
                 "Correct the numeric rule so its expected answer is accepted by the grader.",
+            )
+        ]
+    return []
+
+
+def _m2_findings(
+    rule_json: dict[str, object],
+    policy_version: object,
+    grader_client: VerificationGraderClient,
+) -> list[VerificationFinding]:
+    if policy_version != "2":
+        return []
+    expected = rule_json["expected"]
+    variables = rule_json.get("variables", [])
+    try:
+        grader_client.normalize_math_answer({"mathjson": expected, "variables": variables})
+    except Exception:
+        return [
+            _blocked(
+                "m2_mathjson_invalid",
+                {"probe": "expected_mathjson"},
+                "Correct the expected MathJSON expression and variables.",
+            )
+        ]
+    try:
+        result = grader_client.grade(
+            "M2",
+            rule_json,
+            {"mathjson": expected},
+            policy_version="2",
+        )
+    except Exception:
+        return [
+            _blocked(
+                "m2_grader_probe_failed",
+                {"probe": "expected_mathjson"},
+                "Retry validation after the expression grader is available.",
+            )
+        ]
+    max_score = float(rule_json.get("max_score", 1))
+    if result.decision != "auto_accepted" or not math.isclose(
+        result.score, max_score, rel_tol=0, abs_tol=1e-9
+    ):
+        return [
+            _blocked(
+                "m2_grader_probe_failed",
+                {"probe": "expected_mathjson"},
+                "Correct the M2 rule so the expected expression receives full credit.",
             )
         ]
     return []
