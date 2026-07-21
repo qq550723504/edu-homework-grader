@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,11 +10,26 @@ from sqlalchemy.pool import StaticPool
 from edu_grader_api.auth import VerifiedIdentity, get_token_verifier
 from edu_grader_api.db import Base, get_session
 from edu_grader_api.main import app
-from edu_grader_api.models import QuestionVersion, Role, Tenant, User
+from edu_grader_api.models import QuestionTestCase, QuestionVersion, Role, Tenant, User
+from edu_grader_api.routers import questions as questions_router
+from edu_grader_api.services.questions import _unmatched_text
 from edu_grader_api.settings import settings
 
 
 ISSUER = "http://localhost:8080/realms/edu-grader"
+
+
+def test_english_incorrect_template_uses_terminal_punctuation_normalization() -> None:
+    assert (
+        _unmatched_text(
+            {
+                "accepted_answers": ["x."],
+                "normalization": {"ignore_terminal_punctuation": True},
+            },
+            "accepted_answers",
+        )
+        == "q"
+    )
 
 
 @dataclass
@@ -93,6 +108,196 @@ def test_teacher_can_create_a_tenant_scoped_question(client: TestClient, session
         headers=authorize(client, teacher),
     )
     assert publish_response.status_code == 409
+
+
+def test_teacher_previews_a_draft_test_answer_without_persisting_it(
+    client: TestClient, session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tenant = Tenant(slug="pilot", name="Pilot")
+    teacher = User(
+        tenant=tenant,
+        role=Role.TEACHER,
+        oidc_issuer=ISSUER,
+        oidc_subject="teacher",
+        display_name="Teacher",
+    )
+    session.add_all([tenant, teacher])
+    session.commit()
+    headers = authorize(client, teacher)
+    created = client.post(
+        "/v1/questions",
+        headers=headers,
+        json={
+            "title": "Addition",
+            "prompt": "What is 2 + 3?",
+            "question_type": "M1",
+            "policy_version": "1",
+            "rule": {"expected": 5},
+        },
+    )
+
+    class PreviewGrader:
+        def __init__(self, _: str) -> None:
+            pass
+
+        def grade(self, *_: object, **__: object) -> object:
+            from edu_grader_api.services.questions import GradeResult
+
+            return GradeResult(
+                decision="auto_accepted",
+                score=1,
+                evidence={"criterion": "numeric_value"},
+                grader_version="preview@1",
+            )
+
+    monkeypatch.setattr(questions_router, "HttpGraderClient", PreviewGrader)
+    response = client.post(
+        f"/v1/question-versions/{created.json()['id']}/test-case-preview",
+        headers=headers,
+        json={"answer": {"format": "text-v1", "text": "5"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "decision": "auto_accepted",
+        "score": 1,
+        "evidence": {"criterion": "numeric_value"},
+        "grader_version": "preview@1",
+    }
+    assert session.scalar(
+        select(QuestionVersion).where(QuestionVersion.id == UUID(created.json()["id"]))
+    )
+    assert (
+        session.scalars(
+            select(QuestionTestCase).where(
+                QuestionTestCase.question_version_id == UUID(created.json()["id"])
+            )
+        ).all()
+        == []
+    )
+
+
+def test_teacher_preview_preserves_not_found_for_an_unknown_version(
+    client: TestClient, session: Session
+) -> None:
+    tenant = Tenant(slug="pilot", name="Pilot")
+    teacher = User(
+        tenant=tenant,
+        role=Role.TEACHER,
+        oidc_issuer=ISSUER,
+        oidc_subject="teacher",
+        display_name="Teacher",
+    )
+    session.add_all([tenant, teacher])
+    session.commit()
+
+    response = client.post(
+        f"/v1/question-versions/{uuid4()}/test-case-preview",
+        headers=authorize(client, teacher),
+        json={"answer": {"format": "text-v1", "text": "5"}},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "resource not found"}
+
+
+def test_teacher_receives_editable_english_test_case_templates(
+    client: TestClient, session: Session
+) -> None:
+    tenant = Tenant(slug="pilot", name="Pilot")
+    teacher = User(
+        tenant=tenant,
+        role=Role.TEACHER,
+        oidc_issuer=ISSUER,
+        oidc_subject="teacher",
+        display_name="Teacher",
+    )
+    session.add_all([tenant, teacher])
+    session.commit()
+    headers = authorize(client, teacher)
+    created = client.post(
+        "/v1/questions",
+        headers=headers,
+        json={
+            "title": "Vocabulary",
+            "prompt": "Name the animal.",
+            "question_type": "E1",
+            "policy_version": "2",
+            "rule": {
+                "accepted_answers": ["cat"],
+                "normalization": {
+                    "unicode_form": "NFKC",
+                    "collapse_whitespace": True,
+                    "ignore_case": True,
+                    "ignore_terminal_punctuation": True,
+                },
+                "max_score": 1,
+            },
+        },
+    )
+
+    response = client.get(
+        f"/v1/question-versions/{created.json()['id']}/test-case-templates", headers=headers
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "templates": [
+            {"category": "correct", "answer": {"format": "text-v1", "text": "cat"}},
+            {"category": "incorrect", "answer": {"format": "text-v1", "text": "x"}},
+            {"category": "empty", "answer": {"format": "text-v1", "text": ""}},
+            {"category": "boundary", "answer": {"format": "text-v1", "text": " cat. "}},
+        ]
+    }
+
+
+def test_teacher_e4_templates_keep_the_incorrect_answer_free_of_evidence_phrase(
+    client: TestClient, session: Session
+) -> None:
+    tenant = Tenant(slug="pilot", name="Pilot")
+    teacher = User(
+        tenant=tenant,
+        role=Role.TEACHER,
+        oidc_issuer=ISSUER,
+        oidc_subject="teacher",
+        display_name="Teacher",
+    )
+    session.add_all([tenant, teacher])
+    session.commit()
+    headers = authorize(client, teacher)
+    created = client.post(
+        "/v1/questions",
+        headers=headers,
+        json={
+            "title": "Reading evidence",
+            "prompt": "Why was the bridge closed?",
+            "question_type": "E4",
+            "policy_version": "2",
+            "rule": {
+                "scoring_points": [
+                    {"id": "cause", "evidence_phrases": ["bridge closed"], "score": 1},
+                    {"id": "condition", "evidence_phrases": ["road flooded"], "score": 2},
+                ],
+                "max_score": 3,
+            },
+        },
+    )
+
+    response = client.get(
+        f"/v1/question-versions/{created.json()['id']}/test-case-templates", headers=headers
+    )
+
+    assert response.status_code == 200
+    templates = {
+        template["category"]: template["answer"]["text"]
+        for template in response.json()["templates"]
+    }
+    incorrect = templates["incorrect"]
+    assert templates["correct"] == "bridge closed\nroad flooded"
+    assert templates["needs_review"] == "bridge closed\nroad flooded"
+    assert incorrect == "x"
+    assert "bridge closed" not in incorrect.casefold()
+    assert "road flooded" not in incorrect.casefold()
 
 
 def test_teacher_lists_and_filters_question_versions(client: TestClient, session: Session) -> None:

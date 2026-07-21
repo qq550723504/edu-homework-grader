@@ -26,6 +26,8 @@ from ..services.questions import (
     QuestionVersionStateError,
     create_question,
     create_successor_draft,
+    preview_question_test_answer,
+    suggested_question_test_cases,
     publish_question_version,
     run_question_tests,
     update_draft,
@@ -57,6 +59,10 @@ class CreateTestCaseRequest(BaseModel):
     expected_decision: str = Field(min_length=1, max_length=30)
     expected_score: float = Field(ge=0)
     expected_evidence: dict[str, object]
+
+
+class PreviewTestCaseRequest(BaseModel):
+    answer: dict[str, object]
 
 
 @policy_catalog_router.get("")
@@ -247,6 +253,64 @@ def create_test_case_route(
     except QuestionVersionStateError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     return {"id": str(test_case.id), "category": test_case.category}
+
+
+@version_router.post("/{version_id}/test-case-preview")
+def preview_test_case_route(
+    version_id: UUID,
+    body: PreviewTestCaseRequest,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    try:
+        version = _tenant_version(session, version_id, UUID(principal.tenant_id))
+        result = preview_question_test_answer(
+            session,
+            version,
+            actor_user_id=UUID(principal.user_id),
+            answer_json=body.answer,
+            grader_client=HttpGraderClient(settings.grader_base_url),
+        )
+    except QuestionVersionAccessError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+        ) from None
+    except QuestionVersionStateError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail="grader preview failed"
+        ) from None
+    return {
+        "decision": result.decision,
+        "score": result.score,
+        "evidence": result.evidence,
+        "grader_version": result.grader_version,
+    }
+
+
+@version_router.get("/{version_id}/test-case-templates")
+def test_case_templates_route(
+    version_id: UUID,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, list[dict[str, object]]]:
+    try:
+        version = _tenant_version(session, version_id, UUID(principal.tenant_id))
+        templates = suggested_question_test_cases(
+            session,
+            version,
+            actor_user_id=UUID(principal.user_id),
+        )
+    except QuestionVersionAccessError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+        ) from None
+    except QuestionVersionStateError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    return {"templates": templates}
 
 
 @version_router.post("/{version_id}/test-runs", status_code=status.HTTP_201_CREATED)

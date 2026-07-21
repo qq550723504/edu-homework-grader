@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta, timezone
+import unicodedata
 
 from jwt.exceptions import InvalidTokenError
 from sqlalchemy import select
@@ -76,7 +77,7 @@ class StaticE2EVerifier:
             raise InvalidTokenError("invalid E2E token") from None
 
 
-class DeterministicM2Client:
+class DeterministicE2EGraderClient:
     def __init__(self, _: str) -> None:
         pass
 
@@ -93,14 +94,22 @@ class DeterministicM2Client:
     ) -> GradeResult:
         if question_type == "M1" and policy_version == "1":
             return self._grade_m1(rule_json, answer_json)
-        if question_type != "M2" or policy_version != "2":
-            raise ValueError("the E2E grader only supports M1@1 and M2@2")
-        return GradeResult(
-            decision="correct",
-            score=4.0,
-            grader_version="e2e-m2@1",
-            evidence=M2_EVIDENCE,
-        )
+        if question_type == "M2" and policy_version == "2":
+            return GradeResult(
+                decision="correct",
+                score=4.0,
+                grader_version="e2e-m2@1",
+                evidence=M2_EVIDENCE,
+            )
+        if question_type == "E1" and policy_version == "2":
+            return self._grade_english_match(rule_json, answer_json, "accepted_answers")
+        if question_type == "E2" and policy_version == "1":
+            return self._grade_english_match(rule_json, answer_json, "accepted_forms")
+        if question_type == "E3" and policy_version == "1":
+            return self._grade_english_review("grammar_assistance")
+        if question_type == "E4" and policy_version == "2":
+            return self._grade_e4(rule_json, answer_json)
+        raise ValueError(f"the E2E grader does not support {question_type}@{policy_version}")
 
     @staticmethod
     def _grade_m1(rule_json: dict[str, object], answer_json: dict[str, object]) -> GradeResult:
@@ -130,6 +139,123 @@ class DeterministicM2Client:
                 "dependency_versions": {"grader": "e2e-m1@1"},
             },
         )
+
+    @staticmethod
+    def _grade_english_match(
+        rule_json: dict[str, object], answer_json: dict[str, object], accepted_key: str
+    ) -> GradeResult:
+        accepted = rule_json.get(accepted_key)
+        text = answer_json.get("text")
+        if answer_json.get("format") != "text-v1" or not isinstance(text, str):
+            raise ValueError("English answers require a text-v1 envelope")
+        if not isinstance(accepted, list) or not all(isinstance(value, str) for value in accepted):
+            raise ValueError(f"English rules require {accepted_key}")
+        normalization = (
+            rule_json.get("normalization", {}) if accepted_key == "accepted_answers" else {}
+        )
+        if not isinstance(normalization, dict):
+            normalization = {}
+        normalized = text.strip()
+        if normalization.get("ignore_terminal_punctuation", True):
+            normalized = normalized.rstrip(".!?。！？").rstrip()
+        if normalization.get("ignore_case", True):
+            normalized = normalized.casefold()
+        matched = bool(normalized) and normalized in {
+            (
+                value.strip().rstrip(".!?。！？").rstrip()
+                if normalization.get("ignore_terminal_punctuation", True)
+                else value.strip()
+            ).casefold()
+            if normalization.get("ignore_case", True)
+            else (
+                value.strip().rstrip(".!?。！？").rstrip()
+                if normalization.get("ignore_terminal_punctuation", True)
+                else value.strip()
+            )
+            for value in accepted
+        }
+        max_score = rule_json.get("max_score", 1)
+        if isinstance(max_score, bool) or not isinstance(max_score, int | float):
+            raise ValueError("English rules require a numeric max_score")
+        score = float(max_score) if matched else 0.0
+        return GradeResult(
+            decision="auto_accepted" if matched else "auto_rejected",
+            score=score,
+            grader_version="e2e-english@1",
+            evidence={"criterion": accepted_key, "matched": matched, "max_score": float(max_score)},
+        )
+
+    @staticmethod
+    def _grade_english_review(criterion: str) -> GradeResult:
+        return GradeResult(
+            decision="needs_review",
+            score=0.0,
+            grader_version="e2e-english@1",
+            evidence={"criterion": criterion, "requires_review": True},
+        )
+
+    @staticmethod
+    def _grade_e4(rule_json: dict[str, object], answer_json: dict[str, object]) -> GradeResult:
+        text = answer_json.get("text")
+        points = rule_json.get("scoring_points")
+        if answer_json.get("format") != "text-v1" or not isinstance(text, str):
+            raise ValueError("English answers require a text-v1 envelope")
+        if not isinstance(points, list):
+            raise ValueError("E4 rules require scoring_points")
+        max_score = rule_json.get("max_score", 1)
+        if isinstance(max_score, bool) or not isinstance(max_score, int | float):
+            raise ValueError("E4 rules require a numeric max_score")
+        normalized_answer = DeterministicE2EGraderClient._normalize_english_text(text)
+        criteria: list[dict[str, object]] = []
+        score = 0.0
+        for point in points:
+            if not isinstance(point, dict):
+                raise ValueError("E4 scoring points must be objects")
+            point_id = point.get("id")
+            phrases = point.get("evidence_phrases")
+            point_score = point.get("score")
+            if (
+                not isinstance(point_id, str)
+                or not isinstance(phrases, list)
+                or isinstance(point_score, bool)
+                or not isinstance(point_score, int | float)
+            ):
+                raise ValueError("E4 scoring points require id, evidence_phrases, and score")
+            matched = any(
+                (normalized_phrase := DeterministicE2EGraderClient._normalize_english_text(phrase))
+                and normalized_phrase in normalized_answer
+                for phrase in phrases
+                if isinstance(phrase, str)
+            )
+            awarded = float(point_score) if matched else 0.0
+            score += awarded
+            criteria.append(
+                {
+                    "code": point_id,
+                    "passed": matched,
+                    "score": awarded,
+                    "max_score": float(point_score),
+                }
+            )
+        return GradeResult(
+            decision="needs_review",
+            score=score,
+            grader_version="e2e-english@1",
+            evidence={
+                "criterion": "scoring_point_review",
+                "requires_review": True,
+                "max_score": float(max_score),
+                "criteria": criteria,
+            },
+        )
+
+    @staticmethod
+    def _normalize_english_text(value: str) -> str:
+        normalized = " ".join(unicodedata.normalize("NFKC", value).strip().split())
+        return normalized.rstrip(".!?。！？").rstrip().casefold()
+
+
+DeterministicM2Client = DeterministicE2EGraderClient
 
 
 def seed_demo_assignment(session: Session) -> None:

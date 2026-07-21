@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Protocol
+import unicodedata
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -20,6 +22,10 @@ from ..models import (
     utc_now,
 )
 from ..policies import POLICY_SCHEMAS, validate_new_question_policy, validate_policy
+
+
+_WHITESPACE = re.compile(r"\s+")
+_TERMINAL_PUNCTUATION = re.compile(r"[.!?。！？]+$")
 
 
 class QuestionVersionAccessError(PermissionError):
@@ -306,6 +312,138 @@ def run_question_tests(
             metadata={"test_run_id": str(test_run.id), "status": test_run.status.value},
         )
     return test_run
+
+
+def preview_question_test_answer(
+    session: Session,
+    draft: QuestionVersion,
+    *,
+    actor_user_id: UUID,
+    answer_json: dict[str, object],
+    grader_client: GraderClient,
+) -> GradeResult:
+    """Grade one author-provided test answer without persisting a test case or run."""
+
+    _require_author(session, draft, actor_user_id)
+    if draft.status is not VersionStatus.DRAFT:
+        raise QuestionVersionStateError("only draft versions can preview test answers")
+    policy = session.get(GradingPolicy, draft.grading_policy_id)
+    if policy is None:
+        raise QuestionVersionStateError("grading policy is unavailable")
+    return grader_client.grade(
+        draft.question_type,
+        draft.rule_json,
+        answer_json,
+        policy_version=policy.policy_version,
+    )
+
+
+def suggested_question_test_cases(
+    session: Session,
+    draft: QuestionVersion,
+    *,
+    actor_user_id: UUID,
+) -> list[dict[str, object]]:
+    """Return editable English test-answer candidates without saving test cases."""
+
+    _require_author(session, draft, actor_user_id)
+    if draft.status is not VersionStatus.DRAFT:
+        raise QuestionVersionStateError("only draft versions can load test templates")
+    if draft.question_type == "E1":
+        answer = _first_rule_text(draft.rule_json, "accepted_answers", "answer")
+        return _text_test_templates(
+            answer, incorrect=_unmatched_text(draft.rule_json, "accepted_answers")
+        )
+    if draft.question_type == "E2":
+        answer = _first_rule_text(draft.rule_json, "accepted_forms", "form")
+        return _text_test_templates(
+            answer, incorrect=_unmatched_text(draft.rule_json, "accepted_forms")
+        )
+    if draft.question_type == "E3":
+        answer = _first_rule_text(draft.rule_json, "accepted_answers", "I write a sentence.")
+        return _text_test_templates(answer) + [_text_test_template("grammar_feedback", answer)]
+    if draft.question_type == "E4":
+        answer = _e4_evidence_text(draft.rule_json)
+        return _text_test_templates(answer, incorrect=_e4_incorrect_answer(answer)) + [
+            _text_test_template("needs_review", answer)
+        ]
+    raise QuestionVersionStateError("test templates are available for English questions only")
+
+
+def _text_test_templates(answer: str, *, incorrect: str | None = None) -> list[dict[str, object]]:
+    return [
+        _text_test_template("correct", answer),
+        _text_test_template("incorrect", incorrect if incorrect is not None else f"not {answer}"),
+        _text_test_template("empty", ""),
+        _text_test_template("boundary", f" {answer}. "),
+    ]
+
+
+def _text_test_template(category: str, text: str) -> dict[str, object]:
+    return {"category": category, "answer": {"format": "text-v1", "text": text}}
+
+
+def _first_rule_text(rule_json: dict[str, object], key: str, fallback: str) -> str:
+    values = rule_json.get(key)
+    if isinstance(values, list):
+        for value in values:
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return fallback
+
+
+def _e4_evidence_text(rule_json: dict[str, object]) -> str:
+    points = rule_json.get("scoring_points")
+    evidence_phrases: list[str] = []
+    if isinstance(points, list):
+        for point in points:
+            if not isinstance(point, dict):
+                continue
+            phrase = _first_rule_text(point, "evidence_phrases", "")
+            if phrase:
+                evidence_phrases.append(phrase)
+    if evidence_phrases:
+        return "\n".join(evidence_phrases)
+    return "evidence"
+
+
+def _e4_incorrect_answer(evidence_phrase: str) -> str:
+    """Return a compact answer guaranteed not to contain the scoring evidence phrase."""
+
+    normalized_phrase = unicodedata.normalize("NFKC", evidence_phrase).casefold()
+    for candidate in "xqzjkvbw":
+        if candidate not in normalized_phrase:
+            return candidate
+    for codepoint in range(0xE000, 0xF900):
+        candidate = chr(codepoint)
+        if candidate not in normalized_phrase:
+            return candidate
+    raise QuestionVersionStateError("unable to create an E4 incorrect test template")
+
+
+def _unmatched_text(rule_json: dict[str, object], key: str) -> str:
+    accepted = {
+        _normalize_english_template_text(value, rule_json)
+        for value in rule_json.get(key, [])
+        if isinstance(value, str)
+    }
+    for candidate in "xqzjkvbw":
+        if candidate not in accepted:
+            return candidate
+    return _e4_incorrect_answer("".join(accepted))
+
+
+def _normalize_english_template_text(value: str, rule_json: dict[str, object]) -> str:
+    settings = rule_json.get("normalization")
+    normalization = settings if isinstance(settings, dict) else {}
+    normalized = unicodedata.normalize("NFKC", value).strip()
+    if normalization.get("collapse_whitespace", True) is not False:
+        normalized = _WHITESPACE.sub(" ", normalized)
+    if normalization.get("ignore_terminal_punctuation", True) is not False:
+        normalized = _TERMINAL_PUNCTUATION.sub("", normalized).rstrip()
+    if normalization.get("ignore_case", True) is not False:
+        normalized = normalized.casefold()
+    return normalized
 
 
 def publish_question_version(

@@ -91,6 +91,18 @@ export interface CreateTestCaseInput {
   expected_evidence: Record<string, unknown>
 }
 
+export interface QuestionTestCaseTemplate {
+  category: string
+  answer: Record<string, unknown>
+}
+
+export interface QuestionTestCasePreview {
+  decision: string
+  score: number
+  evidence: Record<string, unknown>
+  grader_version: string
+}
+
 export interface QuestionTestRun {
   id: string
   status: string
@@ -227,6 +239,22 @@ export function createTestCase(
 ): Promise<{ id: string; category: string }> {
   return request(`/api/core/v1/question-versions/${versionId}/test-cases`, {
     method: 'POST', headers: { 'X-CSRF-Token': csrfToken }, body: input,
+  })
+}
+
+export async function fetchQuestionTestCaseTemplates(
+  request: Request, versionId: string,
+): Promise<QuestionTestCaseTemplate[]> {
+  return (await request<{ templates: QuestionTestCaseTemplate[] }>(
+    `/api/core/v1/question-versions/${versionId}/test-case-templates`,
+  )).templates
+}
+
+export function previewQuestionTestCase(
+  request: Request, csrfToken: string, versionId: string, answer: Record<string, unknown>,
+): Promise<QuestionTestCasePreview> {
+  return request(`/api/core/v1/question-versions/${versionId}/test-case-preview`, {
+    method: 'POST', headers: { 'X-CSRF-Token': csrfToken }, body: { answer },
   })
 }
 

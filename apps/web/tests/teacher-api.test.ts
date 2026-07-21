@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { batchConfirmReviewTasks, createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, decideReviewTask, decideTeacherAppeal, fetchQuestionPolicyCatalog, fetchTeacherRosterClasses, fetchTeacherWorkspace, importTeacherRoster, publishAssignment, publishAttemptResults, publishQuestionVersion, runQuestionTests, updateAssignment } from '../app/lib/teacher-api'
+import { batchConfirmReviewTasks, createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, decideReviewTask, decideTeacherAppeal, fetchQuestionPolicyCatalog, fetchQuestionTestCaseTemplates, fetchTeacherRosterClasses, fetchTeacherWorkspace, importTeacherRoster, previewQuestionTestCase, publishAssignment, publishAttemptResults, publishQuestionVersion, runQuestionTests, updateAssignment } from '../app/lib/teacher-api'
 
 describe('teacher workspace API', () => {
   it('loads classes, question versions, assignments and review metrics through the BFF', async () => {
@@ -45,6 +45,23 @@ describe('teacher workspace API', () => {
     await expect(fetchQuestionPolicyCatalog(request))
       .resolves.toEqual([{ question_type: 'E4', policy_version: '2' }])
     expect(request).toHaveBeenCalledWith('/api/core/v1/question-policy-catalog')
+  })
+
+  it('loads editable test templates and previews their expected result through the BFF', async () => {
+    const request = vi.fn()
+      .mockResolvedValueOnce({ templates: [{ category: 'correct', answer: { format: 'text-v1', text: 'cat' } }] })
+      .mockResolvedValueOnce({ decision: 'auto_accepted', score: 1, evidence: { criterion: 'accepted_answers' }, grader_version: 'grader@1' })
+
+    await expect(fetchQuestionTestCaseTemplates(request, 'version-1')).resolves.toEqual([
+      { category: 'correct', answer: { format: 'text-v1', text: 'cat' } },
+    ])
+    await expect(previewQuestionTestCase(request, 'csrf-token', 'version-1', { format: 'text-v1', text: 'cat' })).resolves.toMatchObject({
+      decision: 'auto_accepted', score: 1,
+    })
+    expect(request).toHaveBeenNthCalledWith(1, '/api/core/v1/question-versions/version-1/test-case-templates')
+    expect(request).toHaveBeenNthCalledWith(2, '/api/core/v1/question-versions/version-1/test-case-preview', {
+      method: 'POST', headers: { 'X-CSRF-Token': 'csrf-token' }, body: { answer: { format: 'text-v1', text: 'cat' } },
+    })
   })
 
   it('runs and publishes a version through CSRF-protected BFF endpoints', async () => {
