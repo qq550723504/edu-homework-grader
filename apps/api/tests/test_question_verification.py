@@ -172,6 +172,23 @@ class MalformedE3FeedbackGrader(PassingE3Grader):
         return GradeResult("needs_review", 0, {"feedback": ["not-an-object"]}, "fake-e3-v1")
 
 
+class DependencyE3Grader(PassingE3Grader):
+    def grade(
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
+    ) -> GradeResult:
+        return GradeResult(
+            "needs_review",
+            0,
+            {"feedback": [{"type": "dependency", "message": "LanguageTool is unavailable."}]},
+            "fake-e3-v1",
+        )
+
+
 def valid_e3_candidate() -> dict[str, object]:
     return {
         "question_type": "E3",
@@ -503,7 +520,9 @@ def test_e3_grammar_matches_are_sanitized_warnings(session: Session) -> None:
     draft = generation_draft(session, allowed_question_types=["E3"], candidate_json=candidate)
 
     run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=PassingE3Grader(feedback=[{}, {}])
+        session,
+        draft=draft,
+        grader_client=PassingE3Grader(feedback=[{"type": "grammar"}, {"type": "grammar"}]),
     )
 
     warnings = [finding for finding in run.findings if finding.code == "e3_grammar_warning"]
@@ -516,7 +535,12 @@ def test_e3_grammar_matches_are_sanitized_warnings(session: Session) -> None:
 
 @pytest.mark.parametrize(
     "grader",
-    [FailingE3Grader(), UnexpectedE3DecisionGrader(), MalformedE3FeedbackGrader()],
+    [
+        FailingE3Grader(),
+        UnexpectedE3DecisionGrader(),
+        MalformedE3FeedbackGrader(),
+        DependencyE3Grader(),
+    ],
 )
 def test_e3_grammar_probe_failures_are_safely_blocked(
     session: Session, grader: PassingE3Grader

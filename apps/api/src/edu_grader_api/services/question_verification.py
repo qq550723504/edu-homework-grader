@@ -505,7 +505,7 @@ def _e3_feedback_count(result: GradeResult) -> int:
     if (
         result.decision != "needs_review"
         or not isinstance(feedback, list)
-        or not all(isinstance(item, dict) for item in feedback)
+        or not all(isinstance(item, dict) and item.get("type") == "grammar" for item in feedback)
     ):
         raise ValueError("unexpected E3 grammar response")
     return len(feedback)
