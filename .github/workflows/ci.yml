@@ -192,6 +192,7 @@ jobs:
     steps:
       - name: Skip docs-only pull request
         if: needs.changes.outputs.non_docs != 'true'
+        working-directory: .
         run: echo "Skipping web checks for a docs-only pull request."
       - uses: actions/checkout@v4
         if: needs.changes.outputs.non_docs == 'true'
@@ -232,6 +233,7 @@ jobs:
     steps:
       - name: Skip docs-only pull request
         if: needs.changes.outputs.non_docs != 'true'
+        working-directory: .
         run: echo "Skipping browser E2E for a docs-only pull request."
       - uses: actions/checkout@v4
         if: needs.changes.outputs.non_docs == 'true'
