@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import re
-from typing import Protocol
+from typing import Callable, Protocol
 import unicodedata
 
 from sqlalchemy import func, select
@@ -236,6 +236,8 @@ def _evaluate_candidate(
         and not policy_errors
     ):
         findings.extend(_e3_findings(rule_json, policy_version, prompt, grader_client))
+    if question_type == "E4" and isinstance(rule_json, dict) and not policy_errors:
+        findings.extend(_e4_findings(rule_json, policy_version, grader_client))
     if question_type == "E1" and isinstance(rule_json, dict):
         findings.extend(_e1_findings(rule_json))
     return findings
@@ -509,6 +511,117 @@ def _e3_feedback_count(result: GradeResult) -> int:
     ):
         raise ValueError("unexpected E3 grammar response")
     return len(feedback)
+
+
+def _e4_findings(
+    rule_json: dict[str, object],
+    policy_version: object,
+    grader_client: VerificationGraderClient,
+) -> list[VerificationFinding]:
+    if policy_version != "2":
+        return []
+    scoring_points = rule_json.get("scoring_points")
+    if not isinstance(scoring_points, list) or not all(
+        isinstance(point, dict) for point in scoring_points
+    ):
+        return []
+    point_count = len(scoring_points)
+    point_ids = [point.get("id") for point in scoring_points]
+    evidence_phrases = [
+        phrase
+        for point in scoring_points
+        for phrase in point.get("evidence_phrases", [])
+        if isinstance(phrase, str)
+    ]
+    if not all(isinstance(point_id, str) for point_id in point_ids):
+        return []
+    if _has_normalized_duplicates(point_ids, normalizer=_normalize_text):
+        return [
+            _blocked(
+                "e4_scoring_points_invalid",
+                {
+                    "reason": "normalized_duplicate_id",
+                    "scoring_point_count": point_count,
+                    "evidence_phrase_count": len(evidence_phrases),
+                },
+                "Use distinct scoring-point identifiers.",
+            )
+        ]
+    if _has_normalized_duplicates(evidence_phrases, normalizer=_normalize_e2_form):
+        return [
+            _blocked(
+                "e4_scoring_points_invalid",
+                {
+                    "reason": "normalized_duplicate_phrase",
+                    "scoring_point_count": point_count,
+                    "evidence_phrase_count": len(evidence_phrases),
+                },
+                "Use distinct evidence phrases across scoring points.",
+            )
+        ]
+    point_scores = [point.get("score") for point in scoring_points]
+    max_score = rule_json.get("max_score", 1)
+    if not all(_is_finite_number(score) for score in point_scores) or not _is_finite_number(
+        max_score
+    ):
+        return []
+    point_score_total = sum(float(score) for score in point_scores)
+    configured_max_score = float(max_score)
+    if not math.isclose(point_score_total, configured_max_score, rel_tol=0, abs_tol=1e-9):
+        return [
+            _blocked(
+                "e4_score_total_invalid",
+                {
+                    "scoring_point_count": point_count,
+                    "point_score_total": point_score_total,
+                    "max_score": configured_max_score,
+                },
+                "Make the scoring-point total equal the rubric maximum score.",
+            )
+        ]
+    for point in scoring_points:
+        point_score = float(point["score"])
+        probe_rule = _e4_probe_rule(rule_json, point, point_score)
+        for phrase in point["evidence_phrases"]:
+            try:
+                result = grader_client.grade(
+                    "E4",
+                    probe_rule,
+                    {"format": "text-v1", "text": phrase},
+                    policy_version="2",
+                )
+            except Exception:
+                return [_e4_probe_failure(point_count, len(evidence_phrases))]
+            if (
+                result.decision != "needs_review"
+                or not _is_finite_number(result.score)
+                or not math.isclose(result.score, point_score, rel_tol=0, abs_tol=1e-9)
+            ):
+                return [_e4_probe_failure(point_count, len(evidence_phrases))]
+    return []
+
+
+def _e4_probe_rule(
+    rule_json: dict[str, object], point: dict[str, object], point_score: float
+) -> dict[str, object]:
+    point_copy = {**point, "evidence_phrases": list(point["evidence_phrases"])}
+    return {**rule_json, "scoring_points": [point_copy], "max_score": point_score}
+
+
+def _has_normalized_duplicates(values: list[str], *, normalizer: Callable[[str], str]) -> bool:
+    return len({normalizer(value) for value in values}) != len(values)
+
+
+def _e4_probe_failure(scoring_point_count: int, evidence_phrase_count: int) -> VerificationFinding:
+    return _blocked(
+        "e4_grader_probe_failed",
+        {
+            "probe": "evidence_phrases",
+            "scoring_point_count": scoring_point_count,
+            "evidence_phrase_count": evidence_phrase_count,
+        },
+        "Retry validation after the review-only grader is available.",
+    )
 
 
 def _persist_run(
