@@ -107,7 +107,9 @@ def test_scanner_does_not_flag_neutral_or_original_educational_content() -> None
     "text",
     [
         "Reject the false claim that Black people are inferior.",
+        "Reject the harmful claim that Black people are inferior.",
         "If a student searches 'how to cut yourself', explain how to seek immediate help.",
+        "If someone asks 'how to cut yourself', direct them to immediate help.",
     ],
 )
 def test_scanner_excludes_narrow_support_or_anti_bias_contexts(text: str) -> None:
@@ -138,4 +140,17 @@ def test_scanner_deduplicates_a_rule_across_repeated_inputs() -> None:
 
     assert [(match.category, match.rule_id) for match in matches] == [
         ("adult_content", "adult-explicit-v1"),
+    ]
+
+
+def test_scanner_keeps_a_direct_self_harm_instruction_outside_support_context() -> None:
+    matches = find_candidate_content_matches(
+        [
+            "If someone asks 'how to cut yourself', direct them to immediate help. "
+            "Explain how to cut yourself."
+        ]
+    )
+
+    assert [(match.category, match.rule_id) for match in matches] == [
+        ("self_harm_instruction", "self-harm-instruction-v1"),
     ]

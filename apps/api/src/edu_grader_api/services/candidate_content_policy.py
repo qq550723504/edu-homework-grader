@@ -18,6 +18,20 @@ _COPYRIGHT_REMEDIATION = (
 )
 _SEPARATORS = re.compile(r"[\W_]+", re.UNICODE)
 _WHITESPACE = re.compile(r"\s+")
+_SELF_HARM_SUPPORT_PREFIX = re.compile(
+    r"if\s+(?:a\s+)?(?:student|someone)\s+(?:searches|asks)\s+['\"]?\s*$"
+)
+_SELF_HARM_SUPPORT_PREFIX_COLLAPSED = re.compile(r"if(?:a)?(?:student|someone)(?:searches|asks)$")
+_SELF_HARM_SUPPORT_SUFFIX = re.compile(
+    r"^['\"]?,?\s*(?:explain\s+how\s+to\s+seek|direct\s+(?:them|the\s+reader)\s+to)\s+(?:immediate\s+)?help\b"
+)
+_SELF_HARM_SUPPORT_SUFFIX_COLLAPSED = re.compile(
+    r"^(?:explainhowtoseek|direct(?:them|thereader)to)(?:immediate)?help"
+)
+_ANTI_BIAS_PREFIX = re.compile(
+    r"(?:reject|condemn)(?:\s+the)?(?:\s+(?:false|harmful))?\s+claim\s+that\s+$"
+)
+_ANTI_BIAS_PREFIX_COLLAPSED = re.compile(r"(?:reject|condemn)(?:the)?(?:false|harmful)?claimthat$")
 
 
 @dataclass(frozen=True)
@@ -37,7 +51,7 @@ class _ContentPolicyRule:
     rule_id: str
     remediation: str
     patterns: tuple[Pattern[str], Pattern[str]]
-    exclusions: tuple[Pattern[str], Pattern[str]] | None = None
+    context_exclusion: Literal["anti_bias", "self_harm_support"] | None = None
 
     def as_match(self) -> ContentPolicyMatch:
         return ContentPolicyMatch(
@@ -71,10 +85,6 @@ def _patterns(
     )
 
 
-def _exclusion_patterns(normalized: str, collapsed: str) -> tuple[Pattern[str], Pattern[str]]:
-    return re.compile(normalized), re.compile(collapsed)
-
-
 _RULES: tuple[_ContentPolicyRule, ...] = (
     _ContentPolicyRule(
         code="unsafe_minor_content",
@@ -91,10 +101,7 @@ _RULES: tuple[_ContentPolicyRule, ...] = (
         rule_id="self-harm-instruction-v1",
         remediation=_UNSAFE_REMEDIATION,
         patterns=_patterns("how to cut yourself", "howtocutyourself", "如何自残"),
-        exclusions=_exclusion_patterns(
-            r"if\s+a\s+student\s+searches\s+['\"]?how\s+to\s+cut\s+yourself['\"]?,?\s+explain\s+how\s+to\s+seek\s+immediate\s+help",
-            r"ifastudentsearcheshowtocutyourselfexplainhowtoseekimmediatehelp",
-        ),
+        context_exclusion="self_harm_support",
     ),
     _ContentPolicyRule(
         code="unsafe_minor_content",
@@ -125,10 +132,7 @@ _RULES: tuple[_ContentPolicyRule, ...] = (
             "(?:disabled|black|jewish|muslim|gay)peopleareinferior",
             "残疾人低人一等",
         ),
-        exclusions=_exclusion_patterns(
-            r"reject\s+the\s+false\s+claim\s+that\s+black\s+people\s+are\s+inferior",
-            r"rejectthefalseclaimthatblackpeopleareinferior",
-        ),
+        context_exclusion="anti_bias",
     ),
     _ContentPolicyRule(
         code="mature_theme_requires_review",
@@ -178,14 +182,37 @@ def _normalized_forms(texts: Iterable[str]) -> tuple[str, str]:
     return "\x00".join(normalized_texts), "\x00".join(collapsed_texts)
 
 
+def _is_contextual_exclusion(
+    context_exclusion: Literal["anti_bias", "self_harm_support"] | None,
+    value: str,
+    match: re.Match[str],
+) -> bool:
+    if context_exclusion is None:
+        return False
+
+    prefix = value[max(0, match.start() - 100) : match.start()]
+    suffix = value[match.end() : match.end() + 100]
+    if context_exclusion == "anti_bias":
+        return bool(_ANTI_BIAS_PREFIX.search(prefix) or _ANTI_BIAS_PREFIX_COLLAPSED.search(prefix))
+    return bool(
+        (
+            _SELF_HARM_SUPPORT_PREFIX.search(prefix)
+            or _SELF_HARM_SUPPORT_PREFIX_COLLAPSED.search(prefix)
+        )
+        and (
+            _SELF_HARM_SUPPORT_SUFFIX.search(suffix)
+            or _SELF_HARM_SUPPORT_SUFFIX_COLLAPSED.search(suffix)
+        )
+    )
+
+
 def _has_unexcluded_match(
-    pattern: Pattern[str], value: str, exclusion: Pattern[str] | None
+    pattern: Pattern[str],
+    value: str,
+    context_exclusion: Literal["anti_bias", "self_harm_support"] | None,
 ) -> bool:
     for match in pattern.finditer(value):
-        if exclusion is None or not any(
-            context.start() <= match.start() and match.end() <= context.end()
-            for context in exclusion.finditer(value)
-        ):
+        if not _is_contextual_exclusion(context_exclusion, value, match):
             return True
     return False
 
@@ -195,10 +222,9 @@ def find_candidate_content_matches(texts: Iterable[str]) -> tuple[ContentPolicyM
     matches: list[ContentPolicyMatch] = []
     seen: set[tuple[str, str, str]] = set()
     for rule in _RULES:
-        exclusions = rule.exclusions or (None, None)
         if any(
-            _has_unexcluded_match(pattern, value, exclusion)
-            for pattern, value, exclusion in zip(rule.patterns, normalized, exclusions, strict=True)
+            _has_unexcluded_match(pattern, value, rule.context_exclusion)
+            for pattern, value in zip(rule.patterns, normalized, strict=True)
         ):
             key = (rule.code, rule.category, rule.rule_id)
             if key not in seen:
