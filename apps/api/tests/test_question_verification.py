@@ -399,9 +399,18 @@ def valid_e4_candidate() -> dict[str, object]:
 
 
 class PassingM2Grader:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        failing_probe_index: int | None = None,
+        failure_kind: str | None = None,
+        offset_decision: str = "auto_rejected",
+    ) -> None:
         self.normalization_requests: list[dict[str, object]] = []
         self.grade_requests: list[tuple[str, dict[str, object], dict[str, object], str | None]] = []
+        self.failing_probe_index = failing_probe_index
+        self.failure_kind = failure_kind
+        self.offset_decision = offset_decision
 
     def normalize_math_answer(self, answer_json: dict[str, object]) -> dict[str, object]:
         self.normalization_requests.append(answer_json)
@@ -422,12 +431,37 @@ class PassingM2Grader:
         policy_version: str | None = None,
     ) -> GradeResult:
         self.grade_requests.append((question_type, rule_json, answer_json, policy_version))
-        return GradeResult(
-            decision="auto_accepted",
-            score=4,
-            evidence={"probe": "accepted"},
-            grader_version="fake-m2-v1",
-        )
+        probe_index = len(self.grade_requests) - 1
+        if probe_index == self.failing_probe_index:
+            if self.failure_kind == "exception":
+                raise RuntimeError("grader diagnostic with raw MathJSON")
+            if self.failure_kind == "unexpected_decision":
+                return GradeResult("unexpected", 0, {"secret": "raw MathJSON"}, "fake-m2-v1")
+            if self.failure_kind == "non_finite_score":
+                return GradeResult(
+                    "auto_accepted" if probe_index == 0 else "needs_review",
+                    float("nan"),
+                    {"secret": "raw MathJSON"},
+                    "fake-m2-v1",
+                )
+            if self.failure_kind == "wrong_nonzero_score":
+                return GradeResult(
+                    "auto_accepted" if probe_index == 0 else "needs_review",
+                    1,
+                    {"secret": "raw MathJSON"},
+                    "fake-m2-v1",
+                )
+            raise AssertionError(f"unknown failure kind: {self.failure_kind}")
+        if probe_index == 0:
+            return GradeResult(
+                decision="auto_accepted",
+                score=float(rule_json.get("max_score", 1)),
+                evidence={"probe": "accepted"},
+                grader_version="fake-m2-v1",
+            )
+        if probe_index == 1:
+            return GradeResult(self.offset_decision, 0, {}, "fake-m2-v1")
+        return GradeResult("needs_review", 0, {}, "fake-m2-v1")
 
 
 class FailingM2Normalizer(PassingM2Grader):
@@ -473,12 +507,17 @@ class FloatingPointM2Grader(PassingM2Grader):
         *,
         policy_version: str | None = None,
     ) -> GradeResult:
-        return GradeResult(
-            decision="auto_accepted",
-            score=0.9 - 0.2 + 0.2,
-            evidence={},
-            grader_version="fake-m2-v1",
-        )
+        self.grade_requests.append((question_type, rule_json, answer_json, policy_version))
+        if len(self.grade_requests) == 1:
+            return GradeResult(
+                decision="auto_accepted",
+                score=0.9 - 0.2 + 0.2,
+                evidence={},
+                grader_version="fake-m2-v1",
+            )
+        if len(self.grade_requests) == 2:
+            return GradeResult("auto_rejected", 0, {}, "fake-m2-v1")
+        return GradeResult("needs_review", 0, {}, "fake-m2-v1")
 
 
 class ComplexM2Grader(PassingM2Grader):
@@ -528,6 +567,13 @@ def valid_m2_candidate() -> dict[str, object]:
         },
         "explanation": "The expression is already expanded.",
     }
+
+
+def _nested_negate_probe(*, depth: int) -> object:
+    probe: object = 1
+    for _ in range(depth):
+        probe = ["Negate", probe]
+    return probe
 
 
 def complex_m2_candidate() -> dict[str, object]:
@@ -1549,8 +1595,78 @@ def test_valid_m2_candidate_normalizes_and_probes(session: Session) -> None:
 
     assert run.status is ValidationRunStatus.PASSED
     assert grader.normalization_requests == [{"mathjson": ["Add", "x", 1], "variables": ["x"]}]
-    assert grader.grade_requests[0][0] == "M2"
-    assert grader.grade_requests[0][2] == {"mathjson": ["Add", "x", 1]}
+    expected = ["Add", "x", 1]
+    assert [request[0] for request in grader.grade_requests] == ["M2"] * 5
+    assert [request[2]["mathjson"] for request in grader.grade_requests] == [
+        expected,
+        ["Add", expected, 1],
+        None,
+        ["Divide", 1, 0],
+        _nested_negate_probe(depth=21),
+    ]
+    assert [request[3] for request in grader.grade_requests] == ["2"] * 5
+
+
+def test_m2_offset_review_is_valid_at_the_grader_depth_boundary(session: Session) -> None:
+    draft = generation_draft(
+        session,
+        allowed_question_types=["M2"],
+        candidate_json=valid_m2_candidate(),
+    )
+    grader = PassingM2Grader(offset_decision="needs_review")
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    assert run.status is ValidationRunStatus.PASSED
+    assert len(grader.grade_requests) == 5
+
+
+@pytest.mark.parametrize(
+    ("probe_index", "probe_id"),
+    [
+        (0, "expected_mathjson"),
+        (1, "one_unit_offset"),
+        (2, "empty_mathjson"),
+        (3, "zero_denominator"),
+        (4, "resource_limit"),
+    ],
+)
+@pytest.mark.parametrize(
+    "failure_kind",
+    ["unexpected_decision", "non_finite_score", "wrong_nonzero_score", "exception"],
+)
+def test_m2_probe_failures_are_sanitized_and_do_not_short_circuit(
+    session: Session,
+    probe_index: int,
+    probe_id: str,
+    failure_kind: str,
+) -> None:
+    candidate = valid_m2_candidate()
+    assert candidate["rule_json"]["required_form"] == "expanded"
+    draft = generation_draft(
+        session,
+        allowed_question_types=["M2"],
+        candidate_json=candidate,
+    )
+    grader = PassingM2Grader(
+        failing_probe_index=probe_index,
+        failure_kind=failure_kind,
+    )
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    failures = [item for item in run.findings if item.code == "m2_grader_probe_failed"]
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert len(grader.normalization_requests) == 1
+    assert len(grader.grade_requests) == 5
+    assert len(failures) == 1
+    assert failures[0].evidence_json == {"probe": probe_id}
+    persisted_failure = f"{failures[0].evidence_json!r} {failures[0].remediation}"
+    assert "['Add', 'x', 1]" not in persisted_failure
+    assert "['Divide', 1, 0]" not in persisted_failure
+    assert "Negate" not in persisted_failure
+    assert "grader diagnostic" not in persisted_failure
+    assert "raw MathJSON" not in persisted_failure
 
 
 def test_valid_e2_candidate_probes_every_accepted_form(session: Session) -> None:

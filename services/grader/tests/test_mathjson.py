@@ -1,6 +1,8 @@
 import pytest
+from fastapi.testclient import TestClient
 
 from edu_grader.mathjson import MathJsonValidationError, normalize_mathjson
+from edu_grader.main import app
 
 
 def test_normalizes_whitelisted_mathjson() -> None:
@@ -17,6 +19,22 @@ def test_normalizes_whitelisted_mathjson() -> None:
             {"type": "number", "value": "6"},
         ],
     }
+
+
+def test_math_expression_v2_returns_review_for_null_student_mathjson() -> None:
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/grade/math/expression-v2",
+            json={
+                "student_mathjson": None,
+                "expected_mathjson": ["Add", 1, "x"],
+                "variables": ["x"],
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["decision"] == "needs_review"
+    assert response.json()["score"] == 0
 
 
 @pytest.mark.parametrize(

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from decimal import ROUND_CEILING, Decimal, InvalidOperation, localcontext
 import math
 import re
-from typing import Callable, Protocol
+from typing import Callable, Literal, Protocol
 import unicodedata
 
 from sqlalchemy import func, select
@@ -63,6 +63,7 @@ _GRADE_COMPLEXITY_METRICS = (
     "max_numeric_absolute_value",
     "max_math_operation_nodes",
 )
+_GRADER_DECISIONS = frozenset({"auto_accepted", "auto_rejected", "partial", "needs_review"})
 
 
 class VerificationGraderClient(Protocol):
@@ -102,6 +103,14 @@ class _M1Probe:
     name: str
     text: str
     expects_acceptance: bool
+
+
+@dataclass(frozen=True)
+class _M2Probe:
+    name: str
+    mathjson: object
+    decisions: frozenset[str]
+    score_kind: Literal["full", "zero"]
 
 
 def run_candidate_verification(
@@ -620,39 +629,83 @@ def _m2_findings(
             ],
             None,
         )
-    try:
-        result = grader_client.grade(
-            "M2",
-            rule_json,
-            {"mathjson": expected},
-            policy_version="2",
-        )
-    except Exception:
-        return (
-            [
-                _blocked(
-                    "m2_grader_probe_failed",
-                    {"probe": "expected_mathjson"},
-                    "Retry validation after the expression grader is available.",
-                )
-            ],
-            normalized_m2_ast,
-        )
     max_score = float(rule_json.get("max_score", 1))
-    if result.decision != "auto_accepted" or not math.isclose(
-        result.score, max_score, rel_tol=0, abs_tol=1e-9
-    ):
+    first_failure: str | None = None
+    for probe in _m2_probes(expected):
+        try:
+            result = grader_client.grade(
+                "M2",
+                rule_json,
+                {"mathjson": probe.mathjson},
+                policy_version="2",
+            )
+            decision = result.decision
+            score = result.score
+            score_is_finite = (
+                not isinstance(score, bool)
+                and isinstance(score, int | float)
+                and math.isfinite(score)
+            )
+            decision_matches = (
+                isinstance(decision, str)
+                and decision in _GRADER_DECISIONS
+                and decision in probe.decisions
+            )
+            score_matches = score_is_finite and (
+                math.isclose(score, max_score, rel_tol=0, abs_tol=1e-9)
+                if probe.score_kind == "full"
+                else score == 0
+            )
+            probe_passed = decision_matches and score_matches
+        except Exception:
+            probe_passed = False
+        if not probe_passed and first_failure is None:
+            first_failure = probe.name
+    if first_failure is not None:
         return (
             [
                 _blocked(
                     "m2_grader_probe_failed",
-                    {"probe": "expected_mathjson"},
-                    "Correct the M2 rule so the expected expression receives full credit.",
+                    {"probe": first_failure},
+                    "Correct the M2 rule so its answer probes match the grading policy.",
                 )
             ],
             normalized_m2_ast,
         )
     return [], normalized_m2_ast
+
+
+def _m2_probes(expected: object) -> tuple[_M2Probe, ...]:
+    resource_limit: object = 1
+    for _ in range(21):
+        resource_limit = ["Negate", resource_limit]
+    return (
+        _M2Probe(
+            "expected_mathjson",
+            expected,
+            frozenset({"auto_accepted"}),
+            "full",
+        ),
+        _M2Probe(
+            "one_unit_offset",
+            ["Add", expected, 1],
+            frozenset({"auto_rejected", "needs_review"}),
+            "zero",
+        ),
+        _M2Probe("empty_mathjson", None, frozenset({"needs_review"}), "zero"),
+        _M2Probe(
+            "zero_denominator",
+            ["Divide", 1, 0],
+            frozenset({"needs_review"}),
+            "zero",
+        ),
+        _M2Probe(
+            "resource_limit",
+            resource_limit,
+            frozenset({"needs_review"}),
+            "zero",
+        ),
+    )
 
 
 def _e1_findings(rule_json: dict[str, object]) -> list[VerificationFinding]:
