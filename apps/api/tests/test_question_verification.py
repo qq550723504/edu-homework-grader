@@ -72,6 +72,26 @@ class PassingGrader:
         *,
         policy_version: str | None = None,
     ) -> GradeResult:
+        if question_type == "M1":
+            text = answer_json.get("text")
+            expected = rule_json.get("expected")
+            tolerance = rule_json.get("tolerance", 0)
+            if (
+                not isinstance(text, str)
+                or not isinstance(expected, int | float)
+                or not isinstance(tolerance, int | float)
+            ):
+                return GradeResult("auto_rejected", 0, {}, "fake-grader-v1")
+            try:
+                accepted = bool(text) and abs(float(text) - expected) <= tolerance
+            except ValueError:
+                accepted = False
+            return GradeResult(
+                "auto_accepted" if accepted else "auto_rejected",
+                1 if accepted else 0,
+                {"probe": "accepted" if accepted else "rejected"},
+                "fake-grader-v1",
+            )
         return GradeResult(
             decision="auto_accepted",
             score=1,
@@ -114,6 +134,30 @@ class FailingGrader(PassingGrader):
         policy_version: str | None = None,
     ) -> GradeResult:
         raise RuntimeError("grader is unavailable")
+
+
+class RecordingM1Grader(PassingGrader):
+    def __init__(self, responses: dict[str, GradeResult | Exception] | None = None) -> None:
+        self.responses = responses or {}
+        self.grade_requests: list[tuple[str, dict[str, object], dict[str, object], str | None]] = []
+
+    def grade(
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
+    ) -> GradeResult:
+        self.grade_requests.append((question_type, rule_json, answer_json, policy_version))
+        text = answer_json["text"]
+        assert isinstance(text, str)
+        response = self.responses.get(text)
+        if isinstance(response, Exception):
+            raise response
+        if response is not None:
+            return response
+        return super().grade(question_type, rule_json, answer_json, policy_version=policy_version)
 
 
 class PassingE2Grader(PassingGrader):
@@ -1044,6 +1088,181 @@ def test_valid_m1_candidate_persists_a_passing_run_and_rerun(session: Session) -
     assert draft.validation_runs == [first, second]
 
 
+def test_m1_verification_runs_expected_empty_boundary_and_outside_probes_in_order(
+    session: Session,
+) -> None:
+    candidate = valid_m1_candidate("Calculate two and one half.")
+    candidate["rule_json"] = {"expected": 2.5, "tolerance": 0.25}
+    grader = RecordingM1Grader()
+
+    run = verification.run_candidate_verification(
+        session,
+        draft=generation_draft(session, candidate_json=candidate),
+        grader_client=grader,
+    )
+
+    assert [request[2]["text"] for request in grader.grade_requests] == [
+        "2.5",
+        "",
+        "2.25",
+        "2.75",
+        "1.25",
+        "3.75",
+    ]
+    assert all(request[0] == "M1" and request[3] == "1" for request in grader.grade_requests)
+    assert run.status is ValidationRunStatus.PASSED
+
+
+def test_m1_zero_tolerance_retains_duplicate_boundary_probes(session: Session) -> None:
+    candidate = valid_m1_candidate("Calculate four.")
+    candidate["rule_json"] = {"expected": 4, "tolerance": 0}
+    grader = RecordingM1Grader()
+
+    verification.run_candidate_verification(
+        session,
+        draft=generation_draft(session, candidate_json=candidate),
+        grader_client=grader,
+    )
+
+    assert [request[2]["text"] for request in grader.grade_requests] == [
+        "4",
+        "",
+        "4",
+        "4",
+        "3",
+        "5",
+    ]
+
+
+def test_m1_negative_numbers_use_safe_decimal_probe_text(session: Session) -> None:
+    candidate = valid_m1_candidate("Calculate a negative number.")
+    candidate["rule_json"] = {"expected": -3, "tolerance": 0.5}
+    grader = RecordingM1Grader()
+
+    verification.run_candidate_verification(
+        session,
+        draft=generation_draft(session, candidate_json=candidate),
+        grader_client=grader,
+    )
+
+    assert [request[2]["text"] for request in grader.grade_requests] == [
+        "-3",
+        "",
+        "-3.5",
+        "-2.5",
+        "-4.5",
+        "-1.5",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("probe_id", "response"),
+    [
+        *(
+            (probe_id, GradeResult("auto_rejected", 0, {"secret": "grader evidence"}, "fake-m1-v1"))
+            for probe_id in (
+                "expected_answer",
+                "lower_tolerance_boundary",
+                "upper_tolerance_boundary",
+            )
+        ),
+        *(
+            (probe_id, GradeResult("auto_accepted", 1, {"secret": "grader evidence"}, "fake-m1-v1"))
+            for probe_id in (
+                "empty_answer",
+                "below_tolerance_boundary",
+                "above_tolerance_boundary",
+            )
+        ),
+        *(
+            (
+                probe_id,
+                GradeResult(
+                    "auto_accepted", float("nan"), {"secret": "grader evidence"}, "fake-m1-v1"
+                ),
+            )
+            for probe_id in (
+                "expected_answer",
+                "empty_answer",
+                "lower_tolerance_boundary",
+                "upper_tolerance_boundary",
+                "below_tolerance_boundary",
+                "above_tolerance_boundary",
+            )
+        ),
+        *(
+            (probe_id, RuntimeError("grader exception secret"))
+            for probe_id in (
+                "expected_answer",
+                "empty_answer",
+                "lower_tolerance_boundary",
+                "upper_tolerance_boundary",
+                "below_tolerance_boundary",
+                "above_tolerance_boundary",
+            )
+        ),
+    ],
+)
+def test_m1_invalid_probe_results_are_safely_blocked(
+    session: Session, probe_id: str, response: GradeResult | Exception
+) -> None:
+    probe_texts = {
+        "expected_answer": "2.5",
+        "empty_answer": "",
+        "lower_tolerance_boundary": "2.25",
+        "upper_tolerance_boundary": "2.75",
+        "below_tolerance_boundary": "1.25",
+        "above_tolerance_boundary": "3.75",
+    }
+    candidate = valid_m1_candidate("Calculate two and one half.")
+    candidate["rule_json"] = {"expected": 2.5, "tolerance": 0.25}
+    grader = RecordingM1Grader({probe_texts[probe_id]: response})
+
+    run = verification.run_candidate_verification(
+        session,
+        draft=generation_draft(session, candidate_json=candidate),
+        grader_client=grader,
+    )
+
+    finding = next(item for item in run.findings if item.code == "m1_grader_probe_failed")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {"probe": probe_id}
+    persisted_values = (finding.evidence_json, finding.remediation)
+    assert all(
+        secret not in str(value)
+        for secret in ("2.5", "0.25", "grader evidence", "grader exception secret")
+        for value in persisted_values
+    )
+
+
+@pytest.mark.parametrize(
+    ("policy_version", "rule_json"),
+    [
+        ("1", {"expected": "four", "tolerance": 0}),
+        ("2", {"expected": 4, "tolerance": 0}),
+        (None, {"expected": 4, "tolerance": 0}),
+        (1, {"expected": 4, "tolerance": 0}),
+    ],
+)
+def test_m1_invalid_schema_or_policy_version_skips_type_specific_grader_calls(
+    session: Session, policy_version: object, rule_json: dict[str, object]
+) -> None:
+    candidate = valid_m1_candidate("Calculate four.")
+    candidate["policy_version"] = policy_version
+    candidate["rule_json"] = rule_json
+    grader = RecordingM1Grader()
+
+    run = verification.run_candidate_verification(
+        session,
+        draft=generation_draft(session, candidate_json=candidate),
+        grader_client=grader,
+    )
+
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert "policy_schema_invalid" in finding_codes(run)
+    assert grader.grade_requests == []
+
+
 def test_valid_m2_candidate_normalizes_and_probes(session: Session) -> None:
     draft = generation_draft(
         session,
@@ -1608,7 +1827,6 @@ def test_disallowed_type_and_invalid_policy_are_blocked(session: Session) -> Non
     assert {
         "question_type_not_allowed",
         "policy_schema_invalid",
-        "m1_answer_invalid",
     } <= finding_codes(run)
 
 
