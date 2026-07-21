@@ -85,6 +85,10 @@ make question-test
 `POST /v1/ai-question-generation/jobs/{id}/cancel`，重新生成单个候选使用
 `POST /v1/ai-generated-questions/{draft_id}/regenerate`。
 
+候选题可使用 `POST /v1/ai-generated-questions/{draft_id}/validation-runs` 运行独立、不可变的验证，
+并通过对应的 `GET` 路径或 `GET /v1/ai-question-validation-runs/{run_id}` 查看结果。`warning` 将在后续
+接受流程中要求教师明确确认，`blocked` 不得被该流程接受；本切片尚未实现批量接受或其强制门禁。
+
 本地默认 `GENERATION_PROVIDER=fake`，不会访问外部模型。部署到受控环境时才设置
 `GENERATION_PROVIDER=openai`，并由 Secret Manager 注入 `OPENAI_API_KEY`；同时必须显式设置经过审批的固定
 `GENERATOR_OPENAI_MODEL`（不要使用浮动别名）和 `GENERATOR_PROVIDER_ALLOWED_HOSTS`。真实连接测试默认跳过，

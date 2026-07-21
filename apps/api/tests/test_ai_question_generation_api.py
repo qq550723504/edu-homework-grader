@@ -8,6 +8,7 @@ from sqlalchemy.pool import StaticPool
 
 from edu_grader_api.auth import VerifiedIdentity, get_token_verifier
 from edu_grader_api.db import Base, get_session
+from edu_grader_api.e2e_support import DeterministicM2Client
 from edu_grader_api.main import app
 from edu_grader_api.models import (
     CurriculumActivityType,
@@ -24,6 +25,7 @@ from edu_grader_api.models import (
     User,
 )
 from edu_grader_api.settings import settings
+import edu_grader_api.routers.ai_question_validation as validation_router
 
 
 ISSUER = "http://localhost:8080/realms/edu-grader"
@@ -171,3 +173,40 @@ def test_generation_job_rejects_a_batch_over_the_configured_limit(
 
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "generation_batch_limit_exceeded"
+
+
+def test_teacher_can_create_and_read_immutable_validation_runs(
+    client: TestClient, session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    headers = authorize(client, teacher) | {"Idempotency-Key": "validation-run"}
+    created = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=headers,
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "grade": "Grade 5",
+            "subject": "mathematics",
+            "question_types": ["M1"],
+            "requested_count": 1,
+            "policy_catalog_version": "2026.07",
+            "prompt_version": "generator-v1",
+        },
+    )
+    draft_id = client.get(
+        f"/v1/ai-question-generation/jobs/{created.json()['id']}/questions", headers=headers
+    ).json()["items"][0]["id"]
+    monkeypatch.setattr(validation_router, "HttpGraderClient", DeterministicM2Client)
+
+    created_run = client.post(
+        f"/v1/ai-generated-questions/{draft_id}/validation-runs", headers=headers
+    )
+    history = client.get(f"/v1/ai-generated-questions/{draft_id}/validation-runs", headers=headers)
+    fetched = client.get(
+        f"/v1/ai-question-validation-runs/{created_run.json()['id']}", headers=headers
+    )
+
+    assert created_run.status_code == 201
+    assert created_run.json()["status"] == "passed"
+    assert history.json()["items"][0]["id"] == created_run.json()["id"]
+    assert fetched.json()["findings"] == []

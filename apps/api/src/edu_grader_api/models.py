@@ -135,6 +135,17 @@ class GenerationJobStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class ValidationRunStatus(StrEnum):
+    PASSED = "passed"
+    WARNING = "warning"
+    BLOCKED = "blocked"
+
+
+class ValidationFindingSeverity(StrEnum):
+    WARNING = "warning"
+    BLOCKED = "blocked"
+
+
 ACTIVE_PRIVACY_REQUEST_STATUSES = (
     PrivacyRequestStatus.REQUESTED.value,
     PrivacyRequestStatus.LEGAL_HOLD.value,
@@ -632,6 +643,7 @@ class GenerationJob(Base):
     curriculum_objective_revision: Mapped[CurriculumObjectiveRevision] = relationship()
     attempts: Mapped[list[GenerationAttempt]] = relationship(back_populates="job")
     drafts: Mapped[list[GeneratedQuestionDraft]] = relationship(back_populates="job")
+    validation_runs: Mapped[list[GenerationValidationRun]] = relationship(back_populates="job")
 
 
 class GenerationAttempt(Base):
@@ -692,6 +704,85 @@ class GeneratedQuestionDraft(Base):
 
     job: Mapped[GenerationJob] = relationship(back_populates="drafts")
     generation_attempt: Mapped[GenerationAttempt] = relationship(back_populates="drafts")
+    validation_runs: Mapped[list[GenerationValidationRun]] = relationship(
+        back_populates="draft",
+        order_by="GenerationValidationRun.run_number",
+    )
+
+
+class GenerationValidationRun(Base):
+    __tablename__ = "generation_validation_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "generated_question_draft_id",
+            "run_number",
+            name="uq_generation_validation_run_draft_number",
+        ),
+        Index(
+            "ix_generation_validation_runs_draft_created",
+            "generated_question_draft_id",
+            "created_at",
+        ),
+        Index("ix_generation_validation_runs_job_created", "generation_job_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    generated_question_draft_id: Mapped[UUID] = mapped_column(
+        ForeignKey("generated_question_drafts.id"), nullable=False
+    )
+    generation_job_id: Mapped[UUID] = mapped_column(
+        ForeignKey("generation_jobs.id"), nullable=False
+    )
+    run_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    validator_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    ruleset_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[ValidationRunStatus] = mapped_column(
+        Enum(
+            ValidationRunStatus,
+            native_enum=False,
+            values_callable=lambda values: [value.value for value in values],
+        ),
+        nullable=False,
+    )
+    feature_summary_json: Mapped[dict[str, object]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    draft: Mapped[GeneratedQuestionDraft] = relationship(back_populates="validation_runs")
+    job: Mapped[GenerationJob] = relationship(back_populates="validation_runs")
+    findings: Mapped[list[ValidationFinding]] = relationship(
+        back_populates="validation_run",
+        order_by="ValidationFinding.created_at",
+    )
+
+
+class ValidationFinding(Base):
+    __tablename__ = "validation_findings"
+    __table_args__ = (
+        Index("ix_validation_findings_run_created", "validation_run_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    validation_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("generation_validation_runs.id"), nullable=False
+    )
+    code: Mapped[str] = mapped_column(String(100), nullable=False)
+    severity: Mapped[ValidationFindingSeverity] = mapped_column(
+        Enum(
+            ValidationFindingSeverity,
+            native_enum=False,
+            values_callable=lambda values: [value.value for value in values],
+        ),
+        nullable=False,
+    )
+    evidence_json: Mapped[dict[str, object]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), default=dict
+    )
+    remediation: Mapped[str] = mapped_column(String(1000), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    validation_run: Mapped[GenerationValidationRun] = relationship(back_populates="findings")
 
 
 class GradingPolicy(Base):
