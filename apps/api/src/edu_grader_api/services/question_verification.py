@@ -404,12 +404,13 @@ def _m1_probes(expected: int | float, tolerance: int | float) -> tuple[_M1Probe,
 
 def _m1_probe_precision(*values: Decimal) -> int:
     nonzero_values = tuple(value for value in values if value)
-    precision = (
+    significant_precision = (
         max(value.adjusted() for value in nonzero_values)
         - min(value.as_tuple().exponent for value in nonzero_values)
         + 1
     )
-    if precision > _M1_PROBE_TEXT_LIMIT:
+    precision = significant_precision + 1
+    if precision > _M1_PROBE_TEXT_LIMIT + 1:
         raise ValueError("M1 probe precision exceeds the numeric answer envelope")
     return max(precision, 1)
 

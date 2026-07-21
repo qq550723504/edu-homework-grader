@@ -1225,6 +1225,28 @@ def test_m1_tiny_expected_preserves_unit_outside_tolerance_probes() -> None:
     ]
 
 
+def test_m1_nonzero_tolerance_preserves_carry_outside_probe(session: Session) -> None:
+    rule_json = {"expected": 999, "tolerance": 1}
+    probes = verification._m1_probes(999, 1)
+
+    assert [probe.text for probe in probes] == ["999", "", "998", "1E+3", "997", "1001"]
+    grader = PassingGrader()
+    upper_result = grader.grade(
+        "M1", rule_json, {"format": "text-v1", "text": probes[3].text}, policy_version="1"
+    )
+    above_result = grader.grade(
+        "M1", rule_json, {"format": "text-v1", "text": probes[5].text}, policy_version="1"
+    )
+    assert upper_result.decision == "auto_accepted"
+    assert above_result.decision == "auto_rejected"
+
+
+def test_m1_negative_nonzero_tolerance_preserves_carry_outside_probe() -> None:
+    probes = verification._m1_probes(-999, 1)
+
+    assert [probe.text for probe in probes] == ["-999", "", "-1E+3", "-998", "-1001", "-997"]
+
+
 @pytest.mark.parametrize(
     ("probe_id", "response"),
     [
