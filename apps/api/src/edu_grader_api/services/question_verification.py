@@ -17,16 +17,24 @@ from ..models import (
     GeneratedQuestionDraft,
     GenerationJob,
     GenerationValidationRun,
+    Question,
+    QuestionVersion,
     ValidationFinding,
     ValidationFindingSeverity,
     ValidationRunStatus,
+    VersionStatus,
 )
 from ..policies import validate_policy
+from ..settings import settings
+from .grader import EmbeddingDependencyVersion, SemanticSimilarityResult
+from .question_fingerprints import FINGERPRINT_VERSION, PromptFingerprints, fingerprint_prompt
 from .questions import GradeResult
 
 
-VALIDATOR_VERSION = "verification-v1"
-RULESET_VERSION = "rules-v1"
+VALIDATOR_VERSION = "verification-v3"
+RULESET_VERSION = "rules-v3"
+_SEMANTIC_CHUNK_SIZE = 128
+_DUPLICATE_REMEDIATION = "Revise the prompt to make the candidate meaningfully distinct."
 _WHITESPACE = re.compile(r"\s+")
 _E2_TERMINAL_PUNCTUATION = re.compile(r"[.!?。！？]+$")
 _UNSAFE_MINOR_TERMS = (
@@ -63,6 +71,10 @@ class VerificationGraderClient(Protocol):
         policy_version: str | None = None,
     ) -> GradeResult: ...
 
+    def semantic_similarity(
+        self, query: str, comparisons: list[str]
+    ) -> SemanticSimilarityResult: ...
+
 
 @dataclass(frozen=True)
 class VerificationFinding:
@@ -70,6 +82,13 @@ class VerificationFinding:
     severity: ValidationFindingSeverity
     evidence: dict[str, object]
     remediation: str
+
+
+@dataclass(frozen=True)
+class _CandidateEvaluation:
+    findings: list[VerificationFinding]
+    duplicate_feature_summary: dict[str, object]
+    evaluated_candidate_fingerprints: PromptFingerprints
 
 
 def run_candidate_verification(
@@ -80,18 +99,50 @@ def run_candidate_verification(
 ) -> GenerationValidationRun:
     """Evaluate a candidate and append a new, immutable verification result."""
 
+    duplicate_threshold = _validated_duplicate_threshold()
+    prompt = draft.candidate_json.get("prompt")
+    duplicate_snapshot = _empty_duplicate_snapshot(
+        duplicate_threshold,
+        prompt if isinstance(prompt, str) else "",
+    )
     try:
-        findings = _evaluate_candidate(session, draft=draft, grader_client=grader_client)
-    except Exception:
-        findings = [
-            VerificationFinding(
-                code="validator_unavailable",
-                severity=ValidationFindingSeverity.BLOCKED,
-                evidence={"category": "internal_validation_error"},
-                remediation="Retry validation. If the problem continues, contact an administrator.",
+        job = session.get(GenerationJob, draft.job_id)
+        if job is not None and isinstance(prompt, str):
+            duplicate_snapshot = _capture_duplicate_snapshot(
+                session,
+                draft=draft,
+                tenant_id=job.tenant_id,
+                prompt=prompt,
+                threshold=duplicate_threshold,
             )
-        ]
-    return _persist_run(session, draft=draft, findings=findings)
+        evaluation = _evaluate_candidate(
+            session,
+            draft=draft,
+            grader_client=grader_client,
+            duplicate_snapshot=duplicate_snapshot,
+        )
+    except Exception:
+        evaluation = _CandidateEvaluation(
+            findings=[
+                VerificationFinding(
+                    code="validator_unavailable",
+                    severity=ValidationFindingSeverity.BLOCKED,
+                    evidence={"category": "internal_validation_error"},
+                    remediation=(
+                        "Retry validation. If the problem continues, contact an administrator."
+                    ),
+                )
+            ],
+            duplicate_feature_summary=_duplicate_feature_summary(duplicate_snapshot),
+            evaluated_candidate_fingerprints=duplicate_snapshot.candidate_fingerprints,
+        )
+    return _persist_run(
+        session,
+        draft=draft,
+        findings=evaluation.findings,
+        duplicate_feature_summary=evaluation.duplicate_feature_summary,
+        evaluated_candidate_fingerprints=evaluation.evaluated_candidate_fingerprints,
+    )
 
 
 def _evaluate_candidate(
@@ -99,7 +150,8 @@ def _evaluate_candidate(
     *,
     draft: GeneratedQuestionDraft,
     grader_client: VerificationGraderClient,
-) -> list[VerificationFinding]:
+    duplicate_snapshot: _DuplicateSnapshot,
+) -> _CandidateEvaluation:
     job = session.get(GenerationJob, draft.job_id)
     if job is None:
         raise ValueError("candidate generation job was not found")
@@ -205,15 +257,16 @@ def _evaluate_candidate(
         )
     )
     if isinstance(prompt, str):
-        if _has_normalized_duplicate(session, draft=draft, tenant_id=job.tenant_id, prompt=prompt):
-            findings.append(
-                VerificationFinding(
-                    code="duplicate_candidate_content",
-                    severity=ValidationFindingSeverity.WARNING,
-                    evidence={"comparison": "normalized_prompt"},
-                    remediation="Revise the prompt to make the candidate meaningfully distinct.",
-                )
+        findings.extend(
+            _duplicate_findings(
+                session,
+                draft=draft,
+                tenant_id=job.tenant_id,
+                prompt=prompt,
+                grader_client=grader_client,
+                _snapshot=duplicate_snapshot,
             )
+        )
         grade_limit = _GRADE_TEXT_LIMITS.get(revision.objective.grade_mapping.internal_level)
         if grade_limit is not None and len(prompt) > grade_limit:
             findings.append(
@@ -242,7 +295,11 @@ def _evaluate_candidate(
         findings.extend(_e4_findings(rule_json, policy_version, reading_material, grader_client))
     if question_type == "E1" and isinstance(rule_json, dict):
         findings.extend(_e1_findings(rule_json))
-    return findings
+    return _CandidateEvaluation(
+        findings=findings,
+        duplicate_feature_summary=_duplicate_feature_summary(duplicate_snapshot),
+        evaluated_candidate_fingerprints=duplicate_snapshot.candidate_fingerprints,
+    )
 
 
 def _m1_findings(
@@ -717,12 +774,34 @@ def _persist_run(
     *,
     draft: GeneratedQuestionDraft,
     findings: list[VerificationFinding],
+    duplicate_feature_summary: dict[str, object],
+    evaluated_candidate_fingerprints: PromptFingerprints,
 ) -> GenerationValidationRun:
-    session.execute(
-        select(GeneratedQuestionDraft)
+    evaluated_fingerprints = (
+        evaluated_candidate_fingerprints.version,
+        evaluated_candidate_fingerprints.exact_hash,
+        evaluated_candidate_fingerprints.normalized_hash,
+    )
+    in_memory_fingerprints = (
+        draft.fingerprint_version,
+        draft.exact_prompt_hash,
+        draft.normalized_prompt_hash,
+    )
+    snapshot_changed_before_lock = in_memory_fingerprints != evaluated_fingerprints
+
+    session.flush()
+    locked_fingerprints = session.execute(
+        select(
+            GeneratedQuestionDraft.fingerprint_version,
+            GeneratedQuestionDraft.exact_prompt_hash,
+            GeneratedQuestionDraft.normalized_prompt_hash,
+        )
         .where(GeneratedQuestionDraft.id == draft.id)
         .with_for_update()
-    )
+    ).one_or_none()
+    current_fingerprints = tuple(locked_fingerprints) if locked_fingerprints is not None else None
+    if snapshot_changed_before_lock or current_fingerprints != evaluated_fingerprints:
+        findings = [_duplicate_unavailable_finding()]
     latest_run_number = session.scalar(
         select(func.max(GenerationValidationRun.run_number)).where(
             GenerationValidationRun.generated_question_draft_id == draft.id
@@ -736,7 +815,10 @@ def _persist_run(
         validator_version=VALIDATOR_VERSION,
         ruleset_version=RULESET_VERSION,
         status=status,
-        feature_summary_json={"finding_count": len(findings)},
+        feature_summary_json={
+            "finding_count": len(findings),
+            **duplicate_feature_summary,
+        },
     )
     session.add(run)
     session.flush()
@@ -754,24 +836,321 @@ def _persist_run(
     return run
 
 
-def _has_normalized_duplicate(
+@dataclass(frozen=True)
+class _PromptComparator:
+    category: str
+    prompt: str
+    normalized_hash: str
+
+
+@dataclass
+class _DuplicateSnapshot:
+    threshold: float
+    candidate_fingerprints: PromptFingerprints
+    exact_category: str | None
+    normalized_category: str | None
+    comparators: tuple[_PromptComparator, ...]
+    embedding_dependency: EmbeddingDependencyVersion | None = None
+    unavailable: bool = False
+
+
+def _empty_duplicate_snapshot(threshold: float, prompt: str) -> _DuplicateSnapshot:
+    return _DuplicateSnapshot(
+        threshold=threshold,
+        candidate_fingerprints=fingerprint_prompt(prompt),
+        exact_category=None,
+        normalized_category=None,
+        comparators=(),
+    )
+
+
+def _validated_duplicate_threshold() -> float:
+    threshold = settings.ai_duplicate_similarity_threshold
+    if not _is_finite_number(threshold) or threshold < 0 or threshold > 1:
+        raise ValueError("semantic similarity threshold is invalid")
+    return float(threshold)
+
+
+def _empty_duplicate_feature_summary(snapshot: _DuplicateSnapshot) -> dict[str, object]:
+    return {
+        "fingerprint_version": snapshot.candidate_fingerprints.version,
+        "candidate_prompt_fingerprint": {
+            "version": snapshot.candidate_fingerprints.version,
+            "exact_hash": snapshot.candidate_fingerprints.exact_hash,
+            "normalized_hash": snapshot.candidate_fingerprints.normalized_hash,
+        },
+        "similarity_threshold": snapshot.threshold,
+        "comparison_counts": {"published_question": 0, "batch_candidate": 0},
+        "embedding_dependency": (
+            snapshot.embedding_dependency.as_dict()
+            if snapshot.embedding_dependency is not None
+            else None
+        ),
+    }
+
+
+def _duplicate_feature_summary(snapshot: _DuplicateSnapshot) -> dict[str, object]:
+    summary = _empty_duplicate_feature_summary(snapshot)
+    summary["comparison_counts"] = {
+        category: sum(comparator.category == category for comparator in snapshot.comparators)
+        for category in ("published_question", "batch_candidate")
+    }
+    return summary
+
+
+def _capture_duplicate_snapshot(
     session: Session,
     *,
     draft: GeneratedQuestionDraft,
     tenant_id: object,
     prompt: str,
-) -> bool:
-    normalized_prompt = _normalize_text(prompt)
-    other_drafts = session.scalars(
-        select(GeneratedQuestionDraft)
-        .join(GenerationJob, GeneratedQuestionDraft.job_id == GenerationJob.id)
-        .where(GenerationJob.tenant_id == tenant_id, GeneratedQuestionDraft.id != draft.id)
+    threshold: float,
+) -> _DuplicateSnapshot:
+    try:
+        fingerprints = fingerprint_prompt(prompt)
+        exact_category = _fingerprint_match_category(
+            session,
+            draft=draft,
+            tenant_id=tenant_id,
+            column="exact",
+            fingerprint=fingerprints.exact_hash,
+        )
+        normalized_category = (
+            None
+            if exact_category is not None
+            else _fingerprint_match_category(
+                session,
+                draft=draft,
+                tenant_id=tenant_id,
+                column="normalized",
+                fingerprint=fingerprints.normalized_hash,
+            )
+        )
+        comparators = tuple(_semantic_comparators(session, draft=draft, tenant_id=tenant_id))
+    except Exception:
+        return _DuplicateSnapshot(
+            threshold=threshold,
+            candidate_fingerprints=fingerprint_prompt(prompt),
+            exact_category=None,
+            normalized_category=None,
+            comparators=(),
+            unavailable=True,
+        )
+    return _DuplicateSnapshot(
+        threshold=threshold,
+        candidate_fingerprints=fingerprints,
+        exact_category=exact_category,
+        normalized_category=normalized_category,
+        comparators=comparators,
     )
-    return any(
-        isinstance(other_prompt := other.candidate_json.get("prompt"), str)
-        and _normalize_text(other_prompt) == normalized_prompt
-        for other in other_drafts
+
+
+def _duplicate_findings(
+    session: Session,
+    *,
+    draft: GeneratedQuestionDraft,
+    tenant_id: object,
+    prompt: str,
+    grader_client: VerificationGraderClient,
+    _snapshot: _DuplicateSnapshot | None = None,
+) -> list[VerificationFinding]:
+    snapshot = _snapshot or _capture_duplicate_snapshot(
+        session,
+        draft=draft,
+        tenant_id=tenant_id,
+        prompt=prompt,
+        threshold=_validated_duplicate_threshold(),
     )
+    if snapshot.unavailable:
+        return [_duplicate_unavailable_finding()]
+    try:
+        if snapshot.exact_category is not None:
+            return [
+                _blocked(
+                    "duplicate_exact_prompt",
+                    {"comparison": snapshot.exact_category, "method": "exact_hash"},
+                    _DUPLICATE_REMEDIATION,
+                )
+            ]
+
+        if snapshot.normalized_category is not None:
+            return [
+                _blocked(
+                    "duplicate_normalized_prompt",
+                    {
+                        "comparison": snapshot.normalized_category,
+                        "method": "normalized_hash",
+                    },
+                    _DUPLICATE_REMEDIATION,
+                )
+            ]
+
+        comparators = snapshot.comparators
+        if not comparators:
+            return []
+
+        scores: list[float] = []
+        embedding_dependency: EmbeddingDependencyVersion | None = None
+        for offset in range(0, len(comparators), _SEMANTIC_CHUNK_SIZE):
+            chunk = comparators[offset : offset + _SEMANTIC_CHUNK_SIZE]
+            result = grader_client.semantic_similarity(
+                prompt, [comparator.prompt for comparator in chunk]
+            )
+            if not isinstance(result, SemanticSimilarityResult) or not _valid_embedding_dependency(
+                result.embedding
+            ):
+                raise ValueError("semantic similarity response metadata is invalid")
+            if embedding_dependency is None:
+                embedding_dependency = result.embedding
+            elif result.embedding != embedding_dependency:
+                raise ValueError("semantic similarity response metadata is inconsistent")
+            chunk_scores = result.scores
+            if not isinstance(chunk_scores, list) or len(chunk_scores) != len(chunk):
+                raise ValueError("semantic similarity response count is invalid")
+            if any(
+                not _is_finite_number(score) or score < 0 or score > 1 for score in chunk_scores
+            ):
+                raise ValueError("semantic similarity response score is invalid")
+            scores.extend(float(score) for score in chunk_scores)
+        if len(scores) != len(comparators):
+            raise ValueError("semantic similarity response coverage is incomplete")
+        snapshot.embedding_dependency = embedding_dependency
+
+        for comparator, score in zip(comparators, scores, strict=True):
+            if score >= snapshot.threshold:
+                return [
+                    _blocked(
+                        "duplicate_semantic_near_match",
+                        {
+                            "comparison": comparator.category,
+                            "method": "semantic",
+                            "threshold_band": "at_or_above",
+                        },
+                        _DUPLICATE_REMEDIATION,
+                    )
+                ]
+        return []
+    except Exception:
+        return [_duplicate_unavailable_finding()]
+
+
+def _duplicate_unavailable_finding() -> VerificationFinding:
+    return _blocked(
+        "duplicate_semantic_check_unavailable",
+        {"category": "similarity_unavailable"},
+        "Retry validation after semantic similarity is available.",
+    )
+
+
+def _valid_embedding_dependency(value: object) -> bool:
+    return isinstance(value, EmbeddingDependencyVersion) and all(
+        isinstance(item, str) and item.strip() for item in (value.id, value.revision, value.digest)
+    )
+
+
+def _fingerprint_match_category(
+    session: Session,
+    *,
+    draft: GeneratedQuestionDraft,
+    tenant_id: object,
+    column: str,
+    fingerprint: str,
+) -> str | None:
+    published_column = (
+        QuestionVersion.exact_prompt_hash
+        if column == "exact"
+        else QuestionVersion.normalized_prompt_hash
+    )
+    published_match = session.execute(
+        select(published_column)
+        .join(Question, QuestionVersion.question_id == Question.id)
+        .where(
+            Question.tenant_id == tenant_id,
+            QuestionVersion.status == VersionStatus.PUBLISHED,
+            QuestionVersion.fingerprint_version == FINGERPRINT_VERSION,
+            published_column == fingerprint,
+        )
+        .limit(1)
+    ).first()
+    if published_match is not None:
+        return "published_question"
+
+    batch_column = (
+        GeneratedQuestionDraft.exact_prompt_hash
+        if column == "exact"
+        else GeneratedQuestionDraft.normalized_prompt_hash
+    )
+    batch_match = session.execute(
+        select(batch_column)
+        .where(
+            GeneratedQuestionDraft.job_id == draft.job_id,
+            GeneratedQuestionDraft.id != draft.id,
+            GeneratedQuestionDraft.fingerprint_version == FINGERPRINT_VERSION,
+            batch_column == fingerprint,
+        )
+        .limit(1)
+    ).first()
+    return "batch_candidate" if batch_match is not None else None
+
+
+def _semantic_comparators(
+    session: Session,
+    *,
+    draft: GeneratedQuestionDraft,
+    tenant_id: object,
+) -> list[_PromptComparator]:
+    published_rows = session.execute(
+        select(
+            QuestionVersion.prompt,
+            QuestionVersion.fingerprint_version,
+            QuestionVersion.normalized_prompt_hash,
+        )
+        .join(Question, QuestionVersion.question_id == Question.id)
+        .where(
+            Question.tenant_id == tenant_id,
+            QuestionVersion.status == VersionStatus.PUBLISHED,
+        )
+        .order_by(QuestionVersion.created_at)
+    ).all()
+    batch_rows = session.execute(
+        select(
+            GeneratedQuestionDraft.candidate_json,
+            GeneratedQuestionDraft.fingerprint_version,
+            GeneratedQuestionDraft.normalized_prompt_hash,
+        )
+        .where(
+            GeneratedQuestionDraft.job_id == draft.job_id,
+            GeneratedQuestionDraft.id != draft.id,
+        )
+        .order_by(GeneratedQuestionDraft.ordinal)
+    ).all()
+
+    comparators: list[_PromptComparator] = []
+    seen_hashes: set[str] = set()
+    for category, rows in (
+        ("published_question", published_rows),
+        ("batch_candidate", batch_rows),
+    ):
+        for value, fingerprint_version, normalized_hash in rows:
+            prompt = value.get("prompt") if isinstance(value, dict) else value
+            if not isinstance(prompt, str) or not prompt or len(prompt) > 10_000:
+                raise ValueError("semantic comparator prompt is invalid")
+            deduplication_hash = (
+                normalized_hash
+                if fingerprint_version == FINGERPRINT_VERSION
+                else fingerprint_prompt(prompt).normalized_hash
+            )
+            if deduplication_hash in seen_hashes:
+                continue
+            seen_hashes.add(deduplication_hash)
+            comparators.append(
+                _PromptComparator(
+                    category=category,
+                    prompt=prompt,
+                    normalized_hash=deduplication_hash,
+                )
+            )
+    return comparators
 
 
 def _safety_findings(*texts: str) -> list[VerificationFinding]:

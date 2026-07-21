@@ -1,6 +1,6 @@
 from urllib.parse import urlparse
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_AUDIT_HMAC_KEY = "development-only-change-me-32-bytes-minimum"
@@ -8,7 +8,7 @@ PRODUCTION_PROCESSOR_HOSTS: frozenset[str] = frozenset({"grader", "languagetool"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", populate_by_name=True)
 
     app_env: str = "development"
     database_url: str = "postgresql+psycopg://edu_grader:change-me@localhost:5432/edu_grader"
@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     generator_timeout_seconds: float = 30
     generator_daily_tenant_limit: int = 100
     generator_max_batch_size: int = 20
+    ai_duplicate_similarity_threshold: float = Field(
+        default=0.92,
+        ge=0,
+        le=1,
+        validation_alias="AI_DUPLICATE_SIMILARITY_THRESHOLD",
+    )
 
     @model_validator(mode="after")
     def require_production_security_controls(self) -> "Settings":

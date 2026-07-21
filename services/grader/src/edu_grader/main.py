@@ -2,12 +2,12 @@ import os
 from contextlib import asynccontextmanager
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from edu_grader_processor_policy import assert_allowed_processor_url, assert_deidentified_payload
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .english import EnglishExactRequest, grade_exact
 from .english_dependencies import (
@@ -15,6 +15,7 @@ from .english_dependencies import (
     LanguageToolClient,
     SentenceTransformerSimilarity,
     UnavailableSimilarity,
+    _valid_similarity,
 )
 from .english_orchestrator import grade_english
 from .execution import load_math_execution_limits, run_math_expression
@@ -100,6 +101,20 @@ class EnglishGradeRequest(BaseModel):
     answer: dict[str, object]
 
 
+class SemanticSimilarityRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: Annotated[str, Field(min_length=1, max_length=10_000)]
+    comparisons: list[Annotated[str, Field(min_length=1, max_length=10_000)]] = Field(
+        min_length=1, max_length=128
+    )
+
+
+class SemanticSimilarityResponse(BaseModel):
+    scores: list[float]
+    embedding: dict[str, str]
+
+
 @app.get("/health", tags=["system"])
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "grader"}
@@ -143,6 +158,27 @@ def english_grade(request: EnglishGradeRequest) -> GradingResult:
                 "runtime": app.state.runtime_dependency_versions,
             }
         }
+    )
+
+
+@app.post(
+    "/v1/semantic-similarity",
+    response_model=SemanticSimilarityResponse,
+    tags=["internal"],
+)
+def semantic_similarity(request: SemanticSimilarityRequest) -> SemanticSimilarityResponse:
+    payload = request.model_dump()
+    assert_deidentified_payload(payload)
+    try:
+        scores = app.state.semantic_similarity.score_many(request.query, request.comparisons)
+        if len(scores) != len(request.comparisons):
+            raise EnglishDependencyError("English embedding model returned an incomplete batch.")
+        validated_scores = [_valid_similarity(score) for score in scores]
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="semantic similarity is unavailable") from error
+    return SemanticSimilarityResponse(
+        scores=validated_scores,
+        embedding=app.state.embedding_dependency_version,
     )
 
 

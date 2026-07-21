@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+import math
 from typing import Any
 
 import httpx
@@ -14,6 +16,22 @@ class MathAnswerNormalizationError(ValueError):
     def __init__(self, code: str, message: str) -> None:
         self.code = code
         super().__init__(message)
+
+
+@dataclass(frozen=True)
+class EmbeddingDependencyVersion:
+    id: str
+    revision: str
+    digest: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {"id": self.id, "revision": self.revision, "digest": self.digest}
+
+
+@dataclass(frozen=True)
+class SemanticSimilarityResult:
+    scores: list[float]
+    embedding: EmbeddingDependencyVersion
 
 
 class HttpGraderClient:
@@ -83,6 +101,36 @@ class HttpGraderClient:
                 "invalid_normalizer_response", "数学规范化服务响应无效。"
             )
         return ast
+
+    def semantic_similarity(self, query: str, comparisons: list[str]) -> SemanticSimilarityResult:
+        payload = {"query": query, "comparisons": comparisons}
+        self._validate_request(payload)
+        response = httpx.post(
+            f"{self.base_url}/v1/semantic-similarity",
+            json=payload,
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict):
+            raise ValueError("semantic similarity response is invalid")
+        scores = data.get("scores")
+        if not isinstance(scores, list) or len(scores) != len(comparisons):
+            raise ValueError("semantic similarity response is invalid")
+        if any(
+            isinstance(score, bool)
+            or not isinstance(score, int | float)
+            or not math.isfinite(score)
+            or score < 0
+            or score > 1
+            for score in scores
+        ):
+            raise ValueError("semantic similarity response is invalid")
+        embedding = _embedding_dependency_version(data.get("embedding"))
+        return SemanticSimilarityResult(
+            scores=[float(score) for score in scores],
+            embedding=embedding,
+        )
 
     def _validate_request(self, payload: dict[str, object]) -> None:
         assert_allowed_processor_url(self.base_url, settings.allowed_processor_hosts)
@@ -181,6 +229,19 @@ def _error_payload(error: httpx.HTTPStatusError) -> dict[str, object]:
     except ValueError:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _embedding_dependency_version(value: object) -> EmbeddingDependencyVersion:
+    if not isinstance(value, dict):
+        raise ValueError("semantic similarity response is invalid")
+    fields = {field: value.get(field) for field in ("id", "revision", "digest")}
+    if not all(isinstance(item, str) and item.strip() for item in fields.values()):
+        raise ValueError("semantic similarity response is invalid")
+    return EmbeddingDependencyVersion(
+        id=fields["id"].strip(),  # type: ignore[union-attr]
+        revision=fields["revision"].strip(),  # type: ignore[union-attr]
+        digest=fields["digest"].strip(),  # type: ignore[union-attr]
+    )
 
 
 def _text_answer(answer_json: dict[str, object]) -> str:
