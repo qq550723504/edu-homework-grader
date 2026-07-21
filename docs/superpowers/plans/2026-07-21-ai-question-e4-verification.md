@@ -83,7 +83,7 @@
       assert draft.candidate_json["rule_json"]["scoring_points"][0]["score"] == 2
   ```
 
-  Add separate tests for normalized duplicate IDs, normalized duplicate phrases, and an unequal score total. Assert `e4_scoring_points_invalid` or `e4_score_total_invalid`, sanitized count/number evidence, and no Grader calls. Add a floating-point-valid total such as scores `0.7` and `0.2` with `max_score=0.9` and assert it passes deterministic validation.
+  Add separate tests for normalized duplicate IDs, normalized duplicate phrases, overlapping normalized phrases from different points, and an unequal score total. Assert `e4_scoring_points_invalid` or `e4_score_total_invalid`, sanitized count/number evidence, and no Grader calls. Add a floating-point-valid total such as scores `0.7` and `0.2` with `max_score=0.9` and assert it passes deterministic validation.
 
   Add parametrized fakes returning a thrown exception, `auto_accepted`, partial score, and `float("nan")`; assert `e4_grader_probe_failed` is blocked with exactly `{"probe": "evidence_phrases", "scoring_point_count": 2, "evidence_phrase_count": 2}` and never contains phrase text or exception text. Add separate `NaN` point-score and `NaN` maximum-score candidates; assert `e4_score_total_invalid` with `{"reason": "non_finite_score", "scoring_point_count": 2, "evidence_phrase_count": 2}` and zero Grader calls. Add a malformed E4 rule missing `scoring_points`; assert `policy_schema_invalid` and no Grader calls.
 
@@ -120,6 +120,8 @@
           return [_blocked("e4_scoring_points_invalid", {"reason": "normalized_duplicate_id", "scoring_point_count": point_count, "evidence_phrase_count": len(phrases)}, "Use distinct scoring-point identifiers.")]
       if _has_normalized_duplicates(phrases):
           return [_blocked("e4_scoring_points_invalid", {"reason": "normalized_duplicate_phrase", "scoring_point_count": point_count, "evidence_phrase_count": len(phrases)}, "Use distinct evidence phrases across scoring points.")]
+      if _has_overlapping_e4_phrases(points):
+          return [_blocked("e4_scoring_points_invalid", {"reason": "overlapping_phrase", "scoring_point_count": point_count, "evidence_phrase_count": len(phrases)}, "Use evidence phrases that cannot award multiple scoring points.")]
       max_score = float(rule_json.get("max_score", 1))
       total = sum(float(point["score"]) for point in points)
       if not math.isclose(total, max_score, rel_tol=0, abs_tol=1e-9):

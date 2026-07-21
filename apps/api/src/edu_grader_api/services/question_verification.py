@@ -559,6 +559,18 @@ def _e4_findings(
                 "Use distinct evidence phrases across scoring points.",
             )
         ]
+    if _has_overlapping_e4_phrases(scoring_points):
+        return [
+            _blocked(
+                "e4_scoring_points_invalid",
+                {
+                    "reason": "overlapping_phrase",
+                    "scoring_point_count": point_count,
+                    "evidence_phrase_count": len(evidence_phrases),
+                },
+                "Use evidence phrases that cannot award multiple scoring points.",
+            )
+        ]
     point_scores = [point.get("score") for point in scoring_points]
     max_score = rule_json.get("max_score", 1)
     if not all(_is_finite_number(score) for score in point_scores) or not _is_finite_number(
@@ -620,6 +632,20 @@ def _e4_probe_rule(
 
 def _has_normalized_duplicates(values: list[str], *, normalizer: Callable[[str], str]) -> bool:
     return len({normalizer(value) for value in values}) != len(values)
+
+
+def _has_overlapping_e4_phrases(scoring_points: list[dict[str, object]]) -> bool:
+    normalized_phrases: list[tuple[int, str]] = []
+    for point_index, point in enumerate(scoring_points):
+        for phrase in point["evidence_phrases"]:
+            normalized_phrase = _normalize_e2_form(phrase)
+            for other_point_index, other_phrase in normalized_phrases:
+                if point_index != other_point_index and (
+                    normalized_phrase in other_phrase or other_phrase in normalized_phrase
+                ):
+                    return True
+            normalized_phrases.append((point_index, normalized_phrase))
+    return False
 
 
 def _e4_probe_failure(scoring_point_count: int, evidence_phrase_count: int) -> VerificationFinding:

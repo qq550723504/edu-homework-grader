@@ -713,6 +713,24 @@ def test_e4_normalized_duplicate_phrases_are_blocked(session: Session) -> None:
     assert grader.grade_requests == []
 
 
+def test_e4_overlapping_phrases_across_points_are_blocked(session: Session) -> None:
+    candidate = valid_e4_candidate()
+    candidate["rule_json"]["scoring_points"][0]["evidence_phrases"] = ["bridge closed"]
+    candidate["rule_json"]["scoring_points"][1]["evidence_phrases"] = ["closed"]
+    draft = generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate)
+    grader = PassingE4Grader()
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    finding = next(item for item in run.findings if item.code == "e4_scoring_points_invalid")
+    assert finding.evidence_json == {
+        "reason": "overlapping_phrase",
+        "scoring_point_count": 2,
+        "evidence_phrase_count": 2,
+    }
+    assert grader.grade_requests == []
+
+
 def test_e4_score_total_mismatch_is_blocked(session: Session) -> None:
     candidate = valid_e4_candidate()
     candidate["rule_json"]["max_score"] = 4
