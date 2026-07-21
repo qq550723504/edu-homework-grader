@@ -300,11 +300,10 @@ POST /v1/ai-question-generation/jobs/{job_id}/bulk-accept
 
 ### 10.2 数学
 
-- M1 数值与误差规则可解析；
+- M1 数值与误差规则可解析；对 Schema 有效且策略版本为 `"1"` 的候选题，Core 依次将正确答案、空答案、两个含端点的误差边界，以及两个边界外答案作为六个 `text-v1` 探针交给现有数值 Grader；任何依赖异常、非有限分数或不符合接受/拒绝契约的结果都会阻止候选题，持久化证据只记录稳定的探针标识，不保存数值、容差、分数或 Grader 反馈；
 - M2 MathJSON 可规范化并进入安全 AST；
 - 标准答案通过现有 Grader；
-- 自动生成 `correct`、`incorrect`、`empty`、`boundary`、`common_misconception`；
-- 常见错误答案不得被判为正确；
+- M1 的上述逐候选题探针不推断题干特定的常见误解或语义干扰项；课程相关的 common-misconception distractors、黄金语料与错误率校准仍是 #40/#42 后续工作；
 - 多解、定义域不明、增根/漏根和不支持结构必须阻止或警告；
 - 验证执行沿用 CPU、内存和墙钟限制。
 

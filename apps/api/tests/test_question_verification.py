@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+from edu_grader_api.e2e_support import DeterministicE2EGraderClient
 from edu_grader_api.models import (
     Base,
     CurriculumActivityType,
@@ -72,6 +73,26 @@ class PassingGrader:
         *,
         policy_version: str | None = None,
     ) -> GradeResult:
+        if question_type == "M1":
+            text = answer_json.get("text")
+            expected = rule_json.get("expected")
+            tolerance = rule_json.get("tolerance", 0)
+            if (
+                not isinstance(text, str)
+                or not isinstance(expected, int | float)
+                or not isinstance(tolerance, int | float)
+            ):
+                return GradeResult("auto_rejected", 0, {}, "fake-grader-v1")
+            try:
+                accepted = bool(text) and abs(float(text) - expected) <= tolerance
+            except ValueError:
+                accepted = False
+            return GradeResult(
+                "auto_accepted" if accepted else "auto_rejected",
+                1 if accepted else 0,
+                {"probe": "accepted" if accepted else "rejected"},
+                "fake-grader-v1",
+            )
         return GradeResult(
             decision="auto_accepted",
             score=1,
@@ -114,6 +135,42 @@ class FailingGrader(PassingGrader):
         policy_version: str | None = None,
     ) -> GradeResult:
         raise RuntimeError("grader is unavailable")
+
+
+class RecordingM1Grader(PassingGrader):
+    def __init__(self, responses: dict[str, object] | None = None) -> None:
+        self.responses = responses or {}
+        self.grade_requests: list[tuple[str, dict[str, object], dict[str, object], str | None]] = []
+
+    def grade(
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
+    ) -> GradeResult:
+        self.grade_requests.append((question_type, rule_json, answer_json, policy_version))
+        text = answer_json["text"]
+        assert isinstance(text, str)
+        if text in self.responses:
+            response = self.responses[text]
+            if isinstance(response, Exception):
+                raise response
+            return response  # type: ignore[return-value]
+        return super().grade(question_type, rule_json, answer_json, policy_version=policy_version)
+
+
+class ExplosiveM1Score(int):
+    def __gt__(self, other: object) -> bool:
+        raise RuntimeError("numeric comparison secret")
+
+    def __eq__(self, other: object) -> bool:
+        raise RuntimeError("numeric comparison secret")
+
+
+class M1ResultWithoutDecision:
+    score = 1
 
 
 class PassingE2Grader(PassingGrader):
@@ -1044,6 +1101,382 @@ def test_valid_m1_candidate_persists_a_passing_run_and_rerun(session: Session) -
     assert draft.validation_runs == [first, second]
 
 
+def test_m1_verification_runs_expected_empty_boundary_and_outside_probes_in_order(
+    session: Session,
+) -> None:
+    candidate = valid_m1_candidate("Calculate two and one half.")
+    candidate["rule_json"] = {"expected": 2.5, "tolerance": 0.25}
+    grader = RecordingM1Grader()
+
+    run = verification.run_candidate_verification(
+        session,
+        draft=generation_draft(session, candidate_json=candidate),
+        grader_client=grader,
+    )
+
+    assert [request[2]["text"] for request in grader.grade_requests] == [
+        "2.5",
+        "",
+        "2.25",
+        "2.75",
+        "1.25",
+        "3.75",
+    ]
+    assert all(request[0] == "M1" and request[3] == "1" for request in grader.grade_requests)
+    assert run.status is ValidationRunStatus.PASSED
+
+
+def test_m1_zero_tolerance_retains_duplicate_boundary_probes(session: Session) -> None:
+    candidate = valid_m1_candidate("Calculate four.")
+    candidate["rule_json"] = {"expected": 4, "tolerance": 0}
+    grader = RecordingM1Grader()
+
+    verification.run_candidate_verification(
+        session,
+        draft=generation_draft(session, candidate_json=candidate),
+        grader_client=grader,
+    )
+
+    assert [request[2]["text"] for request in grader.grade_requests] == [
+        "4",
+        "",
+        "4",
+        "4",
+        "3",
+        "5",
+    ]
+
+
+def test_m1_negative_numbers_use_safe_decimal_probe_text(session: Session) -> None:
+    candidate = valid_m1_candidate("Calculate a negative number.")
+    candidate["rule_json"] = {"expected": -3, "tolerance": 0.5}
+    grader = RecordingM1Grader()
+
+    verification.run_candidate_verification(
+        session,
+        draft=generation_draft(session, candidate_json=candidate),
+        grader_client=grader,
+    )
+
+    assert [request[2]["text"] for request in grader.grade_requests] == [
+        "-3",
+        "",
+        "-3.5",
+        "-2.5",
+        "-4.5",
+        "-1.5",
+    ]
+
+
+def test_m1_large_expected_preserves_exact_outside_tolerance_probes(session: Session) -> None:
+    expected = 1e30
+    rule_json = {"expected": expected, "tolerance": 0}
+    probes = verification._m1_probes(expected, 0)
+
+    assert [probe.text for probe in probes] == [
+        "1E+30",
+        "",
+        "1E+30",
+        "1E+30",
+        "999999999999999999999999999999",
+        "1000000000000000000000000000001",
+    ]
+    grader = DeterministicE2EGraderClient("")
+    decisions = [
+        grader.grade(
+            "M1", rule_json, {"format": "text-v1", "text": probe.text}, policy_version="1"
+        ).decision
+        for probe in probes
+    ]
+    assert decisions == [
+        "auto_accepted",
+        "auto_rejected",
+        "auto_accepted",
+        "auto_accepted",
+        "auto_rejected",
+        "auto_rejected",
+    ]
+
+    run = verification.run_candidate_verification(
+        session,
+        draft=generation_draft(
+            session,
+            candidate_json={
+                **valid_m1_candidate("Calculate a large number."),
+                "rule_json": rule_json,
+            },
+        ),
+        grader_client=grader,
+    )
+
+    assert run.status is ValidationRunStatus.PASSED
+
+
+def test_m1_tiny_expected_preserves_unit_outside_tolerance_probes() -> None:
+    probes = verification._m1_probes(1e-30, 0)
+
+    assert [probe.text for probe in probes] == [
+        "1E-30",
+        "",
+        "1E-30",
+        "1E-30",
+        f"-0.{'9' * 30}",
+        f"1.{'0' * 29}1",
+    ]
+
+
+def test_m1_nonzero_tolerance_preserves_carry_outside_probe(session: Session) -> None:
+    rule_json = {"expected": 999, "tolerance": 1}
+    probes = verification._m1_probes(999, 1)
+
+    assert [probe.text for probe in probes] == ["999", "", "998", "1E+3", "997", "1001"]
+    grader = PassingGrader()
+    upper_result = grader.grade(
+        "M1", rule_json, {"format": "text-v1", "text": probes[3].text}, policy_version="1"
+    )
+    above_result = grader.grade(
+        "M1", rule_json, {"format": "text-v1", "text": probes[5].text}, policy_version="1"
+    )
+    assert upper_result.decision == "auto_accepted"
+    assert above_result.decision == "auto_rejected"
+
+
+def test_m1_negative_nonzero_tolerance_preserves_carry_outside_probe() -> None:
+    probes = verification._m1_probes(-999, 1)
+
+    assert [probe.text for probe in probes] == ["-999", "", "-1E+3", "-998", "-1001", "-997"]
+
+
+@pytest.mark.parametrize(
+    ("probe_id", "response"),
+    [
+        *(
+            (probe_id, GradeResult("auto_rejected", 0, {"secret": "grader evidence"}, "fake-m1-v1"))
+            for probe_id in (
+                "expected_answer",
+                "lower_tolerance_boundary",
+                "upper_tolerance_boundary",
+            )
+        ),
+        *(
+            (probe_id, GradeResult("auto_accepted", 1, {"secret": "grader evidence"}, "fake-m1-v1"))
+            for probe_id in (
+                "empty_answer",
+                "below_tolerance_boundary",
+                "above_tolerance_boundary",
+            )
+        ),
+        *(
+            (
+                probe_id,
+                GradeResult(
+                    "auto_accepted", float("nan"), {"secret": "grader evidence"}, "fake-m1-v1"
+                ),
+            )
+            for probe_id in (
+                "expected_answer",
+                "empty_answer",
+                "lower_tolerance_boundary",
+                "upper_tolerance_boundary",
+                "below_tolerance_boundary",
+                "above_tolerance_boundary",
+            )
+        ),
+        *(
+            (
+                probe_id,
+                GradeResult("auto_accepted", None, {"secret": "grader evidence"}, "fake-m1-v1"),
+            )
+            for probe_id in (
+                "expected_answer",
+                "empty_answer",
+                "lower_tolerance_boundary",
+                "upper_tolerance_boundary",
+                "below_tolerance_boundary",
+                "above_tolerance_boundary",
+            )
+        ),
+        *(
+            (
+                probe_id,
+                GradeResult("auto_accepted", "1", {"secret": "grader evidence"}, "fake-m1-v1"),
+            )
+            for probe_id in (
+                "expected_answer",
+                "empty_answer",
+                "lower_tolerance_boundary",
+                "upper_tolerance_boundary",
+                "below_tolerance_boundary",
+                "above_tolerance_boundary",
+            )
+        ),
+        *(
+            (probe_id, None)
+            for probe_id in (
+                "expected_answer",
+                "empty_answer",
+                "lower_tolerance_boundary",
+                "upper_tolerance_boundary",
+                "below_tolerance_boundary",
+                "above_tolerance_boundary",
+            )
+        ),
+        *(
+            (probe_id, object())
+            for probe_id in (
+                "expected_answer",
+                "empty_answer",
+                "lower_tolerance_boundary",
+                "upper_tolerance_boundary",
+                "below_tolerance_boundary",
+                "above_tolerance_boundary",
+            )
+        ),
+        *(
+            (probe_id, M1ResultWithoutDecision())
+            for probe_id in (
+                "expected_answer",
+                "empty_answer",
+                "lower_tolerance_boundary",
+                "upper_tolerance_boundary",
+                "below_tolerance_boundary",
+                "above_tolerance_boundary",
+            )
+        ),
+        *(
+            (
+                probe_id,
+                GradeResult("auto_accepted", True, {"secret": "grader evidence"}, "fake-m1-v1"),
+            )
+            for probe_id in (
+                "expected_answer",
+                "empty_answer",
+                "lower_tolerance_boundary",
+                "upper_tolerance_boundary",
+                "below_tolerance_boundary",
+                "above_tolerance_boundary",
+            )
+        ),
+        *(
+            (
+                probe_id,
+                GradeResult("auto_accepted", False, {"secret": "grader evidence"}, "fake-m1-v1"),
+            )
+            for probe_id in (
+                "expected_answer",
+                "empty_answer",
+                "lower_tolerance_boundary",
+                "upper_tolerance_boundary",
+                "below_tolerance_boundary",
+                "above_tolerance_boundary",
+            )
+        ),
+        *(
+            (
+                probe_id,
+                GradeResult(
+                    "auto_accepted",
+                    ExplosiveM1Score(1),
+                    {"secret": "grader evidence"},
+                    "fake-m1-v1",
+                ),
+            )
+            for probe_id in (
+                "expected_answer",
+                "empty_answer",
+                "lower_tolerance_boundary",
+                "upper_tolerance_boundary",
+                "below_tolerance_boundary",
+                "above_tolerance_boundary",
+            )
+        ),
+        *(
+            (probe_id, RuntimeError("grader exception secret"))
+            for probe_id in (
+                "expected_answer",
+                "empty_answer",
+                "lower_tolerance_boundary",
+                "upper_tolerance_boundary",
+                "below_tolerance_boundary",
+                "above_tolerance_boundary",
+            )
+        ),
+    ],
+)
+def test_m1_invalid_probe_results_are_safely_blocked(
+    session: Session, probe_id: str, response: object
+) -> None:
+    probe_texts = {
+        "expected_answer": "2.5",
+        "empty_answer": "",
+        "lower_tolerance_boundary": "2.25",
+        "upper_tolerance_boundary": "2.75",
+        "below_tolerance_boundary": "1.25",
+        "above_tolerance_boundary": "3.75",
+    }
+    candidate = valid_m1_candidate("Calculate two and one half.")
+    candidate["rule_json"] = {"expected": 2.5, "tolerance": 0.25}
+    grader = RecordingM1Grader({probe_texts[probe_id]: response})
+
+    run = verification.run_candidate_verification(
+        session,
+        draft=generation_draft(session, candidate_json=candidate),
+        grader_client=grader,
+    )
+
+    finding = next(item for item in run.findings if item.code == "m1_grader_probe_failed")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {"probe": probe_id}
+    assert [request[2]["text"] for request in grader.grade_requests] == [
+        "2.5",
+        "",
+        "2.25",
+        "2.75",
+        "1.25",
+        "3.75",
+    ]
+    persisted_values = (finding.evidence_json, finding.remediation)
+    assert all(
+        secret not in str(value)
+        for secret in (
+            "2.5",
+            "0.25",
+            "grader evidence",
+            "grader exception secret",
+            "numeric comparison secret",
+        )
+        for value in persisted_values
+    )
+
+
+@pytest.mark.parametrize(
+    ("policy_version", "rule_json"),
+    [
+        ("1", {"expected": "four", "tolerance": 0}),
+        ("2", {"expected": 4, "tolerance": 0}),
+        (None, {"expected": 4, "tolerance": 0}),
+        (1, {"expected": 4, "tolerance": 0}),
+    ],
+)
+def test_m1_invalid_schema_or_policy_version_skips_type_specific_grader_calls(
+    session: Session, policy_version: object, rule_json: dict[str, object]
+) -> None:
+    candidate = valid_m1_candidate("Calculate four.")
+    candidate["policy_version"] = policy_version
+    candidate["rule_json"] = rule_json
+    grader = RecordingM1Grader()
+
+    run = verification.run_candidate_verification(
+        session,
+        draft=generation_draft(session, candidate_json=candidate),
+        grader_client=grader,
+    )
+
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert "policy_schema_invalid" in finding_codes(run)
+    assert grader.grade_requests == []
+
+
 def test_valid_m2_candidate_normalizes_and_probes(session: Session) -> None:
     draft = generation_draft(
         session,
@@ -1608,7 +2041,6 @@ def test_disallowed_type_and_invalid_policy_are_blocked(session: Session) -> Non
     assert {
         "question_type_not_allowed",
         "policy_schema_invalid",
-        "m1_answer_invalid",
     } <= finding_codes(run)
 
 

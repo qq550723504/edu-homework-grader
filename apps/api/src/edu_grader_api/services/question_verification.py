@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation, localcontext
 import math
 import re
 from typing import Callable, Protocol
@@ -41,6 +42,7 @@ _SEMANTIC_CHUNK_SIZE = 128
 _DUPLICATE_REMEDIATION = "Revise the prompt to make the candidate meaningfully distinct."
 _WHITESPACE = re.compile(r"\s+")
 _E2_TERMINAL_PUNCTUATION = re.compile(r"[.!?。！？]+$")
+_M1_PROBE_TEXT_LIMIT = 100
 _GRADE_TEXT_LIMITS = {
     "G1": 300,
     "G2": 400,
@@ -87,6 +89,13 @@ class _CandidateEvaluation:
     findings: list[VerificationFinding]
     duplicate_feature_summary: dict[str, object]
     evaluated_candidate_fingerprints: PromptFingerprints
+
+
+@dataclass(frozen=True)
+class _M1Probe:
+    name: str
+    text: str
+    expects_acceptance: bool
 
 
 def run_candidate_verification(
@@ -276,7 +285,7 @@ def _evaluate_candidate(
                 )
             )
 
-    if question_type == "M1" and isinstance(rule_json, dict):
+    if question_type == "M1" and isinstance(rule_json, dict) and not policy_errors:
         findings.extend(_m1_findings(rule_json, policy_version, grader_client))
     if question_type == "M2" and isinstance(rule_json, dict) and not policy_errors:
         findings.extend(_m2_findings(rule_json, policy_version, grader_client))
@@ -305,6 +314,8 @@ def _m1_findings(
     policy_version: object,
     grader_client: VerificationGraderClient,
 ) -> list[VerificationFinding]:
+    if policy_version != "1":
+        return []
     expected = rule_json.get("expected")
     tolerance = rule_json.get("tolerance", 0)
     if not _is_finite_number(expected) or not _is_finite_number(tolerance) or tolerance < 0:
@@ -319,29 +330,98 @@ def _m1_findings(
             )
         ]
     try:
-        result = grader_client.grade(
-            "M1",
-            rule_json,
-            {"format": "text-v1", "text": str(expected)},
-            policy_version=policy_version if isinstance(policy_version, str) else None,
-        )
-    except Exception:
+        probes = _m1_probes(expected, tolerance)
+    except (InvalidOperation, ValueError):
         return [
             _blocked(
-                "m1_grader_probe_failed",
-                {"probe": "expected_answer"},
-                "Retry validation after the numeric grader is available.",
+                "m1_answer_invalid",
+                {"reason": "probe_construction"},
+                "Provide a finite numeric expected answer and a non-negative tolerance.",
             )
         ]
-    if result.decision != "auto_accepted" or result.score <= 0:
-        return [
-            _blocked(
-                "m1_grader_probe_failed",
-                {"probe": "expected_answer"},
-                "Correct the numeric rule so its expected answer is accepted by the grader.",
+    remediation = "Correct the numeric rule so its boundary probes match the grading policy."
+    first_failure: str | None = None
+    for probe in probes:
+        try:
+            result = grader_client.grade(
+                "M1",
+                rule_json,
+                {"format": "text-v1", "text": probe.text},
+                policy_version="1",
             )
-        ]
+            score = result.score
+            score_is_finite = (
+                not isinstance(score, bool)
+                and isinstance(score, int | float)
+                and math.isfinite(score)
+            )
+            if not score_is_finite:
+                probe_passed = False
+            else:
+                probe_passed = (
+                    result.decision == "auto_accepted" and score > 0
+                    if probe.expects_acceptance
+                    else result.decision == "auto_rejected" and score == 0
+                )
+        except Exception:
+            probe_passed = False
+        if not probe_passed and first_failure is None:
+            first_failure = probe.name
+    if first_failure is not None:
+        return [_blocked("m1_grader_probe_failed", {"probe": first_failure}, remediation)]
     return []
+
+
+def _m1_probes(expected: int | float, tolerance: int | float) -> tuple[_M1Probe, ...]:
+    try:
+        expected_decimal = Decimal(str(expected))
+        tolerance_decimal = Decimal(str(tolerance))
+    except (InvalidOperation, ValueError) as error:
+        raise ValueError("M1 probe construction failed") from error
+    if not expected_decimal.is_finite() or not tolerance_decimal.is_finite():
+        raise ValueError("M1 probe values must be finite")
+    unit = Decimal(1)
+    with localcontext() as context:
+        context.prec = _m1_probe_precision(expected_decimal, tolerance_decimal, unit)
+        lower_boundary = expected_decimal - tolerance_decimal
+        upper_boundary = expected_decimal + tolerance_decimal
+        values = (
+            ("expected_answer", expected_decimal, True),
+            ("empty_answer", None, False),
+            ("lower_tolerance_boundary", lower_boundary, True),
+            ("upper_tolerance_boundary", upper_boundary, True),
+            ("below_tolerance_boundary", lower_boundary - unit, False),
+            ("above_tolerance_boundary", upper_boundary + unit, False),
+        )
+    probes = tuple(
+        _M1Probe(name, "" if value is None else _m1_probe_text(value), accepts)
+        for name, value, accepts in values
+    )
+    if any(len(probe.text) > _M1_PROBE_TEXT_LIMIT for probe in probes):
+        raise ValueError("M1 probe exceeds the numeric answer envelope")
+    return probes
+
+
+def _m1_probe_precision(*values: Decimal) -> int:
+    nonzero_values = tuple(value for value in values if value)
+    significant_precision = (
+        max(value.adjusted() for value in nonzero_values)
+        - min(value.as_tuple().exponent for value in nonzero_values)
+        + 1
+    )
+    precision = significant_precision + 1
+    if precision > _M1_PROBE_TEXT_LIMIT + 1:
+        raise ValueError("M1 probe precision exceeds the numeric answer envelope")
+    return max(precision, 1)
+
+
+def _m1_probe_text(value: Decimal) -> str:
+    if not value.is_finite():
+        raise ValueError("M1 probe value must be finite")
+    with localcontext() as context:
+        context.prec = max(len(value.as_tuple().digits), 1)
+        normalized = value.normalize()
+    return "0" if normalized == 0 else str(normalized)
 
 
 def _m2_findings(
