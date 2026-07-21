@@ -17,6 +17,7 @@ from ..models import (
     Role,
     VersionStatus,
 )
+from ..policies import question_policy_catalog
 from ..services.grader import HttpGraderClient
 from ..services.questions import (
     PublishConflict,
@@ -34,6 +35,7 @@ from ..settings import settings
 
 router = APIRouter(prefix="/v1/questions", tags=["questions"])
 version_router = APIRouter(prefix="/v1/question-versions", tags=["questions"])
+policy_catalog_router = APIRouter(prefix="/v1/question-policy-catalog", tags=["questions"])
 
 
 class CreateQuestionRequest(BaseModel):
@@ -57,6 +59,13 @@ class CreateTestCaseRequest(BaseModel):
     expected_evidence: dict[str, object]
 
 
+@policy_catalog_router.get("")
+def question_policy_catalog_route(
+    _: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+) -> dict[str, list[dict[str, str]]]:
+    return {"policies": question_policy_catalog()}
+
+
 @router.get("")
 def list_question_versions_route(
     principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
@@ -64,7 +73,7 @@ def list_question_versions_route(
     query: str | None = None,
     question_type: str | None = None,
     status: VersionStatus | None = None,
-) -> dict[str, list[dict[str, str]]]:
+) -> dict[str, list[dict[str, object]]]:
     statement = (
         select(QuestionVersion)
         .join(Question)
@@ -91,10 +100,18 @@ def list_question_versions_route(
                 "question_type": version.question_type,
                 "policy_version": version.grading_policy.policy_version,
                 "status": version.status.value,
+                "max_score": _question_max_score(version.rule_json),
             }
             for version in versions
         ]
     }
+
+
+def _question_max_score(rule_json: dict[str, object]) -> float | int:
+    max_score = rule_json.get("max_score")
+    if isinstance(max_score, (int, float)) and not isinstance(max_score, bool) and max_score > 0:
+        return max_score
+    return 1
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

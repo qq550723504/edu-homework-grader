@@ -1,4 +1,4 @@
-from edu_grader_api.policies import validate_policy
+from edu_grader_api.policies import question_policy_catalog, validate_policy
 
 
 def test_e1_v2_requires_closed_normalization_configuration() -> None:
@@ -52,3 +52,14 @@ def test_e4_requires_nonempty_scoring_points_and_rejects_unknown_fields() -> Non
             "message": "Additional properties are not allowed ('unexpected' was unexpected)",
         }
     ]
+
+
+def test_question_policy_catalog_uses_the_current_english_defaults() -> None:
+    catalog = question_policy_catalog()
+
+    assert {"question_type": "E1", "policy_version": "2"} in catalog
+    assert {"question_type": "E4", "policy_version": "2"} in catalog
+    assert {"question_type": "E4", "policy_version": "1"} not in catalog
+    assert catalog == sorted(
+        catalog, key=lambda entry: (entry["question_type"], entry["policy_version"])
+    )

@@ -134,6 +134,56 @@ def test_teacher_lists_and_filters_question_versions(client: TestClient, session
                 "question_type": "M1",
                 "policy_version": "1",
                 "status": "draft",
+                "max_score": 1,
             }
         ]
     }
+
+
+def test_teacher_reads_question_policy_catalog(client: TestClient, session: Session) -> None:
+    tenant = Tenant(slug="pilot", name="Pilot")
+    teacher = User(
+        tenant=tenant,
+        role=Role.TEACHER,
+        oidc_issuer=ISSUER,
+        oidc_subject="teacher",
+        display_name="Teacher",
+    )
+    session.add_all([tenant, teacher])
+    session.commit()
+
+    response = client.get("/v1/question-policy-catalog", headers=authorize(client, teacher))
+
+    assert response.status_code == 200
+    assert {"question_type": "E4", "policy_version": "2"} in response.json()["policies"]
+    assert {"question_type": "E4", "policy_version": "1"} not in response.json()["policies"]
+
+
+def test_teacher_cannot_create_a_new_e4_v1_question(client: TestClient, session: Session) -> None:
+    tenant = Tenant(slug="pilot", name="Pilot")
+    teacher = User(
+        tenant=tenant,
+        role=Role.TEACHER,
+        oidc_issuer=ISSUER,
+        oidc_subject="teacher",
+        display_name="Teacher",
+    )
+    session.add_all([tenant, teacher])
+    session.commit()
+
+    response = client.post(
+        "/v1/questions",
+        headers=authorize(client, teacher),
+        json={
+            "title": "Legacy E4",
+            "prompt": "Explain.",
+            "question_type": "E4",
+            "policy_version": "1",
+            "rule": {"rubric": "Legacy rubric"},
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["errors"] == [
+        {"path": "/", "message": "policy E4@1 cannot be used for new questions"}
+    ]

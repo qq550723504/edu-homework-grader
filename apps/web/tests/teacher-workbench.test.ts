@@ -23,6 +23,12 @@ describe('teacher workbench UI contract', () => {
     expect(teacherPage).toContain("watch(() => route.hash, syncModuleFromHash, { immediate: true })")
     expect(teacherPage).not.toContain("addEventListener('hashchange'")
     expect(teacherPage).toContain(':review-count="reviewCount"')
+    expect(teacherPage).toContain('aria-label="作业学科"')
+    expect(teacherPage).toContain('作业题目编排')
+    expect(teacherPage).toContain('student-preview-heading')
+    expect(teacherPage).toContain('question_version_ids')
+    expect(teacherPage).toContain('updateAssignment')
+    expect(teacherPage).not.toContain('addAssignmentItem')
     expect(overview).toContain('reviewCount: number')
     expect(overview).toContain("emit('open-module', 'roster')")
     expect(overview).not.toContain("value: '36'")
@@ -41,6 +47,18 @@ describe('teacher workbench UI contract', () => {
     expect(isQuestionDraftReady({ title: '加法练习', prompt: '   ', questionType: 'math', answer: '5' })).toBe(false)
     expect(isQuestionDraftReady({ title: '加法练习', prompt: '计算 2 + 3', questionType: '', answer: '5' })).toBe(false)
     expect(isQuestionDraftReady({ title: '加法练习', prompt: '计算 2 + 3', questionType: 'math', answer: '5' })).toBe(true)
+  })
+
+  it('guides English question authoring and keeps raw JSON behind an explicit advanced mode', () => {
+    const teacherPage = readFileSync(new URL('../app/pages/teacher/index.vue', import.meta.url), 'utf8')
+
+    expect(teacherPage).toContain('可接受答案')
+    expect(teacherPage).toContain('词元')
+    expect(teacherPage).toContain('启用语法反馈')
+    expect(teacherPage).toContain('评分点')
+    expect(teacherPage).toContain('高级 JSON 模式')
+    expect(teacherPage).toContain('fetchQuestionPolicyCatalog')
+    expect(teacherPage).toContain('buildEnglishQuestionRule')
   })
 
   it('requires the visible assignment creation fields', () => {

@@ -9,7 +9,7 @@ const studentHeaders = { Authorization: `Bearer ${STUDENT_TOKEN}` }
 
 type AssignmentDetail = {
   attempt: { id: string }
-  items: Array<{ id: string; answer?: Record<string, unknown> | null }>
+  items: Array<{ id: string; question_version_id: string; answer?: Record<string, unknown> | null }>
 }
 
 async function expectOk(response: APIResponse, operation: string): Promise<void> {
@@ -164,6 +164,40 @@ test('teacher creates an M1 draft question through the browser', async ({ page }
   await expect(createdQuestion).toContainText('draft')
 })
 
+test('teacher creates guided E1 through E4 draft questions with current policies', async ({ page }) => {
+  await establishTeacherSession(page)
+  await page.goto(`${webBaseUrl}/teacher#questions`)
+
+  const scenarios = [
+    { type: 'E1', title: 'Browser E1', fill: async () => page.getByLabel('可接受答案').fill('cat') },
+    { type: 'E2', title: 'Browser E2', fill: async () => {
+      await page.getByLabel('词元').fill('go')
+      await page.getByLabel('可接受词形').fill('went')
+    } },
+    { type: 'E3', title: 'Browser E3', fill: async () => page.getByRole('radio', { name: '启用语法反馈', exact: true }).check() },
+    { type: 'E4', title: 'Browser E4', fill: async () => {
+      await page.getByLabel('评分点名称').fill('cause')
+      await page.getByLabel('证据短语').fill('bridge closed')
+    } },
+  ]
+
+  for (const scenario of scenarios) {
+    await page.getByLabel('题型', { exact: true }).selectOption(scenario.type)
+    await page.getByLabel('题目标题').fill(scenario.title)
+    await page.getByLabel('题干').fill('Answer the question.')
+    await scenario.fill()
+    const requestPromise = page.waitForRequest((request) => (
+      request.url().endsWith('/api/core/v1/questions') && request.method() === 'POST'
+    ))
+    await page.getByRole('button', { name: '创建草稿题目' }).click()
+    const request = await requestPromise
+    if (scenario.type === 'E4') {
+      expect(request.postDataJSON()).toMatchObject({ question_type: 'E4', policy_version: '2' })
+    }
+    await expect(page.getByText('草稿题目已创建')).toBeVisible()
+  }
+})
+
 test('teacher tests and publishes an M1 question through the browser', async ({ page }) => {
   await establishTeacherSession(page)
   await page.goto(`${webBaseUrl}/teacher`)
@@ -212,7 +246,7 @@ test('teacher tests and publishes an M1 question through the browser', async ({ 
   await expect(publishedQuestion).toContainText('published')
 })
 
-test('teacher creates and publishes an assignment through the browser', async ({ page }) => {
+test('teacher composes an ordered mathematics assignment and student receives that order', async ({ page, request }) => {
   await establishTeacherSession(page)
   await page.goto(`${webBaseUrl}/teacher`)
   await page.getByRole('navigation', { name: '教师工作区' }).getByRole('link', { name: '作业' }).click()
@@ -223,8 +257,14 @@ test('teacher creates and publishes an assignment through the browser', async ({
   await page
     .getByLabel('班级', { exact: true })
     .selectOption({ label: 'E2E-7A · E2E Year 7 A' })
-  await page.getByLabel('题目版本').selectOption({ label: 'Expand x plus one · M2' })
   await page.getByLabel('截止时间').fill('2027-01-01T12:00')
+  await page.locator('article', {
+    has: page.getByRole('heading', { name: 'Expand x plus one' }),
+  }).getByRole('button', { name: '添加题目 M2' }).click()
+  await page.locator('article', {
+    has: page.getByRole('heading', { name: 'Explain your reasoning' }),
+  }).getByRole('button', { name: '添加题目 M1' }).click()
+  await expect(page.getByText('共 2 题，5 分')).toBeVisible()
   await page.getByRole('button', { name: '创建作业草稿' }).click()
 
   await expect(page.getByText('作业草稿已创建，请确认后发布。')).toBeVisible()
@@ -234,4 +274,23 @@ test('teacher creates and publishes an assignment through the browser', async ({
     has: page.getByRole('heading', { name: 'Browser published assignment' }),
   })
   await expect(publishedAssignment).toContainText('published')
+
+  const assignmentsResponse = await request.get(`${apiBaseUrl}/v1/assignments`, {
+    headers: { Authorization: `Bearer ${TEACHER_TOKEN}` },
+  })
+  await expectOk(assignmentsResponse, 'read teacher assignments')
+  const assignments = await assignmentsResponse.json() as { assignments: Array<{ id: string; title: string }> }
+  const assignmentId = assignments.assignments.find((assignment) => assignment.title === 'Browser published assignment')?.id
+  expect(assignmentId).toBeTruthy()
+  const questionsResponse = await request.get(`${apiBaseUrl}/v1/questions`, {
+    headers: { Authorization: `Bearer ${TEACHER_TOKEN}` },
+  })
+  await expectOk(questionsResponse, 'read teacher question versions')
+  const questions = await questionsResponse.json() as { question_versions: Array<{ id: string; title: string }> }
+  const expectedVersionIds = ['Expand x plus one', 'Explain your reasoning'].map((title) =>
+    questions.question_versions.find((question) => question.title === title)?.id,
+  )
+  expect(expectedVersionIds).not.toContain(undefined)
+  const detail = await assignmentDetail(request, assignmentId!)
+  expect(detail.items.map((item) => item.question_version_id)).toEqual(expectedVersionIds)
 })
