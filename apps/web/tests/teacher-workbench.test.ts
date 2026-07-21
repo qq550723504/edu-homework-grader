@@ -63,6 +63,8 @@ describe('teacher workbench UI contract', () => {
     expect(teacherPage).toContain('刷新测试预览')
     expect(teacherPage).toContain('watch(() => selectedVersionId.value')
     expect(teacherPage).toContain('suggestedTestCases.value = []')
+    expect(teacherPage).toContain('const versionId = selectedVersionId.value')
+    expect(teacherPage).toContain('if (selectedVersionId.value !== versionId) return')
   })
 
   it('requires the visible assignment creation fields', () => {

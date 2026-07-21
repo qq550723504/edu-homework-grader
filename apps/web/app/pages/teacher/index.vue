@@ -480,32 +480,39 @@ async function submitAssignment() {
 }
 
 async function loadSuggestedTestCases() {
-  if (!selectedVersionId.value) return
+  const versionId = selectedVersionId.value
+  if (!versionId) return
   saving.value = true
   try {
-    suggestedTestCases.value = await fetchQuestionTestCaseTemplates($fetch, selectedVersionId.value)
-    if (suggestedTestCases.value[0]) await applySuggestedTestCase(suggestedTestCases.value[0])
+    const templates = await fetchQuestionTestCaseTemplates($fetch, versionId)
+    if (selectedVersionId.value !== versionId) return
+    suggestedTestCases.value = templates
+    if (templates[0]) await applySuggestedTestCase(templates[0], versionId)
     message.value = '已加载可编辑的建议测试。'
   } catch (error: unknown) { message.value = error instanceof Error ? error.message : '加载建议测试失败。' }
   finally { saving.value = false }
 }
 
-async function applySuggestedTestCase(template: QuestionTestCaseTemplate) {
+async function applySuggestedTestCase(template: QuestionTestCaseTemplate, versionId = selectedVersionId.value) {
+  if (!versionId || selectedVersionId.value !== versionId) return
   testCase.category = template.category
   testCase.answerJson = JSON.stringify(template.answer)
-  await refreshTestCasePreview()
+  await refreshTestCasePreview(versionId)
 }
 
-async function refreshTestCasePreview() {
-  if (!selectedVersionId.value) return
+async function refreshTestCasePreview(versionId = selectedVersionId.value) {
+  if (!versionId || selectedVersionId.value !== versionId) return
   saving.value = true
   try {
+    const csrf = await csrfToken()
+    if (selectedVersionId.value !== versionId) return
     const preview = await previewQuestionTestCase(
       $fetch,
-      await csrfToken(),
-      selectedVersionId.value,
+      csrf,
+      versionId,
       JSON.parse(testCase.answerJson) as Record<string, unknown>,
     )
+    if (selectedVersionId.value !== versionId) return
     testCase.expectedDecision = preview.decision
     testCase.expectedScore = preview.score
     testCase.expectedEvidenceJson = JSON.stringify(preview.evidence)
