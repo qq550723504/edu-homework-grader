@@ -680,10 +680,15 @@ def test_valid_e4_candidate_probes_every_evidence_phrase(session: Session) -> No
 
 @pytest.mark.parametrize(
     ("material", "reason"),
-    [(None, "missing_or_blank"), (" " * 2, "missing_or_blank"), ("x" * 8_001, "too_long")],
+    [
+        (None, "missing_or_blank"),
+        ({}, "missing_or_blank"),
+        (" " * 2, "missing_or_blank"),
+        ("x" * 8_001, "too_long"),
+    ],
 )
 def test_e4_missing_or_oversized_material_blocks_without_grader_calls(
-    session: Session, material: str | None, reason: str
+    session: Session, material: object, reason: str
 ) -> None:
     candidate = valid_e4_candidate()
     if material is None:
