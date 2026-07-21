@@ -69,6 +69,81 @@ class FailingGrader(PassingGrader):
         raise RuntimeError("grader is unavailable")
 
 
+class PassingM2Grader:
+    def __init__(self) -> None:
+        self.normalization_requests: list[dict[str, object]] = []
+        self.grade_requests: list[tuple[str, dict[str, object], dict[str, object], str | None]] = []
+
+    def normalize_math_answer(self, answer_json: dict[str, object]) -> dict[str, object]:
+        self.normalization_requests.append(answer_json)
+        return {"kind": "expression", "value": "x_plus_1"}
+
+    def grade(
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
+    ) -> GradeResult:
+        self.grade_requests.append((question_type, rule_json, answer_json, policy_version))
+        return GradeResult(
+            decision="correct",
+            score=4,
+            evidence={"probe": "accepted"},
+            grader_version="fake-m2-v1",
+        )
+
+
+class FailingM2Normalizer(PassingM2Grader):
+    def normalize_math_answer(self, answer_json: dict[str, object]) -> dict[str, object]:
+        raise RuntimeError("unsafe expression diagnostic")
+
+
+class FailingM2Grader(PassingM2Grader):
+    def grade(
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
+    ) -> GradeResult:
+        raise RuntimeError("grader diagnostic")
+
+
+class PartialM2Grader(PassingM2Grader):
+    def grade(
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
+    ) -> GradeResult:
+        return GradeResult(
+            decision="correct",
+            score=3,
+            evidence={},
+            grader_version="fake-m2-v1",
+        )
+
+
+def valid_m2_candidate() -> dict[str, object]:
+    return {
+        "question_type": "M2",
+        "policy_version": "2",
+        "prompt": "Write x + 1 in expanded form.",
+        "rule_json": {
+            "expected": ["Add", "x", 1],
+            "variables": ["x"],
+            "required_form": "expanded",
+            "max_score": 4,
+        },
+        "explanation": "The expression is already expanded.",
+    }
+
+
 def generation_draft(
     session: Session,
     *,
@@ -196,6 +271,50 @@ def test_valid_m1_candidate_persists_a_passing_run_and_rerun(session: Session) -
     assert first.findings == []
     assert second.run_number == 2
     assert draft.validation_runs == [first, second]
+
+
+def test_valid_m2_candidate_normalizes_and_probes(session: Session) -> None:
+    draft = generation_draft(
+        session,
+        allowed_question_types=["M2"],
+        candidate_json=valid_m2_candidate(),
+    )
+    grader = PassingM2Grader()
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    assert run.status is ValidationRunStatus.PASSED
+    assert grader.normalization_requests == [{"mathjson": ["Add", "x", 1], "variables": ["x"]}]
+    assert grader.grade_requests[0][0] == "M2"
+    assert grader.grade_requests[0][2] == {"mathjson": ["Add", "x", 1]}
+
+
+def test_m2_normalizer_failure_is_safely_blocked(session: Session) -> None:
+    draft = generation_draft(
+        session, allowed_question_types=["M2"], candidate_json=valid_m2_candidate()
+    )
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=FailingM2Normalizer()
+    )
+
+    finding = next(item for item in run.findings if item.code == "m2_mathjson_invalid")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {"probe": "expected_mathjson"}
+    assert "unsafe expression" not in finding.remediation
+
+
+@pytest.mark.parametrize("grader", [FailingM2Grader(), PartialM2Grader()])
+def test_m2_failed_probe_is_safely_blocked(session: Session, grader: PassingM2Grader) -> None:
+    draft = generation_draft(
+        session, allowed_question_types=["M2"], candidate_json=valid_m2_candidate()
+    )
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    finding = next(item for item in run.findings if item.code == "m2_grader_probe_failed")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {"probe": "expected_mathjson"}
 
 
 def test_inactive_revision_blocks_the_candidate(session: Session) -> None:
