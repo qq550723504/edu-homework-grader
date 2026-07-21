@@ -42,7 +42,10 @@ from ..services.curriculum_imports import (
     activate_import,
     analyse_import,
     apply_import,
+    export_active_profile,
     parse_csv_document,
+    retire_profile,
+    retirement_impact,
     review_import,
     submit_import_for_review,
 )
@@ -700,6 +703,81 @@ def activate_curriculum_import_route(
     except ImportLifecycleError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     return _import_batch_payload(batch)
+
+
+@admin_router.get("/import-schema")
+def curriculum_import_schema_route(
+    _: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
+) -> dict[str, object]:
+    return {
+        "json_schema": ImportDocument.model_json_schema(),
+        "csv_columns": [
+            "code",
+            "grade_level",
+            "subject",
+            "domain",
+            "text",
+            "source_locator",
+            "allowed_question_types",
+            "difficulty_min",
+            "difficulty_max",
+            "activity_type",
+            "change_summary",
+        ],
+    }
+
+
+@admin_router.get("/profiles/{profile_code}/export")
+def export_curriculum_profile_route(
+    profile_code: str,
+    _: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    document = export_active_profile(session, profile_code=profile_code)
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
+    return document.model_dump(mode="json")
+
+
+@admin_router.get("/profiles/{profile_id}/retirement-impact")
+def curriculum_retirement_impact_route(
+    profile_id: UUID,
+    _: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    profile = session.get(CurriculumProfile, profile_id)
+    if profile is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
+    return retirement_impact(profile)
+
+
+@admin_router.post("/profiles/{profile_id}/retire")
+def retire_curriculum_profile_route(
+    profile_id: UUID,
+    principal: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    session.rollback()
+    with session.begin():
+        profile = session.get(CurriculumProfile, profile_id)
+        if profile is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
+        impact = retirement_impact(profile)
+        if impact["references"]:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="profile has references"
+            )
+        retire_profile(session, profile=profile)
+        append_audit_event(
+            session,
+            tenant_id=UUID(principal.tenant_id),
+            actor_user_id=UUID(principal.user_id),
+            event_type="curriculum.profile_retired",
+            target_type="curriculum_profile",
+            target_id=profile.id,
+            metadata={"coverage": impact["coverage"]},
+        )
+    return _profile_payload(profile)
 
 
 def _import_document(body: CurriculumImportRequest) -> ImportDocument:

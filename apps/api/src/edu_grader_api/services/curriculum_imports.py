@@ -19,6 +19,7 @@ from ..models import (
     CurriculumObjectiveRevision,
     CurriculumProfile,
     CurriculumProfileStatus,
+    CurriculumPrerequisite,
     CurriculumRevisionStatus,
     CurriculumSourceRecord,
     User,
@@ -510,6 +511,106 @@ def activate_import(
     batch.activated_at = utc_now()
     session.flush()
     return batch
+
+
+def export_active_profile(session: Session, *, profile_code: str) -> ImportDocument | None:
+    profile = session.scalar(
+        select(CurriculumProfile).where(
+            CurriculumProfile.code == profile_code,
+            CurriculumProfile.status == CurriculumProfileStatus.ACTIVE,
+        )
+    )
+    if profile is None:
+        return None
+    mappings = list(
+        session.scalars(
+            select(CurriculumGradeMapping)
+            .where(CurriculumGradeMapping.profile_id == profile.id)
+            .order_by(CurriculumGradeMapping.position, CurriculumGradeMapping.internal_level)
+        )
+    )
+    rows = list(
+        session.execute(
+            select(CurriculumObjective, CurriculumObjectiveRevision)
+            .join(CurriculumObjectiveRevision)
+            .where(
+                CurriculumObjective.profile_id == profile.id,
+                CurriculumObjective.status == CurriculumProfileStatus.ACTIVE,
+                CurriculumObjectiveRevision.status == CurriculumRevisionStatus.ACTIVE,
+            )
+            .order_by(CurriculumObjective.code)
+        )
+    )
+    revisions = {revision.id: objective.code for objective, revision in rows}
+    prerequisites = session.scalars(
+        select(CurriculumPrerequisite).where(
+            CurriculumPrerequisite.objective_revision_id.in_(revisions),
+            CurriculumPrerequisite.prerequisite_revision_id.in_(revisions),
+        )
+    )
+    source = profile.source_record
+    return ImportDocument(
+        profile=ImportProfile(
+            code=profile.code,
+            name=profile.name,
+            jurisdiction=profile.jurisdiction,
+            version_label=profile.version_label,
+        ),
+        source=ImportSource(
+            issuer=source.issuer,
+            title=source.title,
+            canonical_url=source.canonical_url,
+            document_number=source.document_number or "legacy-source",
+            license=source.license or "unspecified",
+            curated_at=source.curated_at or source.created_at.date(),
+        ),
+        grade_mappings=[
+            ImportGradeMapping(
+                internal_level=mapping.internal_level,
+                external_label=mapping.external_label,
+                position=mapping.position,
+            )
+            for mapping in mappings
+        ],
+        objectives=[
+            ImportObjective(
+                code=objective.code,
+                grade_level=objective.grade_mapping.internal_level,
+                subject=objective.subject,
+                domain=objective.domain,
+                text=revision.text,
+                source_locator=revision.source_locator,
+                allowed_question_types=revision.allowed_question_types,
+                difficulty_min=revision.difficulty_min,
+                difficulty_max=revision.difficulty_max,
+                activity_type=revision.activity_type,
+                change_summary=revision.change_summary or "Legacy curated revision",
+            )
+            for objective, revision in rows
+        ],
+        prerequisites=[
+            ImportPrerequisite(
+                objective_code=revisions[prerequisite.objective_revision_id],
+                prerequisite_code=revisions[prerequisite.prerequisite_revision_id],
+            )
+            for prerequisite in prerequisites
+        ],
+    )
+
+
+def retirement_impact(profile: CurriculumProfile) -> dict[str, object]:
+    return {"profile_id": str(profile.id), "coverage": "curriculum_only", "references": []}
+
+
+def retire_profile(session: Session, *, profile: CurriculumProfile) -> CurriculumProfile:
+    profile.status = CurriculumProfileStatus.RETIRED
+    for objective in profile.objectives:
+        objective.status = CurriculumProfileStatus.RETIRED
+        for revision in objective.revisions:
+            if revision.status is not CurriculumRevisionStatus.RETIRED:
+                revision.status = CurriculumRevisionStatus.RETIRED
+    session.flush()
+    return profile
 
 
 def _parse_question_types(value: str) -> list[str]:

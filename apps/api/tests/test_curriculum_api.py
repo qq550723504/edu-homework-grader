@@ -621,3 +621,43 @@ def test_import_lifecycle_requires_a_different_admin_to_review_and_activate(
 
     assert activated.status_code == 200
     assert activated.json()["status"] == "active"
+
+
+def test_admin_can_read_import_schema_and_export_an_active_profile(
+    curriculum_context: CurriculumContext,
+) -> None:
+    schema = curriculum_context.client.get(
+        "/v1/admin/curriculum/import-schema", headers=headers("admin-token")
+    )
+    exported = curriculum_context.client.get(
+        "/v1/admin/curriculum/profiles/cn-compulsory-2022/export",
+        headers=headers("admin-token"),
+    )
+
+    assert schema.status_code == 200
+    assert "profile" in schema.json()["json_schema"]["properties"]
+    assert exported.status_code == 200
+    assert exported.json()["profile"]["code"] == "cn-compulsory-2022"
+    assert exported.json()["objectives"][0]["code"] == "MATH-G1-NUM-001"
+
+
+def test_retirement_impact_is_explicit_before_retiring_a_profile(
+    curriculum_context: CurriculumContext,
+) -> None:
+    profile_id = curriculum_context.client.get(
+        "/v1/curriculum-profiles", headers=headers("admin-token")
+    ).json()["items"][0]["id"]
+    impact = curriculum_context.client.get(
+        f"/v1/admin/curriculum/profiles/{profile_id}/retirement-impact",
+        headers=headers("admin-token"),
+    )
+    retired = curriculum_context.client.post(
+        f"/v1/admin/curriculum/profiles/{profile_id}/retire",
+        headers=headers("admin-token"),
+    )
+
+    assert impact.status_code == 200
+    assert impact.json()["coverage"] == "curriculum_only"
+    assert impact.json()["references"] == []
+    assert retired.status_code == 200
+    assert retired.json()["status"] == "retired"
