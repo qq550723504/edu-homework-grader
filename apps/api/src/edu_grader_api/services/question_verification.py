@@ -777,6 +777,19 @@ def _persist_run(
     duplicate_feature_summary: dict[str, object],
     evaluated_candidate_fingerprints: PromptFingerprints,
 ) -> GenerationValidationRun:
+    evaluated_fingerprints = (
+        evaluated_candidate_fingerprints.version,
+        evaluated_candidate_fingerprints.exact_hash,
+        evaluated_candidate_fingerprints.normalized_hash,
+    )
+    in_memory_fingerprints = (
+        draft.fingerprint_version,
+        draft.exact_prompt_hash,
+        draft.normalized_prompt_hash,
+    )
+    snapshot_changed_before_lock = in_memory_fingerprints != evaluated_fingerprints
+
+    session.flush()
     locked_fingerprints = session.execute(
         select(
             GeneratedQuestionDraft.fingerprint_version,
@@ -787,11 +800,7 @@ def _persist_run(
         .with_for_update()
     ).one_or_none()
     current_fingerprints = tuple(locked_fingerprints) if locked_fingerprints is not None else None
-    if current_fingerprints != (
-        evaluated_candidate_fingerprints.version,
-        evaluated_candidate_fingerprints.exact_hash,
-        evaluated_candidate_fingerprints.normalized_hash,
-    ):
+    if snapshot_changed_before_lock or current_fingerprints != evaluated_fingerprints:
         findings = [_duplicate_unavailable_finding()]
     latest_run_number = session.scalar(
         select(func.max(GenerationValidationRun.run_number)).where(

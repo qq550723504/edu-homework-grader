@@ -991,6 +991,39 @@ def test_candidate_mutation_during_semantic_scoring_blocks_stale_validation_run(
     assert "What is 9 + 9?" not in str(run.feature_summary_json)
 
 
+def test_unflushed_candidate_mutation_during_semantic_scoring_blocks_stale_validation_run() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    with Session(engine, autoflush=False) as session:
+        original_prompt = "Calculate two plus two."
+        draft = generation_draft(session, candidate_json=valid_m1_candidate(original_prompt))
+        add_published_question(session, draft=draft, prompt="Name the capital of France.")
+
+        class CandidateMutatingGrader(PassingGrader):
+            def semantic_similarity(
+                self, query: str, comparisons: list[str]
+            ) -> SemanticSimilarityResult:
+                draft.candidate_json = {**draft.candidate_json, "prompt": "What is 9 + 9?"}
+                return semantic_result([0.1])
+
+        run = verification.run_candidate_verification(
+            session, draft=draft, grader_client=CandidateMutatingGrader()
+        )
+
+        finding = finding_by_code(run, "duplicate_semantic_check_unavailable")
+        expected = fingerprint_prompt(original_prompt)
+        assert run.status is ValidationRunStatus.BLOCKED
+        assert finding.evidence_json == {"category": "similarity_unavailable"}
+        assert run.feature_summary_json["candidate_prompt_fingerprint"] == {
+            "version": expected.version,
+            "exact_hash": expected.exact_hash,
+            "normalized_hash": expected.normalized_hash,
+        }
+        assert draft.candidate_json["prompt"] == "What is 9 + 9?"
+        assert "What is 9 + 9?" not in str(run.feature_summary_json)
+
+
 def test_valid_m1_candidate_persists_a_passing_run_and_rerun(session: Session) -> None:
     assert hasattr(verification, "run_candidate_verification")
     draft = generation_draft(session)
