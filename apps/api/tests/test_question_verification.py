@@ -220,6 +220,19 @@ def test_candidate_for_a_different_objective_revision_is_blocked(session: Sessio
     assert "curriculum_objective_mismatch" in finding_codes(run)
 
 
+def test_candidate_difficulty_outside_objective_range_is_blocked(session: Session) -> None:
+    draft = generation_draft(session)
+    draft.job.curriculum_objective_revision.difficulty_max = 0.2
+    draft.candidate_json["difficulty"] = 0.9
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=PassingGrader()
+    )
+
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert "difficulty_out_of_range" in finding_codes(run)
+
+
 def test_disallowed_type_and_invalid_policy_are_blocked(session: Session) -> None:
     draft = generation_draft(
         session,

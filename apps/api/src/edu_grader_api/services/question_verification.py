@@ -126,6 +126,23 @@ def _evaluate_candidate(
             )
         )
 
+    difficulty = candidate.get("difficulty")
+    if (
+        not _is_finite_number(difficulty)
+        or difficulty < revision.difficulty_min
+        or difficulty > revision.difficulty_max
+    ):
+        findings.append(
+            _blocked(
+                "difficulty_out_of_range",
+                {
+                    "difficulty_min": revision.difficulty_min,
+                    "difficulty_max": revision.difficulty_max,
+                },
+                "Set the candidate difficulty within the curriculum objective range.",
+            )
+        )
+
     question_type = candidate.get("question_type")
     if not isinstance(question_type, str) or question_type not in revision.allowed_question_types:
         findings.append(
