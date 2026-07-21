@@ -134,6 +134,7 @@ def test_teacher_lists_and_filters_question_versions(client: TestClient, session
                 "question_type": "M1",
                 "policy_version": "1",
                 "status": "draft",
+                "max_score": 1,
             }
         ]
     }

@@ -73,7 +73,7 @@ def list_question_versions_route(
     query: str | None = None,
     question_type: str | None = None,
     status: VersionStatus | None = None,
-) -> dict[str, list[dict[str, str]]]:
+) -> dict[str, list[dict[str, object]]]:
     statement = (
         select(QuestionVersion)
         .join(Question)
@@ -100,10 +100,18 @@ def list_question_versions_route(
                 "question_type": version.question_type,
                 "policy_version": version.grading_policy.policy_version,
                 "status": version.status.value,
+                "max_score": _question_max_score(version.rule_json),
             }
             for version in versions
         ]
     }
+
+
+def _question_max_score(rule_json: dict[str, object]) -> float | int:
+    max_score = rule_json.get("max_score")
+    if isinstance(max_score, (int, float)) and not isinstance(max_score, bool) and max_score > 0:
+        return max_score
+    return 1
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

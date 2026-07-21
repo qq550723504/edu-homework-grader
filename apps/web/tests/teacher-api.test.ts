@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { addAssignmentItem, batchConfirmReviewTasks, createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, decideReviewTask, decideTeacherAppeal, fetchQuestionPolicyCatalog, fetchTeacherRosterClasses, fetchTeacherWorkspace, importTeacherRoster, publishAssignment, publishAttemptResults, publishQuestionVersion, runQuestionTests } from '../app/lib/teacher-api'
+import { batchConfirmReviewTasks, createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, decideReviewTask, decideTeacherAppeal, fetchQuestionPolicyCatalog, fetchTeacherRosterClasses, fetchTeacherWorkspace, importTeacherRoster, publishAssignment, publishAttemptResults, publishQuestionVersion, runQuestionTests, updateAssignment } from '../app/lib/teacher-api'
 
 describe('teacher workspace API', () => {
   it('loads classes, question versions, assignments and review metrics through the BFF', async () => {
@@ -64,15 +64,19 @@ describe('teacher workspace API', () => {
     })
   })
 
-  it('creates, fills and publishes an assignment through the BFF', async () => {
-    const request = vi.fn().mockResolvedValue({ id: 'assignment-1', status: 'draft' })
+  it('sends the full ordered question list when creating and updating an assignment', async () => {
+    const request = vi.fn().mockResolvedValue({ id: 'assignment-1', status: 'draft', positions: [1, 2] })
 
-    await createAssignment(request, 'csrf-token', { class_id: 'class-1', title: 'Algebra', subject: 'mathematics', due_at: '2026-07-30T00:00:00Z', submission_rule: { allow_late: false } })
-    await addAssignmentItem(request, 'csrf-token', 'assignment-1', { question_version_id: 'version-1', position: 1 })
+    const composition = { class_id: 'class-1', title: 'Algebra', subject: 'mathematics', due_at: '2026-07-30T00:00:00Z', submission_rule: { allow_late: false }, question_version_ids: ['m1', 'm2'] }
+    await createAssignment(request, 'csrf-token', composition)
+    await updateAssignment(request, 'csrf-token', 'assignment-1', composition)
     await publishAssignment(request, 'csrf-token', 'assignment-1')
 
-    expect(request).toHaveBeenNthCalledWith(2, '/api/core/v1/assignments/assignment-1/items', {
-      method: 'POST', headers: { 'X-CSRF-Token': 'csrf-token' }, body: { question_version_id: 'version-1', position: 1 },
+    expect(request).toHaveBeenNthCalledWith(1, '/api/core/v1/assignments', {
+      method: 'POST', headers: { 'X-CSRF-Token': 'csrf-token' }, body: composition,
+    })
+    expect(request).toHaveBeenNthCalledWith(2, '/api/core/v1/assignments/assignment-1', {
+      method: 'PUT', headers: { 'X-CSRF-Token': 'csrf-token' }, body: composition,
     })
     expect(request).toHaveBeenNthCalledWith(3, '/api/core/v1/assignments/assignment-1/publish', {
       method: 'POST', headers: { 'X-CSRF-Token': 'csrf-token' },

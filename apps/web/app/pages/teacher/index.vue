@@ -97,11 +97,32 @@
       <h2 id="create-assignment-heading">创建作业草稿</h2>
       <form class="stack" @submit.prevent="submitAssignment">
         <label>作业标题<input v-model.trim="assignmentForm.title" aria-label="作业标题" required maxlength="200"></label>
-        <label>班级<select v-model="assignmentForm.classId" aria-label="班级" required><option disabled value="">选择班级</option><option v-for="classroom in workspace.classes" :key="classroom.id" :value="classroom.id">{{ classroom.code }} · {{ classroom.name }}</option></select></label>
-        <label>题目版本<select v-model="assignmentForm.questionVersionId" aria-label="题目版本" required><option disabled value="">选择已发布题目</option><option v-for="version in publishedQuestionVersions" :key="version.id" :value="version.id">{{ version.title }} · {{ version.question_type }}</option></select></label>
+        <label>班级<select v-model="assignmentForm.classId" aria-label="班级" :disabled="saving || Boolean(pendingAssignmentId)" required><option disabled value="">选择班级</option><option v-for="classroom in workspace.classes" :key="classroom.id" :value="classroom.id">{{ classroom.code }} · {{ classroom.name }}</option></select></label>
+        <label>作业学科<select v-model="assignmentForm.subject" aria-label="作业学科" :disabled="saving || Boolean(pendingAssignmentId)"><option value="mathematics">数学</option><option value="english">英语</option></select></label>
         <label>截止时间<input v-model="assignmentForm.dueAt" aria-label="截止时间" required type="datetime-local"></label>
         <label><input v-model="assignmentForm.allowLate" type="checkbox"> 允许迟交</label>
-        <button class="button primary" :disabled="saving" type="submit">创建作业草稿</button>
+        <section class="stack" aria-labelledby="available-questions-heading">
+          <h3 id="available-questions-heading">可添加的已发布题目</h3>
+          <article v-for="version in availableAssignmentQuestions" :key="version.id" class="assignment">
+            <div><span class="subject">{{ version.question_type }} · {{ version.policy_version }} · {{ version.max_score }} 分</span><h4>{{ version.title }}</h4><p>{{ version.prompt }}</p></div>
+            <button class="button secondary" :aria-label="`添加题目 ${version.question_type}`" :disabled="saving || selectedAssignmentQuestions.some((item) => item.id === version.id)" type="button" @click="addAssignmentQuestion(version)">添加</button>
+          </article>
+          <p v-if="availableAssignmentQuestions.length === 0" class="notice">当前学科没有可添加的已发布题目。</p>
+        </section>
+        <section class="stack" aria-labelledby="assignment-composition-heading">
+          <h3 id="assignment-composition-heading">作业题目编排</h3>
+          <p class="notice">共 {{ assignmentComposition.count }} 题，{{ assignmentComposition.totalScore }} 分 · {{ Object.entries(assignmentComposition.types).map(([type, count]) => `${type} ${count} 题`).join('，') || '尚未选择题目' }}</p>
+          <article v-for="(version, index) in selectedAssignmentQuestions" :key="version.id" class="assignment">
+            <div><span class="subject">第 {{ index + 1 }} 题 · {{ version.question_type }} · {{ version.max_score }} 分</span><h4>{{ version.title }}</h4><p>{{ version.prompt }}</p></div>
+            <div class="actions"><button class="button secondary" :aria-label="`上移 ${version.question_type}`" :disabled="saving || index === 0" type="button" @click="moveAssignmentQuestion(index, -1)">上移</button><button class="button secondary" :aria-label="`下移 ${version.question_type}`" :disabled="saving || index === selectedAssignmentQuestions.length - 1" type="button" @click="moveAssignmentQuestion(index, 1)">下移</button><button class="button secondary" :aria-label="`移除 ${version.question_type}`" :disabled="saving" type="button" @click="removeAssignmentQuestion(version.id)">移除</button></div>
+          </article>
+          <p v-if="selectedAssignmentQuestions.length === 0" class="notice">请至少添加一道与作业学科一致的已发布题目。</p>
+        </section>
+        <section v-if="selectedAssignmentQuestions.length" class="stack" aria-labelledby="student-preview-heading">
+          <h3 id="student-preview-heading">学生预览</h3>
+          <ol><li v-for="version in selectedAssignmentQuestions" :key="version.id"><strong>{{ version.title }}</strong> · {{ version.prompt }}</li></ol>
+        </section>
+        <button class="button primary" :disabled="saving" type="submit">{{ pendingAssignmentId ? '保存编排' : '创建作业草稿' }}</button>
       </form>
       <div v-if="pendingAssignmentId" class="actions"><button class="button secondary" :disabled="saving" type="button" @click="publishPendingAssignment">发布作业</button></div>
     </section>
@@ -152,7 +173,8 @@
 
 <script setup lang="ts">
 import { fetchCurrentPrincipal } from '../../lib/student-api'
-import { addAssignmentItem, createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, fetchQuestionPolicyCatalog, fetchTeacherRosterClasses, fetchTeacherWorkspace, importTeacherRoster, publishAssignment, publishQuestionVersion, runQuestionTests, type CreateQuestionInput, type QuestionPolicyCatalogEntry, type QuestionTestRun, type TeacherAssignment, type TeacherQuestionVersion, type TeacherRosterClass } from '../../lib/teacher-api'
+import { createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, fetchQuestionPolicyCatalog, fetchTeacherRosterClasses, fetchTeacherWorkspace, importTeacherRoster, publishAssignment, publishQuestionVersion, runQuestionTests, updateAssignment, type CreateQuestionInput, type QuestionPolicyCatalogEntry, type QuestionTestRun, type TeacherAssignment, type TeacherQuestionVersion, type TeacherRosterClass } from '../../lib/teacher-api'
+import { addQuestionToComposition, availableQuestionsForSubject, compositionSummary, moveQuestion, removeQuestion, type AssignmentSubject } from '../../lib/assignment-composition'
 import { buildEnglishQuestionRule, defaultEnglishDraft, fieldForPolicyError, type EnglishQuestionType } from '../../lib/english-question-authoring'
 import { teacherModules, type TeacherModule } from '../../lib/teacher-workbench'
 import { clearGuardianConsentEvidence, guardianConsentFieldsRequired, teacherErrorMessage } from '../../lib/teacher-workflow'
@@ -196,13 +218,15 @@ const questionTypes = [
 const question = reactive({ title: '', prompt: '', question_type: 'M1', expected: '', ruleJson: questionTypes[0].rule })
 const questionFilter = reactive({ query: '', type: '' })
 const testCase = reactive({ category: 'correct', answerJson: '{"format":"text-v1","text":"5"}', expectedDecision: 'auto_accepted', expectedScore: 1, expectedEvidenceJson: '{}' })
-const assignmentForm = reactive({ title: '', classId: '', questionVersionId: '', dueAt: '', allowLate: false })
+const assignmentForm = reactive({ title: '', classId: '', subject: 'mathematics' as AssignmentSubject, dueAt: '', allowLate: false })
+const selectedAssignmentQuestions = ref<TeacherQuestionVersion[]>([])
 const selectedVersion = computed(() => workspace.value.questionVersions.find((version) => version.id === selectedVersionId.value))
 const filteredQuestionVersions = computed(() => workspace.value.questionVersions.filter((version) => {
   const query = questionFilter.query.toLocaleLowerCase()
   return (!query || `${version.title} ${version.prompt}`.toLocaleLowerCase().includes(query)) && (!questionFilter.type || version.question_type === questionFilter.type)
 }))
-const publishedQuestionVersions = computed(() => workspace.value.questionVersions.filter((version) => version.status === 'published'))
+const availableAssignmentQuestions = computed(() => availableQuestionsForSubject(workspace.value.questionVersions, assignmentForm.subject))
+const assignmentComposition = computed(() => compositionSummary(selectedAssignmentQuestions.value))
 const isEnglishQuestion = computed(() => ['E1', 'E2', 'E3', 'E4'].includes(question.question_type))
 const reviewCount = computed(() => workspace.value.reviewTasks.length)
 const publishedAssignments = computed(() => workspace.value.assignments.filter((assignment) => assignment.status === 'published').length)
@@ -328,6 +352,10 @@ watch(() => rosterStudentDraft.guardian_consent_status, (status) => {
   rosterStudentDraft.guardian_consent_evidence_reference = evidence.evidenceReference
 })
 
+watch(() => assignmentForm.subject, () => {
+  selectedAssignmentQuestions.value = []
+})
+
 async function submitRosterClass() {
   saving.value = true
   try {
@@ -410,22 +438,48 @@ async function publishSelectedVersion() {
 }
 
 async function submitAssignment() {
+  if (!selectedAssignmentQuestions.value.length) {
+    message.value = '请至少添加一道题目后再保存作业。'
+    return
+  }
   saving.value = true
   message.value = ''
   try {
-    const assignment = await createAssignment($fetch, await csrfToken(), {
-      class_id: assignmentForm.classId,
+    const composition = {
       title: assignmentForm.title,
-      subject: 'mathematics',
       due_at: new Date(assignmentForm.dueAt).toISOString(),
       submission_rule: { allow_late: assignmentForm.allowLate },
-    })
-    await addAssignmentItem($fetch, await csrfToken(), assignment.id, { question_version_id: assignmentForm.questionVersionId, position: 1 })
-    pendingAssignmentId.value = assignment.id
-    message.value = '作业草稿已创建，请确认后发布。'
+      question_version_ids: selectedAssignmentQuestions.value.map((version) => version.id),
+    }
+    if (pendingAssignmentId.value) {
+      await updateAssignment($fetch, await csrfToken(), pendingAssignmentId.value, composition)
+      message.value = '作业编排已保存，请确认后发布。'
+    } else {
+      const assignment = await createAssignment($fetch, await csrfToken(), {
+        ...composition,
+        class_id: assignmentForm.classId,
+        subject: assignmentForm.subject,
+      })
+      pendingAssignmentId.value = assignment.id
+      message.value = '作业草稿已创建，请确认后发布。'
+    }
     await loadWorkspace()
   } catch (error: unknown) { message.value = error instanceof Error ? error.message : '创建作业失败。' }
   finally { saving.value = false }
+}
+
+function addAssignmentQuestion(version: TeacherQuestionVersion) {
+  selectedAssignmentQuestions.value = addQuestionToComposition(
+    selectedAssignmentQuestions.value, version, assignmentForm.subject,
+  )
+}
+
+function moveAssignmentQuestion(index: number, offset: number) {
+  selectedAssignmentQuestions.value = moveQuestion(selectedAssignmentQuestions.value, index, offset)
+}
+
+function removeAssignmentQuestion(questionVersionId: string) {
+  selectedAssignmentQuestions.value = removeQuestion(selectedAssignmentQuestions.value, questionVersionId)
 }
 
 async function publishPendingAssignment() {

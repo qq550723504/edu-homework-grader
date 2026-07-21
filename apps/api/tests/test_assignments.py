@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -153,29 +153,190 @@ def assignment_payload(classroom: Classroom) -> dict[str, object]:
     }
 
 
+def published_question_version(
+    session: Session, *, teacher: User, tenant: Tenant, question_type: str, title: str
+) -> QuestionVersion:
+    question = Question(tenant=tenant, created_by_user=teacher, title=title)
+    version = QuestionVersion(
+        question=question,
+        version_number=1,
+        status=VersionStatus.PUBLISHED,
+        prompt=f"Prompt for {title}",
+        question_type=question_type,
+        grading_policy_id=uuid4(),
+        rule_json={"max_score": 1},
+        created_by_user=teacher,
+    )
+    session.add_all([question, version])
+    session.commit()
+    return version
+
+
+def test_teacher_creates_an_ordered_multi_question_assignment_atomically(
+    client: TestClient, session: Session
+) -> None:
+    teacher, _, _, classroom, published_m1, _ = make_classroom_data(session)
+    published_m2 = published_question_version(
+        session,
+        teacher=teacher,
+        tenant=classroom.tenant,
+        question_type="M2",
+        title="Expand x plus one",
+    )
+
+    response = client.post(
+        "/v1/assignments",
+        headers=authorize(client, teacher),
+        json=assignment_payload(classroom)
+        | {"question_version_ids": [str(published_m2.id), str(published_m1.id)]},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["positions"] == [1, 2]
+    assignment = session.get(Assignment, UUID(response.json()["id"]))
+    assert assignment is not None
+    assert [
+        item.question_version_id
+        for item in sorted(assignment.items, key=lambda item: item.position)
+    ] == [
+        published_m2.id,
+        published_m1.id,
+    ]
+
+
+def test_teacher_creates_an_ordered_english_assignment_atomically(
+    client: TestClient, session: Session
+) -> None:
+    teacher, _, _, classroom, _, _ = make_classroom_data(session)
+    published_e1 = published_question_version(
+        session, teacher=teacher, tenant=classroom.tenant, question_type="E1", title="Vocabulary"
+    )
+    published_e4 = published_question_version(
+        session, teacher=teacher, tenant=classroom.tenant, question_type="E4", title="Reading"
+    )
+
+    response = client.post(
+        "/v1/assignments",
+        headers=authorize(client, teacher),
+        json=assignment_payload(classroom)
+        | {
+            "subject": "english",
+            "question_version_ids": [str(published_e4.id), str(published_e1.id)],
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["positions"] == [1, 2]
+
+
+@pytest.mark.parametrize("question_version_ids", [[], ["published", "published"], ["english"]])
+def test_assignment_composition_rejects_empty_duplicate_and_cross_subject_versions(
+    client: TestClient, session: Session, question_version_ids: list[str]
+) -> None:
+    teacher, _, _, classroom, published_m1, _ = make_classroom_data(session)
+    published_e1 = published_question_version(
+        session,
+        teacher=teacher,
+        tenant=classroom.tenant,
+        question_type="E1",
+        title="Exact answer",
+    )
+    resolved_ids = [
+        str(published_m1.id) if question_id == "published" else str(published_e1.id)
+        for question_id in question_version_ids
+    ]
+
+    response = client.post(
+        "/v1/assignments",
+        headers=authorize(client, teacher),
+        json=assignment_payload(classroom) | {"question_version_ids": resolved_ids},
+    )
+
+    assert response.status_code == 422
+
+
 def test_assigned_teacher_can_publish_a_versioned_assignment(
     client: TestClient, session: Session
 ) -> None:
     teacher, _, _, classroom, published, _ = make_classroom_data(session)
 
     created = client.post(
-        "/v1/assignments", headers=authorize(client, teacher), json=assignment_payload(classroom)
+        "/v1/assignments",
+        headers=authorize(client, teacher),
+        json=assignment_payload(classroom) | {"question_version_ids": [str(published.id)]},
     )
 
     assert created.status_code == 201
     assignment_id = created.json()["id"]
-    item = client.post(
-        f"/v1/assignments/{assignment_id}/items",
-        headers=authorize(client, teacher),
-        json={"question_version_id": str(published.id), "position": 1},
-    )
-    assert item.status_code == 201
     published_response = client.post(
         f"/v1/assignments/{assignment_id}/publish", headers=authorize(client, teacher)
     )
 
     assert published_response.status_code == 200
     assert published_response.json()["status"] == AssignmentStatus.PUBLISHED.value
+
+
+def test_teacher_can_replace_a_draft_composition_but_not_a_published_one(
+    client: TestClient, session: Session
+) -> None:
+    teacher, _, _, classroom, published_m1, _ = make_classroom_data(session)
+    published_m2 = published_question_version(
+        session,
+        teacher=teacher,
+        tenant=classroom.tenant,
+        question_type="M2",
+        title="Expand x plus one",
+    )
+    created = client.post(
+        "/v1/assignments",
+        headers=authorize(client, teacher),
+        json=assignment_payload(classroom)
+        | {"question_version_ids": [str(published_m1.id), str(published_m2.id)]},
+    )
+    assignment_id = created.json()["id"]
+
+    updated = client.put(
+        f"/v1/assignments/{assignment_id}",
+        headers=authorize(client, teacher),
+        json={
+            "title": "Reordered algebra",
+            "due_at": datetime(2026, 7, 21, tzinfo=timezone.utc).isoformat(),
+            "submission_rule": {"allow_late": True},
+            "question_version_ids": [str(published_m2.id), str(published_m1.id)],
+        },
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["positions"] == [1, 2]
+    assignment = session.get(Assignment, UUID(assignment_id))
+    assert assignment is not None
+    assert assignment.title == "Reordered algebra"
+    assert [
+        item.question_version_id
+        for item in sorted(assignment.items, key=lambda item: item.position)
+    ] == [
+        published_m2.id,
+        published_m1.id,
+    ]
+
+    assert (
+        client.post(
+            f"/v1/assignments/{assignment_id}/publish", headers=authorize(client, teacher)
+        ).status_code
+        == 200
+    )
+    frozen = client.put(
+        f"/v1/assignments/{assignment_id}",
+        headers=authorize(client, teacher),
+        json={
+            "title": "Should not persist",
+            "due_at": datetime(2026, 7, 22, tzinfo=timezone.utc).isoformat(),
+            "submission_rule": {"allow_late": False},
+            "question_version_ids": [str(published_m1.id)],
+        },
+    )
+
+    assert frozen.status_code == 409
 
 
 def test_teacher_lists_only_their_assignments_with_completion_progress(
@@ -232,7 +393,7 @@ def test_unassigned_teacher_and_draft_question_are_rejected(
     forbidden = client.post(
         "/v1/assignments",
         headers=authorize(client, unassigned_teacher),
-        json=assignment_payload(classroom),
+        json=assignment_payload(classroom) | {"question_version_ids": [str(draft.id)]},
     )
     assert forbidden.status_code == 404
 
