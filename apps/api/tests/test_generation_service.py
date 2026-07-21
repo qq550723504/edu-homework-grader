@@ -25,6 +25,7 @@ from edu_grader_api.models import (
 from edu_grader_api.services.generation import (
     GenerationJobRequest,
     GenerationServiceError,
+    _content_hash,
     create_or_get_job,
     run_generation_job,
 )
@@ -106,6 +107,25 @@ def generation_request(
         policy_catalog_version="2026.07",
         prompt_version="generator-v1",
         teacher_constraint=teacher_constraint,
+    )
+
+
+def teacher_and_e4_objective(session: Session) -> tuple[User, CurriculumObjectiveRevision]:
+    teacher, revision = teacher_and_objective(session)
+    revision.allowed_question_types = ["E4"]
+    return teacher, revision
+
+
+def e4_generation_request(revision: CurriculumObjectiveRevision) -> GenerationJobRequest:
+    return GenerationJobRequest(
+        curriculum_objective_revision_id=revision.id,
+        grade="Grade 5",
+        subject="mathematics",
+        question_types=["E4"],
+        requested_count=1,
+        idempotency_key="e4-reading-material",
+        policy_catalog_version="2026.07",
+        prompt_version="generator-v1",
     )
 
 
@@ -191,6 +211,17 @@ def test_fake_provider_candidates_match_current_platform_policy_versions() -> No
         not validate_policy(candidate.question_type, candidate.policy_version, candidate.rule_json)
         for candidate in result.candidates
     )
+
+
+def test_e4_material_is_persisted_and_part_of_candidate_hash(session: Session) -> None:
+    teacher, revision = teacher_and_e4_objective(session)
+    job = create_or_get_job(session, request=e4_generation_request(revision), actor=teacher)
+
+    run_generation_job(session, job=job, provider=FakeGenerationProvider(seed=7))
+
+    draft = job.drafts[0]
+    assert draft.candidate_json["reading_material"]
+    assert draft.content_hash == _content_hash(draft.candidate_json)
 
 
 def test_creation_replays_a_matching_idempotency_key(session: Session) -> None:
