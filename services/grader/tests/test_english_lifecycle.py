@@ -56,6 +56,11 @@ class FailingBatchSimilarity(OrderedBatchSimilarity):
         raise RuntimeError("model inference failed")
 
 
+class KeyErrorBatchSimilarity(OrderedBatchSimilarity):
+    def score_many(self, query: str, comparisons: list[str]) -> list[float]:
+        raise KeyError("model inference failed")
+
+
 def test_english_similarity_is_loaded_once_and_reported_ready(monkeypatch) -> None:
     FakeSimilarity.instances = 0
     monkeypatch.setattr(main, "SentenceTransformerSimilarity", FakeSimilarity)
@@ -165,6 +170,19 @@ def test_semantic_similarity_enforces_request_bounds(monkeypatch, payload) -> No
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize("field", ["tenant_id", "source_id", "unexpected"])
+def test_semantic_similarity_rejects_unknown_request_fields(monkeypatch, field) -> None:
+    monkeypatch.setattr(main, "SentenceTransformerSimilarity", OrderedBatchSimilarity)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/v1/semantic-similarity",
+            json={"query": "query", "comparisons": ["comparison"], field: "forbidden"},
+        )
+
+    assert response.status_code == 422
+
+
 def test_semantic_similarity_returns_503_when_embedding_model_is_unavailable(monkeypatch) -> None:
     monkeypatch.setattr(main, "SentenceTransformerSimilarity", FailingSimilarity)
 
@@ -179,7 +197,12 @@ def test_semantic_similarity_returns_503_when_embedding_model_is_unavailable(mon
 
 @pytest.mark.parametrize(
     "similarity_type",
-    [NonFiniteBatchSimilarity, IncompleteBatchSimilarity, FailingBatchSimilarity],
+    [
+        NonFiniteBatchSimilarity,
+        IncompleteBatchSimilarity,
+        FailingBatchSimilarity,
+        KeyErrorBatchSimilarity,
+    ],
 )
 def test_semantic_similarity_rejects_invalid_batch_scores(monkeypatch, similarity_type) -> None:
     monkeypatch.setattr(main, "SentenceTransformerSimilarity", similarity_type)

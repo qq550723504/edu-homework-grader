@@ -7,7 +7,7 @@ from typing import Annotated, Any
 from edu_grader_processor_policy import assert_allowed_processor_url, assert_deidentified_payload
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .english import EnglishExactRequest, grade_exact
 from .english_dependencies import (
@@ -102,6 +102,8 @@ class EnglishGradeRequest(BaseModel):
 
 
 class SemanticSimilarityRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     query: Annotated[str, Field(min_length=1, max_length=10_000)]
     comparisons: list[Annotated[str, Field(min_length=1, max_length=10_000)]] = Field(
         min_length=1, max_length=128
@@ -172,7 +174,7 @@ def semantic_similarity(request: SemanticSimilarityRequest) -> SemanticSimilarit
         if len(scores) != len(request.comparisons):
             raise EnglishDependencyError("English embedding model returned an incomplete batch.")
         validated_scores = [_valid_similarity(score) for score in scores]
-    except (EnglishDependencyError, RuntimeError, TypeError, ValueError) as error:
+    except Exception as error:
         raise HTTPException(status_code=503, detail="semantic similarity is unavailable") from error
     return SemanticSimilarityResponse(
         scores=validated_scores,

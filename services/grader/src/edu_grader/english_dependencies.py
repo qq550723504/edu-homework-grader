@@ -125,6 +125,10 @@ class SentenceTransformerSimilarity:
             if len(vectors) != len(comparisons) + 1:
                 raise ValueError("English embedding model returned an incomplete batch.")
             query_vector = vectors[0]
+            if len(query_vector) == 0 or any(
+                len(comparison_vector) == 0 for comparison_vector in vectors[1:]
+            ):
+                raise ValueError("English embedding model returned an empty embedding.")
             return [
                 _valid_similarity(
                     sum(

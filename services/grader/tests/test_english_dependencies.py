@@ -1,10 +1,13 @@
 import math
+import sys
+from types import SimpleNamespace
 
 import pytest
 
 from edu_grader.english_dependencies import (
     EnglishDependencyError,
     LanguageToolClient,
+    SentenceTransformerSimilarity,
     StaticSimilarity,
 )
 
@@ -71,3 +74,34 @@ def test_static_similarity_scores_each_comparison_in_order() -> None:
     scores = similarity.score_many("query", ["first", "second"])
 
     assert scores == [0.75, 0.75]
+
+
+def test_sentence_transformer_similarity_rejects_empty_embeddings(tmp_path, monkeypatch) -> None:
+    (tmp_path / "metadata.json").write_text(
+        '{"model_id":"test-model","revision":"test-revision","digest":"test-digest"}',
+        encoding="utf-8",
+    )
+
+    class FakeSentenceTransformer:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def encode(self, texts: list[str], *, normalize_embeddings: bool) -> list[list[float]]:
+            assert texts == ["query", "comparison"]
+            assert normalize_embeddings is True
+            return [[], []]
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sentence_transformers",
+        SimpleNamespace(SentenceTransformer=FakeSentenceTransformer),
+    )
+    similarity = SentenceTransformerSimilarity(
+        tmp_path,
+        model_id="test-model",
+        revision="test-revision",
+        digest="test-digest",
+    )
+
+    with pytest.raises(EnglishDependencyError, match="could not score"):
+        similarity.score_many("query", ["comparison"])
