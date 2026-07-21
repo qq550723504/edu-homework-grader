@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation, localcontext
+from decimal import ROUND_CEILING, Decimal, InvalidOperation, localcontext
 import math
 import re
 from typing import Callable, Protocol
@@ -31,32 +31,38 @@ from .candidate_content_policy import (
     CONTENT_POLICY_VERSION,
     find_candidate_content_matches,
 )
+from .curriculum_imports import validate_complexity_rules
 from .grader import EmbeddingDependencyVersion, SemanticSimilarityResult
 from .question_fingerprints import FINGERPRINT_VERSION, PromptFingerprints, fingerprint_prompt
 from .questions import GradeResult
 
 
-VALIDATOR_VERSION = "verification-v4"
-RULESET_VERSION = "rules-v4"
+VALIDATOR_VERSION = "verification-v5"
+RULESET_VERSION = "rules-v5"
 _SEMANTIC_CHUNK_SIZE = 128
 _DUPLICATE_REMEDIATION = "Revise the prompt to make the candidate meaningfully distinct."
 _WHITESPACE = re.compile(r"\s+")
 _E2_TERMINAL_PUNCTUATION = re.compile(r"[.!?。！？]+$")
 _M1_PROBE_TEXT_LIMIT = 100
-_GRADE_TEXT_LIMITS = {
-    "G1": 300,
-    "G2": 400,
-    "G3": 500,
-    "G4": 600,
-    "G5": 700,
-    "G6": 800,
-    "G7": 1_000,
-    "G8": 1_100,
-    "G9": 1_200,
-    "G10": 1_400,
-    "G11": 1_600,
-    "G12": 1_800,
+_LEXICAL_UNITS = re.compile(
+    r"[A-Za-z0-9\u00c0-\u024f\u1e00-\u1eff\u2c60-\u2c7f\ua720-\ua7ff\uab30-\uab6f]+(?:'[A-Za-z0-9\u00c0-\u024f\u1e00-\u1eff\u2c60-\u2c7f\ua720-\ua7ff\uab30-\uab6f]+)*|[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002ebef\U00030000-\U000323af]"
+)
+_SENTENCE_SEPARATORS = re.compile(r"[.!?。！？]+")
+_M2_AST_FIELDS_BY_TYPE = {
+    "add": frozenset({"type", "args"}),
+    "mul": frozenset({"type", "args"}),
+    "neg": frozenset({"type", "arg"}),
+    "div": frozenset({"type", "numerator", "denominator"}),
+    "pow": frozenset({"type", "base", "exponent"}),
+    "number": frozenset({"type", "value"}),
+    "symbol": frozenset({"type", "name"}),
 }
+_GRADE_COMPLEXITY_METRICS = (
+    "max_prompt_units",
+    "max_sentence_units",
+    "max_numeric_absolute_value",
+    "max_math_operation_nodes",
+)
 
 
 class VerificationGraderClient(Protocol):
@@ -263,6 +269,11 @@ def _evaluate_candidate(
             *(_text_values(rule_json) if isinstance(rule_json, dict) else []),
         )
     )
+    m2_findings: list[VerificationFinding] = []
+    normalized_m2_ast: dict[str, object] | None = None
+    if question_type == "M2" and isinstance(rule_json, dict) and not policy_errors:
+        m2_findings, normalized_m2_ast = _m2_findings(rule_json, policy_version, grader_client)
+
     if isinstance(prompt, str):
         findings.extend(
             _duplicate_findings(
@@ -274,21 +285,35 @@ def _evaluate_candidate(
                 _snapshot=duplicate_snapshot,
             )
         )
-        grade_limit = _GRADE_TEXT_LIMITS.get(revision.objective.grade_mapping.internal_level)
-        if grade_limit is not None and len(prompt) > grade_limit:
+    if not policy_errors and isinstance(rule_json, dict) and isinstance(prompt, str):
+        grade_level = revision.objective.grade_mapping.internal_level
+        try:
+            complexity_rules = validate_complexity_rules(
+                revision.objective.grade_mapping.complexity_rules_json
+            )
+        except ValueError:
             findings.append(
-                VerificationFinding(
-                    code="grade_text_complexity_warning",
-                    severity=ValidationFindingSeverity.WARNING,
-                    evidence={"grade_level": revision.objective.grade_mapping.internal_level},
-                    remediation="Shorten the prompt for the selected grade level.",
+                _blocked(
+                    "grade_complexity_rules_invalid",
+                    {"grade_level": grade_level},
+                    "Correct the persisted grade complexity rules before validating candidates.",
+                )
+            )
+        else:
+            findings.extend(
+                _grade_complexity_findings(
+                    rules=complexity_rules,
+                    grade_level=grade_level,
+                    prompt=prompt,
+                    question_type=question_type,
+                    rule_json=rule_json,
+                    normalized_m2_ast=normalized_m2_ast,
                 )
             )
 
     if question_type == "M1" and isinstance(rule_json, dict) and not policy_errors:
         findings.extend(_m1_findings(rule_json, policy_version, grader_client))
-    if question_type == "M2" and isinstance(rule_json, dict) and not policy_errors:
-        findings.extend(_m2_findings(rule_json, policy_version, grader_client))
+    findings.extend(m2_findings)
     if question_type == "E2" and isinstance(rule_json, dict) and not policy_errors:
         findings.extend(_e2_findings(rule_json, policy_version, grader_client))
     if (
@@ -424,25 +449,177 @@ def _m1_probe_text(value: Decimal) -> str:
     return "0" if normalized == 0 else str(normalized)
 
 
+def _grade_complexity_findings(
+    *,
+    rules: dict[str, object],
+    grade_level: str,
+    prompt: str,
+    question_type: object,
+    rule_json: dict[str, object],
+    normalized_m2_ast: dict[str, object] | None,
+) -> list[VerificationFinding]:
+    """Return stable, non-blocking findings for configured grade-complexity limits."""
+
+    findings: list[VerificationFinding] = []
+    observed_metrics: dict[str, Decimal | int] = {
+        "max_prompt_units": _lexical_unit_count(prompt),
+        "max_sentence_units": _max_sentence_units(prompt),
+    }
+    if question_type == "M1":
+        numeric_values = [
+            abs(Decimal(str(value)))
+            for value in (rule_json.get("expected"), rule_json.get("tolerance", 0))
+            if _is_finite_number(value)
+        ]
+        if numeric_values:
+            observed_metrics["max_numeric_absolute_value"] = max(numeric_values)
+    elif question_type == "M2" and normalized_m2_ast is not None:
+        maximum_numeric_value, operation_nodes = _m2_complexity_metrics(normalized_m2_ast)
+        if maximum_numeric_value is not None:
+            observed_metrics["max_numeric_absolute_value"] = maximum_numeric_value
+        observed_metrics["max_math_operation_nodes"] = operation_nodes
+
+    for metric in _GRADE_COMPLEXITY_METRICS:
+        limit = rules.get(metric)
+        observed = observed_metrics.get(metric)
+        if isinstance(limit, int) and observed is not None and observed > Decimal(limit):
+            findings.append(
+                VerificationFinding(
+                    code="grade_complexity_warning",
+                    severity=ValidationFindingSeverity.WARNING,
+                    evidence={
+                        "grade_level": grade_level,
+                        "metric": metric,
+                        "observed": _complexity_observed_value(observed),
+                        "limit": limit,
+                    },
+                    remediation="Revise the candidate to fit the selected grade complexity limit.",
+                )
+            )
+    return findings
+
+
+def _lexical_unit_count(text: str) -> int:
+    return len(_LEXICAL_UNITS.findall(unicodedata.normalize("NFC", text)))
+
+
+def _max_sentence_units(text: str) -> int:
+    return max(
+        (_lexical_unit_count(sentence) for sentence in _SENTENCE_SEPARATORS.split(text)), default=0
+    )
+
+
+def _complexity_observed_value(value: Decimal | int) -> int | float:
+    if isinstance(value, int):
+        return value
+    if value == value.to_integral_value():
+        return int(value)
+    observed = float(value)
+    if not math.isfinite(observed):
+        return int(value.to_integral_value(rounding=ROUND_CEILING))
+    if Decimal(str(observed)) < value:
+        return math.nextafter(observed, math.inf)
+    return observed
+
+
+def _m2_complexity_metrics(ast: dict[str, object]) -> tuple[Decimal | None, int]:
+    maximum_numeric_value: Decimal | None = None
+    operation_nodes = 0
+    child_keys_by_type = {
+        "add": ("args",),
+        "mul": ("args",),
+        "neg": ("arg",),
+        "div": ("numerator", "denominator"),
+        "pow": ("base", "exponent"),
+        "number": (),
+        "symbol": (),
+    }
+
+    def visit(node: object) -> None:
+        nonlocal maximum_numeric_value, operation_nodes
+        if not isinstance(node, dict):
+            raise ValueError("safe MathJSON node must be an object")
+        node_type = node.get("type")
+        if not isinstance(node_type, str) or node_type not in child_keys_by_type:
+            raise ValueError("safe MathJSON node type is invalid")
+        if set(node) != _M2_AST_FIELDS_BY_TYPE[node_type]:
+            raise ValueError("safe MathJSON node fields are invalid")
+        child_keys = child_keys_by_type[node_type]
+        if node_type in {"add", "mul", "neg", "div", "pow"}:
+            operation_nodes += 1
+        if node_type == "number":
+            try:
+                value = _safe_ast_number_value(node["value"])
+            except (InvalidOperation, ValueError) as error:
+                raise ValueError("safe MathJSON number is invalid") from error
+            if not value.is_finite():
+                raise ValueError("safe MathJSON number is not finite")
+            absolute_value = abs(value)
+            if maximum_numeric_value is None or absolute_value > maximum_numeric_value:
+                maximum_numeric_value = absolute_value
+        if node_type == "symbol" and (not isinstance(node["name"], str) or not node["name"]):
+            raise ValueError("safe MathJSON symbol is invalid")
+        for child_key in child_keys:
+            child = node.get(child_key)
+            if child_key == "args":
+                if not isinstance(child, list) or len(child) < 2:
+                    raise ValueError("safe MathJSON operation arguments are invalid")
+                for argument in child:
+                    visit(argument)
+            else:
+                visit(child)
+
+    visit(ast)
+    return (
+        None if maximum_numeric_value is None else maximum_numeric_value,
+        operation_nodes,
+    )
+
+
+def _safe_ast_number_value(value: object) -> Decimal:
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        raise ValueError("safe MathJSON number value is invalid")
+    value_text = str(value)
+    if value_text.count("/") == 1:
+        numerator_text, denominator_text = value_text.split("/", maxsplit=1)
+        numerator = Decimal(numerator_text)
+        denominator = Decimal(denominator_text)
+        if not numerator.is_finite() or not denominator.is_finite() or denominator == 0:
+            raise ValueError("safe MathJSON rational value is invalid")
+        with localcontext() as context:
+            context.prec = max(
+                len(numerator.as_tuple().digits) + len(denominator.as_tuple().digits) + 1,
+                28,
+            )
+            return numerator / denominator
+    return Decimal(value_text)
+
+
 def _m2_findings(
     rule_json: dict[str, object],
     policy_version: object,
     grader_client: VerificationGraderClient,
-) -> list[VerificationFinding]:
+) -> tuple[list[VerificationFinding], dict[str, object] | None]:
     if policy_version != "2":
-        return []
+        return [], None
     expected = rule_json["expected"]
     variables = rule_json.get("variables", [])
     try:
-        grader_client.normalize_math_answer({"mathjson": expected, "variables": variables})
+        normalized_m2_ast = grader_client.normalize_math_answer(
+            {"mathjson": expected, "variables": variables}
+        )
+        _m2_complexity_metrics(normalized_m2_ast)
     except Exception:
-        return [
-            _blocked(
-                "m2_mathjson_invalid",
-                {"probe": "expected_mathjson"},
-                "Correct the expected MathJSON expression and variables.",
-            )
-        ]
+        return (
+            [
+                _blocked(
+                    "m2_mathjson_invalid",
+                    {"probe": "expected_mathjson"},
+                    "Correct the expected MathJSON expression and variables.",
+                )
+            ],
+            None,
+        )
     try:
         result = grader_client.grade(
             "M2",
@@ -451,25 +628,31 @@ def _m2_findings(
             policy_version="2",
         )
     except Exception:
-        return [
-            _blocked(
-                "m2_grader_probe_failed",
-                {"probe": "expected_mathjson"},
-                "Retry validation after the expression grader is available.",
-            )
-        ]
+        return (
+            [
+                _blocked(
+                    "m2_grader_probe_failed",
+                    {"probe": "expected_mathjson"},
+                    "Retry validation after the expression grader is available.",
+                )
+            ],
+            normalized_m2_ast,
+        )
     max_score = float(rule_json.get("max_score", 1))
     if result.decision != "auto_accepted" or not math.isclose(
         result.score, max_score, rel_tol=0, abs_tol=1e-9
     ):
-        return [
-            _blocked(
-                "m2_grader_probe_failed",
-                {"probe": "expected_mathjson"},
-                "Correct the M2 rule so the expected expression receives full credit.",
-            )
-        ]
-    return []
+        return (
+            [
+                _blocked(
+                    "m2_grader_probe_failed",
+                    {"probe": "expected_mathjson"},
+                    "Correct the M2 rule so the expected expression receives full credit.",
+                )
+            ],
+            normalized_m2_ast,
+        )
+    return [], normalized_m2_ast
 
 
 def _e1_findings(rule_json: dict[str, object]) -> list[VerificationFinding]:

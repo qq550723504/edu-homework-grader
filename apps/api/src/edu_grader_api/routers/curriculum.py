@@ -2,7 +2,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import String, cast, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -48,6 +48,7 @@ from ..services.curriculum_imports import (
     retirement_impact,
     review_import,
     submit_import_for_review,
+    validate_complexity_rules,
 )
 
 
@@ -86,6 +87,12 @@ class CreateGradeMappingRequest(BaseModel):
     external_label: str = Field(min_length=1, max_length=200)
     position: int = Field(ge=0)
     note: str | None = Field(default=None, max_length=500)
+    complexity_rules: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("complexity_rules")
+    @classmethod
+    def validate_rules(cls, value: object) -> dict[str, int]:
+        return validate_complexity_rules(value)
 
 
 class CreateObjectiveRequest(BaseModel):
@@ -166,6 +173,7 @@ def list_grade_mappings_route(
                 "external_label": mapping.external_label,
                 "position": mapping.position,
                 "note": mapping.note,
+                "complexity_rules": mapping.complexity_rules_json,
             }
             for mapping in mappings
         ]
@@ -304,7 +312,11 @@ def create_grade_mapping_route(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
             ) from error
-        mapping = CurriculumGradeMapping(profile=profile, **body.model_dump())
+        mapping = CurriculumGradeMapping(
+            profile=profile,
+            **body.model_dump(exclude={"complexity_rules"}),
+            complexity_rules_json=body.complexity_rules,
+        )
         session.add(mapping)
         session.flush()
         append_audit_event(
@@ -876,6 +888,7 @@ def _grade_mapping_payload(mapping: CurriculumGradeMapping) -> dict[str, object]
         "external_label": mapping.external_label,
         "position": mapping.position,
         "note": mapping.note,
+        "complexity_rules": mapping.complexity_rules_json,
     }
 
 

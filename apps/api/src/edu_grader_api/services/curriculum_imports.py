@@ -6,7 +6,7 @@ import io
 import json
 from datetime import date
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -50,10 +50,37 @@ class ImportSource(BaseModel):
     curated_at: date
 
 
+_COMPLEXITY_RULE_KEYS = frozenset(
+    {
+        "max_prompt_units",
+        "max_sentence_units",
+        "max_numeric_absolute_value",
+        "max_math_operation_nodes",
+    }
+)
+
+
+def validate_complexity_rules(value: object) -> dict[str, int]:
+    if not isinstance(value, dict) or set(value) - _COMPLEXITY_RULE_KEYS:
+        raise ValueError("invalid complexity rules")
+    rules: dict[str, int] = {}
+    for key, limit in value.items():
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("invalid complexity limit")
+        rules[key] = limit
+    return rules
+
+
 class ImportGradeMapping(BaseModel):
     internal_level: str = Field(min_length=1, max_length=10)
     external_label: str = Field(min_length=1, max_length=200)
     position: int = Field(ge=0)
+    complexity_rules: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("complexity_rules")
+    @classmethod
+    def validate_rules(cls, value: object) -> dict[str, int]:
+        return validate_complexity_rules(value)
 
 
 class ImportObjective(BaseModel):
@@ -187,6 +214,7 @@ def catalogue_fingerprint(session: Session, profile_code: str) -> str:
                     "internal_level": mapping.internal_level,
                     "external_label": mapping.external_label,
                     "position": mapping.position,
+                    "complexity_rules": mapping.complexity_rules_json,
                 }
                 for mapping in mappings
             ],
@@ -267,6 +295,7 @@ def apply_import(
             internal_level=item.internal_level,
             external_label=item.external_label,
             position=item.position,
+            complexity_rules_json=item.complexity_rules,
         )
         for item in document.grade_mappings
     }
@@ -351,6 +380,9 @@ def _apply_profile_update(
             )
             session.add(mapping)
             mappings[mapping_data.internal_level] = mapping
+        else:
+            mapping.external_label = mapping_data.external_label
+            mapping.position = mapping_data.position
     session.flush()
 
     objectives = {
@@ -439,6 +471,9 @@ def _apply_profile_update(
         "additions": additions,
         "updates": updates,
         "unchanged": len(document.objectives) - additions - updates,
+        "proposed_grade_complexity_rules": {
+            mapping.internal_level: mapping.complexity_rules for mapping in document.grade_mappings
+        },
     }
     session.flush()
     return batch
@@ -500,6 +535,28 @@ def activate_import(
         raise ImportLifecycleError("a different approving reviewer must activate the import")
     if batch.profile.status is CurriculumProfileStatus.IN_REVIEW:
         batch.profile.status = CurriculumProfileStatus.ACTIVE
+    proposed_rules = batch.summary_json.get("proposed_grade_complexity_rules", {})
+    if not isinstance(proposed_rules, dict):
+        raise ImportLifecycleError("invalid proposed grade complexity rules")
+    mappings = {
+        mapping.internal_level: mapping
+        for mapping in session.scalars(
+            select(CurriculumGradeMapping).where(
+                CurriculumGradeMapping.profile_id == batch.profile_id
+            )
+        )
+    }
+    complexity_rule_updates: list[tuple[CurriculumGradeMapping, dict[str, int]]] = []
+    for internal_level, proposed_rule_document in proposed_rules.items():
+        if not isinstance(internal_level, str) or internal_level not in mappings:
+            raise ImportLifecycleError("invalid proposed grade complexity rules")
+        try:
+            rules = validate_complexity_rules(proposed_rule_document)
+        except ValueError as error:
+            raise ImportLifecycleError("invalid proposed grade complexity rules") from error
+        complexity_rule_updates.append((mappings[internal_level], rules))
+    for mapping, rules in complexity_rule_updates:
+        mapping.complexity_rules_json = rules
     for revision in batch.objective_revisions:
         if revision.objective.status is CurriculumProfileStatus.IN_REVIEW:
             revision.objective.status = CurriculumProfileStatus.ACTIVE
@@ -569,6 +626,7 @@ def export_active_profile(session: Session, *, profile_code: str) -> ImportDocum
                 internal_level=mapping.internal_level,
                 external_label=mapping.external_label,
                 position=mapping.position,
+                complexity_rules=mapping.complexity_rules_json,
             )
             for mapping in mappings
         ],

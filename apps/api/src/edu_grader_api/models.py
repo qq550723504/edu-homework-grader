@@ -348,6 +348,9 @@ class CurriculumGradeMapping(Base):
     external_label: Mapped[str] = mapped_column(String(200), nullable=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     note: Mapped[str | None] = mapped_column(String(500))
+    complexity_rules_json: Mapped[dict[str, object]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
+    )
 
     profile: Mapped[CurriculumProfile] = relationship(back_populates="grade_mappings")
     objectives: Mapped[list[CurriculumObjective]] = relationship(back_populates="grade_mapping")
@@ -480,7 +483,7 @@ class CurriculumImportBatch(Base):
     activated_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     change_summary: Mapped[str] = mapped_column(String(1_000), nullable=False)
-    summary_json: Mapped[dict[str, int]] = mapped_column(
+    summary_json: Mapped[dict[str, object]] = mapped_column(
         JSONB().with_variant(JSON(), "sqlite"), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
