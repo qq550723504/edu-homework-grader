@@ -10,6 +10,7 @@ from .logging import get_secure_logger
 from .routers.admin import router as admin_router
 from .routers.ai_question_generation import draft_router as ai_generated_questions_router
 from .routers.ai_question_generation import router as ai_question_generation_router
+from .routers.ai_question_validation import router as ai_question_validation_router
 from .routers.appeals import router as appeals_router
 from .routers.appeals import teacher_router as teacher_appeals_router
 from .routers.classes import router as classes_router
@@ -38,6 +39,7 @@ logger = get_secure_logger(__name__)
 app.include_router(admin_router)
 app.include_router(ai_question_generation_router)
 app.include_router(ai_generated_questions_router)
+app.include_router(ai_question_validation_router)
 app.include_router(appeals_router)
 app.include_router(teacher_appeals_router)
 app.include_router(classes_router)
