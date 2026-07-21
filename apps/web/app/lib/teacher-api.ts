@@ -15,6 +15,11 @@ export interface TeacherQuestionVersion {
   max_score: number
 }
 
+export interface QuestionPolicyCatalogEntry {
+  question_type: string
+  policy_version: string
+}
+
 export interface TeacherAssignment {
   id: string
   title: string
@@ -143,6 +148,10 @@ export async function fetchTeacherWorkspace(request: Request): Promise<{
     reviewMetrics,
     reviewTasks: reviewTasks.review_tasks,
   }
+}
+
+export async function fetchQuestionPolicyCatalog(request: Request): Promise<QuestionPolicyCatalogEntry[]> {
+  return (await request<{ policies: QuestionPolicyCatalogEntry[] }>('/api/core/v1/question-policy-catalog')).policies
 }
 
 export function fetchTeacherReviewTasks(

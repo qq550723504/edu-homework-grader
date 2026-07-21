@@ -194,6 +194,34 @@ POLICY_SCHEMAS: dict[tuple[str, str], Mapping[str, Any]] = {
     ("E4", "2"): E4_POLICY_V2,
 }
 
+DEFAULT_POLICY_KEYS = frozenset(
+    {
+        ("M1", "1"),
+        ("M2", "2"),
+        ("E1", "2"),
+        ("E2", "1"),
+        ("E3", "1"),
+        ("E4", "2"),
+    }
+)
+
+
+def question_policy_catalog() -> list[dict[str, str]]:
+    """Return the policy versions used as defaults for new authoring flows."""
+
+    return [
+        {"question_type": question_type, "policy_version": policy_version}
+        for question_type, policy_version in sorted(DEFAULT_POLICY_KEYS)
+    ]
+
+
+def validate_new_question_policy(question_type: str, policy_version: str) -> list[dict[str, str]]:
+    """Reject policy versions that must not be used for newly-created questions."""
+
+    if (question_type, policy_version) != ("E4", "1"):
+        return []
+    return [{"path": "/", "message": "policy E4@1 cannot be used for new questions"}]
+
 
 def validate_policy(
     question_type: str,

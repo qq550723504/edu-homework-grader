@@ -19,7 +19,7 @@ from ..models import (
     VersionStatus,
     utc_now,
 )
-from ..policies import POLICY_SCHEMAS, validate_policy
+from ..policies import POLICY_SCHEMAS, validate_new_question_policy, validate_policy
 
 
 class QuestionVersionAccessError(PermissionError):
@@ -74,7 +74,9 @@ def create_question(
 ) -> QuestionVersion:
     """Create a tenant question and its first mutable version."""
 
-    errors = validate_policy(question_type, policy_version, rule_json)
+    errors = validate_new_question_policy(question_type, policy_version)
+    if not errors:
+        errors = validate_policy(question_type, policy_version, rule_json)
     if errors:
         raise QuestionPolicyValidationError(errors)
 
