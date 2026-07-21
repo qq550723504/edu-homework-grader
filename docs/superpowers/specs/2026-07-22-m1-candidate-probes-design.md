@@ -10,7 +10,7 @@ Strengthen M1@1 candidate verification so it proves the configured numeric rule 
 
 The Core verifier already rejects non-finite `expected`/`tolerance` values and probes only `str(expected)`. The Grader owns decimal parsing, finite-number rejection, tolerance comparison, accepted/rejected decisions, score assignment, and public feedback. Therefore Core currently cannot establish that blank input is rejected, that the advertised tolerance boundary is inclusive, or that a candidate rule does not accidentally accept an outside answer.
 
-This slice reuses `VerificationGraderClient.grade("M1", ...)`. Core must not add an alternative numeric grader, parser, `eval`, symbolic solver, HTTP route, migration, or QuestionVersion mutation. The existing Grader remains the single authority for judging every generated probe.
+This slice reuses `VerificationGraderClient.grade("M1", rule_json, {"format": "text-v1", "text": answer}, policy_version="1")` once for each probe. Core must not add an alternative numeric grader, parser, `eval`, symbolic solver, HTTP route, migration, or QuestionVersion mutation. The existing Grader remains the single authority for judging every generated probe.
 
 ## Probe Construction
 
@@ -32,7 +32,7 @@ The lower/upper probes are both retained when tolerance is zero, even if their t
 ## Verification Flow
 
 1. Common schema validation runs first. `_m1_findings` applies type-specific probes only to policy version `"1"`; invalid or other versions retain `policy_schema_invalid` and do not call the Grader.
-2. The helper validates finite numeric inputs, creates all six text envelopes in memory, and invokes the existing injected Grader once per probe.
+2. The helper validates finite numeric inputs, creates all six `text-v1` envelopes in the table order in memory, and invokes the existing injected Grader once per probe with policy version `"1"`.
 3. It validates only `decision` and numeric finiteness/zero-vs-positive score. It never saves Grader evidence, feedback, answer text, exception strings, Decimal values, or prompt text.
 4. The first unexpected or failed probe emits one blocked finding. The existing immutable `generation_validation_runs` and `validation_findings` persistence path appends the result; no candidate data is edited.
 
@@ -49,7 +49,7 @@ Evidence deliberately contains no numeric answer, tolerance, score, Grader respo
 
 This slice satisfies the per-candidate M1 standard-answer, finite/tolerance, and existing-Grader gate. The in-memory probes are validation test cases; they are not a curriculum-labelled golden corpus.
 
-It does not infer prompt-specific misconceptions, generate semantic distractors, define course-dependent common-error models, build 20 M1 golden samples, calibrate answer-error rates, or provide #42 offline/online evaluation. Those require curriculum and evaluation governance that this deterministic M1 rule cannot infer safely.
+It does not infer prompt-specific misconceptions, generate semantic distractors, define course-dependent common-error models, build 20 M1 golden samples, calibrate answer-error rates, or provide #42 offline/online evaluation. The misconception/distractor and golden-corpus work remains explicitly deferred to the #40/#42 follow-up scope because it requires curriculum and evaluation governance that this deterministic M1 rule cannot infer safely.
 
 ## Tests
 

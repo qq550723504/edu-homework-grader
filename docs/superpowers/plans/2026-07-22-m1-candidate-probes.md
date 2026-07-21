@@ -36,7 +36,7 @@
 - Updates `_m1_findings(rule_json: dict[str, object], policy_version: object, grader_client: VerificationGraderClient) -> list[VerificationFinding]`.
 - Consumes the existing `GradeResult` and `VerificationGraderClient.grade` interfaces without changing their signatures.
 
-- [ ] **Step 1: Write failing M1 probe tests.**
+- [x] **Step 1: Write failing M1 probe tests.**
 
   Add a `RecordingM1Grader` fake that records all calls and returns an injected `GradeResult` per answer text. It must return accepted positive-score results for expected/boundary probe answers and rejected zero-score results for blank/outside probes.
 
@@ -62,7 +62,7 @@
 
   and assert evidence/remediation do not contain the candidate answer, tolerance, fake Grader evidence, or exception text. Add schema-invalid M1 (`policy_version="1"`, `expected="four"`) and non-`"1"` policy-version cases; assert zero type-specific Grader calls.
 
-- [ ] **Step 2: Run focused M1 tests and confirm they fail.**
+- [x] **Step 2: Run focused M1 tests and confirm they fail.**
 
   ```powershell
   $env:PYTHONPATH = (Join-Path $PWD 'src')
@@ -71,7 +71,7 @@
 
   Expected: FAIL because current `_m1_findings` makes only the expected-answer call and does not construct boundary/empty/outside probes.
 
-- [ ] **Step 3: Implement bounded probe construction and result checks.**
+- [x] **Step 3: Implement bounded probe construction and result checks.**
 
   Import `Decimal` and `InvalidOperation`, then add the private immutable probe contract:
 
@@ -116,7 +116,7 @@
 
   On an exception, non-finite score, or unexpected result, return one `_blocked("m1_grader_probe_failed", {"probe": probe.name}, remediation)` finding. Keep the remediation free of probe text or diagnostic content.
 
-- [ ] **Step 4: Run focused tests and formatting.**
+- [x] **Step 4: Run focused tests and formatting.**
 
   ```powershell
   $env:PYTHONPATH = (Join-Path $PWD 'src')
@@ -128,7 +128,7 @@
 
   Expected: every M1 contract and leak-prevention test passes; Ruff has no violations.
 
-- [ ] **Step 5: Commit the M1 probe slice.**
+- [x] **Step 5: Commit the M1 probe slice.**
 
   ```powershell
   git add apps/api/src/edu_grader_api/services/question_verification.py apps/api/tests/test_question_verification.py
@@ -150,11 +150,11 @@
 - Documents six deterministic M1 Grader probes, fail-closed contract behavior, and deferred #42/common-misconception work.
 - Produces a tested branch ready for controller-owned full-branch review and PR creation.
 
-- [ ] **Step 1: Update the AI generation plan.**
+- [x] **Step 1: Update the AI generation plan.**
 
   Add a compact M1 verification statement: schema-valid M1 candidates use the existing numeric Grader for correct, empty, inclusive-boundary and outside-boundary probes; unexpected dependency/result behavior blocks; persisted evidence identifies only the probe. State that prompt-specific misconception distractors and the golden corpus remain #40/#42 follow-up work.
 
-- [ ] **Step 2: Run complete relevant regression and static verification.**
+- [x] **Step 2: Run complete relevant regression and static verification.**
 
   ```powershell
   $env:PYTHONPATH = "$(Join-Path $PWD 'apps\api\src');$(Join-Path $PWD 'services\generator\src');$(Join-Path $PWD 'packages\processor-policy\src');$(Join-Path $PWD 'services\grader\src')"
@@ -166,7 +166,7 @@
 
   Expected: all tests, Ruff and whitespace checks pass. Treat only the established Alembic `path_separator` deprecation warning as non-blocking.
 
-- [ ] **Step 3: Perform the delivery boundary audit.**
+- [x] **Step 3: Perform the delivery boundary audit.**
 
   Verify all of the following against the final diff:
 
@@ -177,7 +177,7 @@
   - no Grader endpoint, provider, migration, `QuestionVersion`, routing, or #42 evaluation behaviour was added;
   - documentation explicitly distinguishes per-candidate probes from curriculum-specific misconception/golden-set work.
 
-- [ ] **Step 4: Commit documentation and hand off for branch review.**
+- [x] **Step 4: Commit documentation and hand off for branch review.**
 
   ```powershell
   git add docs/ai-question-generation-plan.md docs/superpowers/specs/2026-07-22-m1-candidate-probes-design.md docs/superpowers/plans/2026-07-22-m1-candidate-probes.md
