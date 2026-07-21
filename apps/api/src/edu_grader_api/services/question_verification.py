@@ -28,6 +28,7 @@ from .questions import GradeResult
 VALIDATOR_VERSION = "verification-v1"
 RULESET_VERSION = "rules-v1"
 _WHITESPACE = re.compile(r"\s+")
+_E2_TERMINAL_PUNCTUATION = re.compile(r"[.!?。！？]+$")
 _UNSAFE_MINOR_TERMS = (
     ("pornographic", "adult_content"),
     ("sexual content", "adult_content"),
@@ -226,6 +227,8 @@ def _evaluate_candidate(
         findings.extend(_m1_findings(rule_json, policy_version, grader_client))
     if question_type == "M2" and isinstance(rule_json, dict) and not policy_errors:
         findings.extend(_m2_findings(rule_json, policy_version, grader_client))
+    if question_type == "E2" and isinstance(rule_json, dict) and not policy_errors:
+        findings.extend(_e2_findings(rule_json, policy_version, grader_client))
     if question_type == "E1" and isinstance(rule_json, dict):
         findings.extend(_e1_findings(rule_json))
     return findings
@@ -355,6 +358,85 @@ def _e1_findings(rule_json: dict[str, object]) -> list[VerificationFinding]:
     return []
 
 
+def _e2_findings(
+    rule_json: dict[str, object],
+    policy_version: object,
+    grader_client: VerificationGraderClient,
+) -> list[VerificationFinding]:
+    if policy_version != "1":
+        return []
+    accepted_forms = rule_json.get("accepted_forms")
+    if not isinstance(accepted_forms, list) or not accepted_forms:
+        return [
+            _blocked(
+                "e2_forms_invalid",
+                {
+                    "reason": "missing_forms",
+                    "accepted_form_count": len(accepted_forms)
+                    if isinstance(accepted_forms, list)
+                    else 0,
+                },
+                "Provide at least one accepted form.",
+            )
+        ]
+    normalized_forms: list[str] = []
+    for form in accepted_forms:
+        if not isinstance(form, str) or not form.strip() or len(form) > 2_000:
+            return [
+                _blocked(
+                    "e2_forms_invalid",
+                    {"reason": "invalid_form", "accepted_form_count": len(accepted_forms)},
+                    "Provide non-empty accepted forms within the supported length.",
+                )
+            ]
+        normalized_forms.append(_normalize_e2_form(form))
+    if len(set(normalized_forms)) != len(normalized_forms):
+        return [
+            _blocked(
+                "e2_forms_invalid",
+                {
+                    "reason": "normalized_duplicate",
+                    "accepted_form_count": len(accepted_forms),
+                },
+                "Remove accepted forms that normalize to the same value.",
+            )
+        ]
+    try:
+        for form in accepted_forms:
+            result = grader_client.grade(
+                "E2",
+                rule_json,
+                {"format": "text-v1", "text": form},
+                policy_version="1",
+            )
+            max_score = float(rule_json.get("max_score", 1))
+            if result.decision != "auto_accepted" or not math.isclose(
+                result.score, max_score, rel_tol=0, abs_tol=1e-9
+            ):
+                return [
+                    _blocked(
+                        "e2_grader_probe_failed",
+                        {
+                            "probe": "accepted_forms",
+                            "accepted_form_count": len(accepted_forms),
+                        },
+                        "Correct the E2 forms or constraints so every form receives full credit.",
+                    )
+                ]
+    except Exception:
+        return [
+            _blocked(
+                "e2_grader_probe_failed",
+                {
+                    "probe": "accepted_forms",
+                    "accepted_form_count": len(accepted_forms),
+                },
+                "Retry validation after the English grader is available.",
+            )
+        ]
+    return []
+
+
 def _persist_run(
     session: Session,
     *,
@@ -443,6 +525,12 @@ def _text_values(value: object) -> list[str]:
 
 def _normalize_text(value: str) -> str:
     return _WHITESPACE.sub(" ", unicodedata.normalize("NFKC", value).strip()).casefold()
+
+
+def _normalize_e2_form(value: str) -> str:
+    """Mirror the E2 Grader's fixed case and terminal-punctuation normalization."""
+
+    return _E2_TERMINAL_PUNCTUATION.sub("", _normalize_text(value)).rstrip()
 
 
 def _is_finite_number(value: object) -> bool:
