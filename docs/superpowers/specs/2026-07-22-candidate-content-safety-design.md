@@ -87,7 +87,7 @@ Tests use candidates through `run_candidate_verification`, plus focused unit tes
 
 ## Documentation and Operations
 
-`docs/ai-question-generation-plan.md` will state the exact deterministic scope, warning/block behavior, and the handoff to #42/#43. The policy module will be intentionally small and commented as a reviewed baseline: changing a pattern, category, severity or remediation requires a policy-version increment, a regression case, and #42 evaluation before it becomes default.
+`docs/ai-question-generation-plan.md` records the local `minor-content-policy-v1` candidate-field scan: explicit unsafe content and direct reproduction requests block, while context-dependent mature themes warn. Persisted evidence contains only category, rule, and policy-version metadata; no candidate text is retained. The policy module remains a reviewed baseline: changing a pattern, category, severity, or remediation requires a policy-version increment, a regression case, and #42 evaluation before it becomes default. Licensing, teacher-request filtering, rights-holder takedowns, and provider/model governance stay owned by #43.
 
 ## Self-Review
 

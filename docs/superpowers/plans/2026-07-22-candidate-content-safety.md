@@ -34,7 +34,7 @@
 - Produces `find_candidate_content_matches(texts: Iterable[str]) -> tuple[ContentPolicyMatch, ...]`.
 - Consumes only strings and standard-library normalization/regular-expression utilities.
 
-- [ ] **Step 1: Write failing policy-unit tests.**
+- [x] **Step 1: Write failing policy-unit tests.**
 
   Create tests that assert the public scanner returns sanitized matches only. Use deliberately bounded fixtures, including: an NFKC/case/separator variant of an explicit adult-content phrase; an explicit self-harm method request; graphic-violence wording; an explicit dangerous-device instruction; a directed demeaning protected-class assertion; a direct textbook-page/full-passage/question-bank reproduction request; and a drug-use theme.
 
@@ -54,7 +54,7 @@
 
   Add a multi-category fixture and assert match order follows declared policy order. Add neutral `"Discuss how to seek help when someone is self-harming."`, neutral protected-class material, anti-bias material, and `"Write an original practice question about fractions."` fixtures; assert each returns `()`.
 
-- [ ] **Step 2: Run the focused policy tests and confirm they fail.**
+- [x] **Step 2: Run the focused policy tests and confirm they fail.**
 
   ```powershell
   $env:PYTHONPATH = (Join-Path $PWD 'src')
@@ -63,7 +63,7 @@
 
   Expected: collection failure because `candidate_content_policy` does not exist.
 
-- [ ] **Step 3: Implement the minimal reviewed policy module.**
+- [x] **Step 3: Implement the minimal reviewed policy module.**
 
   Add the immutable match contract, an ordered tuple of internally compiled rules, and the public scanner:
 
@@ -93,7 +93,7 @@
 
   Implement `_normalized_forms` as NFKC + `casefold`, whitespace collapse, and a second form with separator characters removed. Keep every pattern bounded: Latin terms use non-alphanumeric boundaries; Chinese patterns are exact phrases. Define the exact categories and codes in the approved design. Do not add fuzzy matching, a model score, candidate text, or location data to `ContentPolicyMatch`.
 
-- [ ] **Step 4: Run focused policy tests and static checks.**
+- [x] **Step 4: Run focused policy tests and static checks.**
 
   ```powershell
   $env:PYTHONPATH = (Join-Path $PWD 'src')
@@ -118,7 +118,7 @@
 - Preserves `_safety_findings(*texts: str) -> list[VerificationFinding]` as the private integration seam.
 - Produces only existing `VerificationFinding` and `GenerationValidationRun` objects.
 
-- [ ] **Step 1: Write failing integration tests through `run_candidate_verification`.**
+- [x] **Step 1: Write failing integration tests through `run_candidate_verification`.**
 
   Add candidate fixtures that put a blocked pattern in `reading_material` and a second blocked pattern in a nested rule value. Assert a blocked run contains two findings ordered by policy order and each evidence payload is exactly:
 
@@ -132,7 +132,7 @@
 
   Assert neither `evidence_json`, remediation nor `feature_summary_json` contains the fixture's sensitive text. Add a context-dependent mature-theme candidate and assert `ValidationRunStatus.WARNING` with one `mature_theme_requires_review` finding. Add direct reproduction fixture and assert `copyright_reproduction_risk` is blocked. Preserve the existing public unsafe-content test by updating only its expected sanitized metadata.
 
-- [ ] **Step 2: Run focused integration tests and confirm they fail.**
+- [x] **Step 2: Run focused integration tests and confirm they fail.**
 
   ```powershell
   $env:PYTHONPATH = (Join-Path $PWD 'src')
@@ -141,7 +141,7 @@
 
   Expected: failures because the existing helper emits only one two-key `unsafe_minor_content` finding and has no copyright or warning handling.
 
-- [ ] **Step 3: Implement the thin verification adapter and audit versions.**
+- [x] **Step 3: Implement the thin verification adapter and audit versions.**
 
   Replace the `_UNSAFE_MINOR_TERMS` loop with:
 
@@ -164,7 +164,7 @@
 
   Import the policy module at the top of `question_verification.py`. Set `VALIDATOR_VERSION = "verification-v4"`, `RULESET_VERSION = "rules-v4"`, and add `"content_policy_version": CONTENT_POLICY_VERSION` to `_persist_run`'s `feature_summary_json`. Leave the candidate-field fan-in, `_status_for`, persistence mechanics and public routing unchanged.
 
-- [ ] **Step 4: Run focused integration tests, full verifier tests, and format.**
+- [x] **Step 4: Run focused integration tests, full verifier tests, and format.**
 
   ```powershell
   $env:PYTHONPATH = (Join-Path $PWD 'src')
@@ -190,11 +190,11 @@
 - Documents deterministic candidate-time scanning, warning/block semantics, versioning, and ownership handoff to Issue #42/#43.
 - Produces a ready-for-review branch that contains implementation, tests, design and plan only.
 
-- [ ] **Step 1: Update the AI generation plan.**
+- [x] **Step 1: Update the AI generation plan.**
 
   In the verification section, add a compact statement that generated candidate fields are checked locally against `minor-content-policy-v1`; explicit unsafe content and direct reproduction requests block, context-dependent mature themes warn, and evidence contains only category/rule/policy metadata. State that policy expansion needs #42 evaluation and that licensing, teacher-request filtering and takedown work belong to #43.
 
-- [ ] **Step 2: Run complete relevant regression and static verification.**
+- [x] **Step 2: Run complete relevant regression and static verification.**
 
   ```powershell
   $env:PYTHONPATH = "$(Join-Path $PWD 'apps\api\src');$(Join-Path $PWD 'services\generator\src');$(Join-Path $PWD 'packages\processor-policy\src');$(Join-Path $PWD 'services\grader\src')"
@@ -206,7 +206,7 @@
 
   Expected: tests, Ruff and whitespace checks pass. Treat only the established Alembic `path_separator` deprecation warning as non-blocking.
 
-- [ ] **Step 3: Perform boundary review before commit.**
+- [x] **Step 3: Perform boundary review before commit.**
 
   Verify the diff proves all of the following:
 
@@ -217,7 +217,9 @@
   - `verification-v4`, `rules-v4` and `minor-content-policy-v1` are persisted for new runs;
   - the docs explicitly preserve #42/#43 ownership boundaries.
 
-- [ ] **Step 4: Commit, push and open the required PR.**
+- [ ] **Step 4: Controller-owned branch-level review, push, and PR.**
+
+  Task-level documentation, test strengthening, validation, and commit are complete. Branch-level review and any push/PR creation remain controller-owned.
 
   ```powershell
   git add apps/api/src/edu_grader_api/services/candidate_content_policy.py apps/api/src/edu_grader_api/services/question_verification.py apps/api/tests/test_candidate_content_policy.py apps/api/tests/test_question_verification.py docs/ai-question-generation-plan.md docs/superpowers/specs/2026-07-22-candidate-content-safety-design.md docs/superpowers/plans/2026-07-22-candidate-content-safety.md

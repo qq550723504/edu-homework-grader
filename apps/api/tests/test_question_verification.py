@@ -1721,6 +1721,8 @@ def test_content_policy_findings_are_sanitized_and_ordered(session: Session) -> 
         for sensitive_text in ("explicit adult content", "how to cut yourself")
         for value in persisted_values
     )
+    assert run.validator_version == "verification-v4"
+    assert run.ruleset_version == "rules-v4"
     assert run.feature_summary_json["content_policy_version"] == "minor-content-policy-v1"
 
 
