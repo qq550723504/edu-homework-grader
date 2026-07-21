@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Protocol
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from ..answer_envelope import AnswerEnvelopeValidationError, normalize_answer_envelope
@@ -67,6 +67,12 @@ class MathAnswerValidationError(ValueError):
         super().__init__(message)
 
 
+SUBJECT_QUESTION_TYPES = {
+    "english": frozenset({"E1", "E2", "E3", "E4"}),
+    "mathematics": frozenset({"M1", "M2"}),
+}
+
+
 class MathAnswerNormalizer(Protocol):
     def normalize_math_answer(self, answer_json: dict[str, object]) -> dict[str, object]: ...
 
@@ -92,6 +98,7 @@ def create_assignment(
     subject: str,
     due_at: datetime,
     submission_rule_json: dict[str, object],
+    question_version_ids: list[UUID],
 ) -> Assignment:
     classroom = _assigned_classroom(
         session, tenant_id=tenant_id, teacher_id=teacher_id, class_id=class_id
@@ -107,6 +114,12 @@ def create_assignment(
     )
     session.add(assignment)
     session.flush()
+    replace_assignment_items(
+        session,
+        assignment,
+        teacher_id=teacher_id,
+        question_version_ids=question_version_ids,
+    )
     _audit(
         session,
         tenant_id=tenant_id,
@@ -117,6 +130,29 @@ def create_assignment(
         metadata={"class_id": str(class_id)},
     )
     return assignment
+
+
+def replace_assignment_items(
+    session: Session,
+    assignment: Assignment,
+    *,
+    teacher_id: UUID,
+    question_version_ids: list[UUID],
+) -> list[AssignmentItem]:
+    """Replace a draft's ordered items after validating its complete composition."""
+
+    _require_assignment_teacher(session, assignment, teacher_id)
+    if assignment.status is not AssignmentStatus.DRAFT:
+        raise AssignmentStateError("only draft assignments can change items")
+    versions = _composition_versions(session, assignment, question_version_ids)
+    session.execute(delete(AssignmentItem).where(AssignmentItem.assignment_id == assignment.id))
+    items = [
+        AssignmentItem(assignment=assignment, question_version=version, position=position)
+        for position, version in enumerate(versions, start=1)
+    ]
+    session.add_all(items)
+    session.flush()
+    return items
 
 
 def add_assignment_item(
@@ -131,17 +167,19 @@ def add_assignment_item(
     if assignment.status is not AssignmentStatus.DRAFT:
         raise AssignmentStateError("only draft assignments can add items")
 
-    question_version = session.scalar(
-        select(QuestionVersion)
-        .join(Question)
-        .where(
-            QuestionVersion.id == question_version_id,
-            QuestionVersion.status == VersionStatus.PUBLISHED,
-            Question.tenant_id == assignment.tenant_id,
+    question_version = _composition_versions(session, assignment, [question_version_id])[0]
+    if session.scalar(
+        select(AssignmentItem.id).where(
+            AssignmentItem.assignment_id == assignment.id,
+            AssignmentItem.question_version_id == question_version_id,
         )
-    )
-    if question_version is None:
-        raise AssignmentValidationError("assignment items must use tenant-local published versions")
+    ) is not None:
+        raise AssignmentValidationError("assignment items cannot repeat a question version")
+    expected_position = (session.scalar(
+        select(func.count(AssignmentItem.id)).where(AssignmentItem.assignment_id == assignment.id)
+    ) or 0) + 1
+    if position != expected_position:
+        raise AssignmentValidationError("assignment item positions must be continuous")
 
     item = AssignmentItem(
         assignment=assignment,
@@ -160,6 +198,36 @@ def add_assignment_item(
         metadata={"assignment_item_id": str(item.id), "position": position},
     )
     return item
+
+
+def _composition_versions(
+    session: Session, assignment: Assignment, question_version_ids: list[UUID]
+) -> list[QuestionVersion]:
+    allowed_types = SUBJECT_QUESTION_TYPES.get(assignment.subject)
+    if allowed_types is None:
+        raise AssignmentValidationError("unsupported assignment subject")
+    if not question_version_ids:
+        raise AssignmentValidationError("an assignment requires at least one item")
+    if len(set(question_version_ids)) != len(question_version_ids):
+        raise AssignmentValidationError("assignment items cannot repeat a question version")
+    versions = list(
+        session.scalars(
+            select(QuestionVersion)
+            .join(Question)
+            .where(
+                QuestionVersion.id.in_(question_version_ids),
+                QuestionVersion.status == VersionStatus.PUBLISHED,
+                Question.tenant_id == assignment.tenant_id,
+            )
+        )
+    )
+    by_id = {version.id: version for version in versions}
+    if len(by_id) != len(question_version_ids):
+        raise AssignmentValidationError("assignment items must use tenant-local published versions")
+    ordered_versions = [by_id[version_id] for version_id in question_version_ids]
+    if any(version.question_type not in allowed_types for version in ordered_versions):
+        raise AssignmentValidationError("assignment subject does not match question types")
+    return ordered_versions
 
 
 def publish_assignment(session: Session, assignment: Assignment, *, teacher_id: UUID) -> Assignment:

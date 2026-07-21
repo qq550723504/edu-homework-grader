@@ -40,6 +40,7 @@ from ..services.assignments import (
     SubmissionConflictError,
     submit_attempt,
     is_mathjson_item,
+    replace_assignment_items,
 )
 
 
@@ -53,6 +54,14 @@ class CreateAssignmentRequest(BaseModel):
     subject: str = Field(min_length=1, max_length=30)
     due_at: datetime
     submission_rule: dict[str, object]
+    question_version_ids: list[UUID]
+
+
+class UpdateAssignmentRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    due_at: datetime
+    submission_rule: dict[str, object]
+    question_version_ids: list[UUID]
 
 
 class AddAssignmentItemRequest(BaseModel):
@@ -120,7 +129,7 @@ def create_assignment_route(
     body: CreateAssignmentRequest,
     principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
     session: Annotated[Session, Depends(get_session)],
-) -> dict[str, str]:
+) -> dict[str, object]:
     try:
         session.rollback()
         with session.begin():
@@ -133,12 +142,57 @@ def create_assignment_route(
                 subject=body.subject,
                 due_at=body.due_at,
                 submission_rule_json=body.submission_rule,
+                question_version_ids=body.question_version_ids,
             )
     except AssignmentAccessError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
         ) from None
-    return {"id": str(assignment.id), "status": assignment.status.value}
+    except AssignmentValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from error
+    return {
+        "id": str(assignment.id),
+        "status": assignment.status.value,
+        "positions": [item.position for item in assignment.items],
+    }
+
+
+@router.put("/{assignment_id}")
+def update_assignment_route(
+    assignment_id: UUID,
+    body: UpdateAssignmentRequest,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    try:
+        session.rollback()
+        with session.begin():
+            assignment = get_teacher_assignment(
+                session,
+                tenant_id=UUID(principal.tenant_id),
+                teacher_id=UUID(principal.user_id),
+                assignment_id=assignment_id,
+            )
+            if assignment.status.value != "draft":
+                raise AssignmentStateError("only draft assignments can be updated")
+            assignment.title = body.title
+            assignment.due_at = body.due_at
+            assignment.submission_rule_json = body.submission_rule
+            items = replace_assignment_items(
+                session,
+                assignment,
+                teacher_id=UUID(principal.user_id),
+                question_version_ids=body.question_version_ids,
+            )
+    except AssignmentAccessError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found") from None
+    except AssignmentStateError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    except AssignmentValidationError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
+    return {"id": str(assignment.id), "status": assignment.status.value, "positions": [item.position for item in items]}
 
 
 @router.post("/{assignment_id}/items", status_code=status.HTTP_201_CREATED)
