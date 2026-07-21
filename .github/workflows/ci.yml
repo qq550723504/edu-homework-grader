@@ -29,26 +29,33 @@ jobs:
 
   python:
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.non_docs == 'true'
     runs-on: ubuntu-latest
     steps:
+      - name: Skip docs-only pull request
+        if: needs.changes.outputs.non_docs != 'true'
+        run: echo "Skipping Python checks for a docs-only pull request."
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.non_docs == 'true'
       - uses: actions/setup-python@v5
+        if: needs.changes.outputs.non_docs == 'true'
         with:
           python-version: "3.13"
           cache: pip
       - name: Install Python packages
+        if: needs.changes.outputs.non_docs == 'true'
         run: make install-python
       - name: Check Python formatting
+        if: needs.changes.outputs.non_docs == 'true'
         run: python -m ruff format --check packages/processor-policy apps/api services/grader
       - name: Lint Python
+        if: needs.changes.outputs.non_docs == 'true'
         run: python -m ruff check packages/processor-policy apps/api services/grader
       - name: Test Python packages
+        if: needs.changes.outputs.non_docs == 'true'
         run: make test
 
   migrations:
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.non_docs == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -72,14 +79,21 @@ jobs:
       KEYCLOAK_ADMIN_PASSWORD: ci-keycloak-admin-password
       KEYCLOAK_POSTGRES_PASSWORD: ci-keycloak-postgres-password
     steps:
+      - name: Skip docs-only pull request
+        if: needs.changes.outputs.non_docs != 'true'
+        run: echo "Skipping migration checks for a docs-only pull request."
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.non_docs == 'true'
       - uses: actions/setup-python@v5
+        if: needs.changes.outputs.non_docs == 'true'
         with:
           python-version: "3.13"
           cache: pip
       - name: Install Python packages
+        if: needs.changes.outputs.non_docs == 'true'
         run: make install-python
       - name: Upgrade, downgrade, and re-upgrade migrations
+        if: needs.changes.outputs.non_docs == 'true'
         run: |
           python -m alembic -c apps/api/alembic.ini upgrade head
           python -m alembic -c apps/api/alembic.ini downgrade base
@@ -87,7 +101,6 @@ jobs:
 
   compose:
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.non_docs == 'true'
     runs-on: ubuntu-latest
     env:
       POSTGRES_PASSWORD: ci-postgres-password
@@ -97,11 +110,18 @@ jobs:
       KEYCLOAK_ADMIN_PASSWORD: ci-keycloak-admin-password
       KEYCLOAK_POSTGRES_PASSWORD: ci-keycloak-postgres-password
     steps:
+      - name: Skip docs-only pull request
+        if: needs.changes.outputs.non_docs != 'true'
+        run: echo "Skipping Compose checks for a docs-only pull request."
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.non_docs == 'true'
       - uses: docker/setup-buildx-action@v4
+        if: needs.changes.outputs.non_docs == 'true'
       - name: Validate Compose configuration
+        if: needs.changes.outputs.non_docs == 'true'
         run: docker compose config --quiet
       - name: Build application images
+        if: needs.changes.outputs.non_docs == 'true'
         uses: docker/bake-action@v7
         with:
           source: .
@@ -113,7 +133,6 @@ jobs:
 
   live-grader-integration:
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.non_docs == 'true'
     runs-on: ubuntu-latest
     env:
       POSTGRES_PASSWORD: ci-postgres-password
@@ -123,15 +142,23 @@ jobs:
       KEYCLOAK_ADMIN_PASSWORD: ci-keycloak-admin-password
       KEYCLOAK_POSTGRES_PASSWORD: ci-keycloak-postgres-password
     steps:
+      - name: Skip docs-only pull request
+        if: needs.changes.outputs.non_docs != 'true'
+        run: echo "Skipping live Grader checks for a docs-only pull request."
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.non_docs == 'true'
       - uses: docker/setup-buildx-action@v4
+        if: needs.changes.outputs.non_docs == 'true'
       - uses: actions/setup-python@v5
+        if: needs.changes.outputs.non_docs == 'true'
         with:
           python-version: "3.13"
           cache: pip
       - name: Install Core API and Grader packages
+        if: needs.changes.outputs.non_docs == 'true'
         run: make install-python
       - name: Build real Grader dependencies
+        if: needs.changes.outputs.non_docs == 'true'
         uses: docker/bake-action@v7
         with:
           source: .
@@ -141,78 +168,99 @@ jobs:
           targets: grader,languagetool
           load: true
       - name: Start real Grader dependencies
+        if: needs.changes.outputs.non_docs == 'true'
         run: docker compose up --detach --wait --no-build languagetool grader
       - name: Exercise Core API HTTP Grader adapter
+        if: needs.changes.outputs.non_docs == 'true'
         env:
           LIVE_GRADER_INTEGRATION: "1"
           GRADER_BASE_URL: http://localhost:8010
         run: python -m pytest apps/api/tests/test_live_grader_integration.py -q
       - name: Collect Grader logs
-        if: always()
+        if: needs.changes.outputs.non_docs == 'true' && always()
         run: docker compose logs grader languagetool
       - name: Stop Grader dependencies
-        if: always()
+        if: needs.changes.outputs.non_docs == 'true' && always()
         run: docker compose down --volumes --remove-orphans
 
   web:
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.non_docs == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: apps/web
     steps:
+      - name: Skip docs-only pull request
+        if: needs.changes.outputs.non_docs != 'true'
+        run: echo "Skipping web checks for a docs-only pull request."
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.non_docs == 'true'
       - uses: actions/setup-node@v4
+        if: needs.changes.outputs.non_docs == 'true'
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - uses: actions/setup-python@v5
+        if: needs.changes.outputs.non_docs == 'true'
         with:
           python-version: "3.13"
           cache: pip
       - name: Install Python API runtime
+        if: needs.changes.outputs.non_docs == 'true'
         working-directory: .
         run: make install-python
       - name: Install web dependencies
+        if: needs.changes.outputs.non_docs == 'true'
         run: npm ci
       - name: Run unit tests
+        if: needs.changes.outputs.non_docs == 'true'
         run: npm test
       - name: Build web application
+        if: needs.changes.outputs.non_docs == 'true'
         run: npm run build
       - name: Test E2E process supervisor
+        if: needs.changes.outputs.non_docs == 'true'
         run: npm run test:e2e-runtime
 
   browser-e2e:
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.non_docs == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: apps/web
     steps:
+      - name: Skip docs-only pull request
+        if: needs.changes.outputs.non_docs != 'true'
+        run: echo "Skipping browser E2E for a docs-only pull request."
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.non_docs == 'true'
       - uses: actions/setup-node@v4
+        if: needs.changes.outputs.non_docs == 'true'
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - uses: actions/setup-python@v5
+        if: needs.changes.outputs.non_docs == 'true'
         with:
           python-version: "3.13"
           cache: pip
       - name: Install Python API runtime
+        if: needs.changes.outputs.non_docs == 'true'
         working-directory: .
         run: make install-python
       - name: Install web dependencies
+        if: needs.changes.outputs.non_docs == 'true'
         run: npm ci
       - name: Install Chromium
+        if: needs.changes.outputs.non_docs == 'true'
         run: npx playwright install --with-deps chromium
       - name: Run student vertical-slice browser acceptance
+        if: needs.changes.outputs.non_docs == 'true'
         run: npm run test:e2e
       - name: Upload browser artifacts
-        if: failure()
+        if: needs.changes.outputs.non_docs == 'true' && failure()
         uses: actions/upload-artifact@v4
         with:
           name: browser-e2e-artifacts

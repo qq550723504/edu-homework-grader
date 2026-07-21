@@ -20,7 +20,7 @@ def job_block(workflow: str, job_name: str) -> str:
     return workflow[job_start:] if next_job_start == -1 else workflow[job_start:next_job_start]
 
 
-def test_ci_skips_heavy_jobs_only_for_docs_only_pull_requests() -> None:
+def test_ci_completes_required_jobs_without_heavy_steps_for_docs_only_pull_requests() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding="utf-8")
 
     assert "pull-requests: read" in workflow
@@ -34,5 +34,7 @@ def test_ci_skips_heavy_jobs_only_for_docs_only_pull_requests() -> None:
     for job_name in HEAVY_JOB_NAMES:
         job = job_block(workflow, job_name)
         assert "needs: changes" in job
-        assert "github.event_name != 'pull_request'" in job
-        assert "needs.changes.outputs.non_docs == 'true'" in job
+        assert "if: github.event_name != 'pull_request'" not in job
+        assert "Skip docs-only pull request" in job
+        assert "if: needs.changes.outputs.non_docs != 'true'" in job
+        assert "if: needs.changes.outputs.non_docs == 'true'" in job
