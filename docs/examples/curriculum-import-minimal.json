@@ -1,0 +1,39 @@
+{
+  "profile": {
+    "code": "example-math-2026",
+    "name": "Example Mathematics",
+    "jurisdiction": "example",
+    "version_label": "2026"
+  },
+  "source": {
+    "issuer": "Example Education Board",
+    "title": "Example curriculum metadata",
+    "canonical_url": "https://example.invalid/curriculum",
+    "document_number": "EX-2026-01",
+    "license": "CC BY 4.0",
+    "curated_at": "2026-07-21"
+  },
+  "grade_mappings": [
+    {
+      "internal_level": "G1",
+      "external_label": "Grade 1",
+      "position": 1
+    }
+  ],
+  "objectives": [
+    {
+      "code": "EX-MATH-G1-NUM-001",
+      "grade_level": "G1",
+      "subject": "mathematics",
+      "domain": "number",
+      "text": "Represent small whole numbers with drawings and objects.",
+      "source_locator": "section 1",
+      "allowed_question_types": ["M1"],
+      "difficulty_min": 0.0,
+      "difficulty_max": 0.3,
+      "activity_type": "scored_question",
+      "change_summary": "Initial curated objective"
+    }
+  ],
+  "prerequisites": []
+}

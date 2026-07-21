@@ -22,9 +22,11 @@ from ..models import (
     CurriculumRevisionStatus,
     CurriculumSourceRecord,
     User,
+    utc_now,
 )
 from .curriculum import (
     CurriculumValidationError,
+    activate_objective_revision,
     create_objective_revision,
     create_prerequisite,
     validate_revision_payload,
@@ -109,6 +111,10 @@ class ImportValidationError(ValueError):
 
 class StaleImportBaselineError(ValueError):
     """Raised when the catalogue changed after a dry-run was generated."""
+
+
+class ImportLifecycleError(ValueError):
+    """Raised when a governed import lifecycle transition is invalid."""
 
 
 def parse_csv_document(
@@ -202,6 +208,7 @@ def apply_import(
     document: ImportDocument,
     analysis: ImportAnalysis,
     actor: User,
+    input_format: str = "json",
 ) -> CurriculumImportBatch:
     if not analysis.can_apply:
         raise ImportValidationError("cannot apply an import with validation problems")
@@ -230,6 +237,7 @@ def apply_import(
             document=document,
             analysis=analysis,
             actor=actor,
+            input_format=input_format,
         )
 
     source = CurriculumSourceRecord(
@@ -266,7 +274,7 @@ def apply_import(
 
     batch = CurriculumImportBatch(
         profile=profile,
-        input_format="json",
+        input_format=input_format,
         content_digest=analysis.normalized_digest,
         baseline_fingerprint=analysis.catalogue_fingerprint,
         status=CurriculumImportStatus.DRAFT,
@@ -323,6 +331,7 @@ def _apply_profile_update(
     document: ImportDocument,
     analysis: ImportAnalysis,
     actor: User,
+    input_format: str,
 ) -> CurriculumImportBatch:
     mappings = {
         mapping.internal_level: mapping
@@ -353,7 +362,7 @@ def _apply_profile_update(
     updates = 0
     batch = CurriculumImportBatch(
         profile=profile,
-        input_format="json",
+        input_format=input_format,
         content_digest=analysis.normalized_digest,
         baseline_fingerprint=analysis.catalogue_fingerprint,
         status=CurriculumImportStatus.DRAFT,
@@ -430,6 +439,75 @@ def _apply_profile_update(
         "updates": updates,
         "unchanged": len(document.objectives) - additions - updates,
     }
+    session.flush()
+    return batch
+
+
+def submit_import_for_review(
+    session: Session, *, batch: CurriculumImportBatch
+) -> CurriculumImportBatch:
+    if batch.status is not CurriculumImportStatus.DRAFT:
+        raise ImportLifecycleError("only draft imports can be submitted for review")
+    if batch.issues:
+        raise ImportLifecycleError("imports with validation issues cannot be submitted for review")
+    batch.status = CurriculumImportStatus.IN_REVIEW
+    if batch.profile.status is CurriculumProfileStatus.DRAFT:
+        batch.profile.status = CurriculumProfileStatus.IN_REVIEW
+    for revision in batch.objective_revisions:
+        if revision.objective.status is CurriculumProfileStatus.DRAFT:
+            revision.objective.status = CurriculumProfileStatus.IN_REVIEW
+        if revision.status is CurriculumRevisionStatus.DRAFT:
+            revision.status = CurriculumRevisionStatus.IN_REVIEW
+    session.flush()
+    return batch
+
+
+def review_import(
+    session: Session,
+    *,
+    batch: CurriculumImportBatch,
+    reviewer: User,
+    approve: bool,
+) -> CurriculumImportBatch:
+    if batch.status is not CurriculumImportStatus.IN_REVIEW:
+        raise ImportLifecycleError("only in-review imports can be reviewed")
+    if reviewer.id == batch.submitted_by_user_id:
+        raise ImportLifecycleError("importer cannot review their own import")
+    batch.reviewed_by_user_id = reviewer.id
+    batch.reviewed_at = utc_now()
+    if not approve:
+        batch.status = CurriculumImportStatus.RETIRED
+        if batch.profile.status is CurriculumProfileStatus.IN_REVIEW:
+            batch.profile.status = CurriculumProfileStatus.RETIRED
+        for revision in batch.objective_revisions:
+            revision.status = CurriculumRevisionStatus.RETIRED
+            if revision.objective.status is CurriculumProfileStatus.IN_REVIEW:
+                revision.objective.status = CurriculumProfileStatus.RETIRED
+    session.flush()
+    return batch
+
+
+def activate_import(
+    session: Session,
+    *,
+    batch: CurriculumImportBatch,
+    actor: User,
+) -> CurriculumImportBatch:
+    if batch.status is not CurriculumImportStatus.IN_REVIEW:
+        raise ImportLifecycleError("only in-review imports can be activated")
+    if batch.reviewed_by_user_id != actor.id or actor.id == batch.submitted_by_user_id:
+        raise ImportLifecycleError("a different approving reviewer must activate the import")
+    if batch.profile.status is CurriculumProfileStatus.IN_REVIEW:
+        batch.profile.status = CurriculumProfileStatus.ACTIVE
+    for revision in batch.objective_revisions:
+        if revision.objective.status is CurriculumProfileStatus.IN_REVIEW:
+            revision.objective.status = CurriculumProfileStatus.ACTIVE
+    session.flush()
+    for revision in batch.objective_revisions:
+        activate_objective_revision(session, revision=revision, reviewer_user_id=actor.id)
+    batch.status = CurriculumImportStatus.ACTIVE
+    batch.activated_by_user_id = actor.id
+    batch.activated_at = utc_now()
     session.flush()
     return batch
 

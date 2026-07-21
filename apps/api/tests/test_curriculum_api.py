@@ -72,6 +72,14 @@ def curriculum_context(session: Session, monkeypatch: pytest.MonkeyPatch) -> Cur
         ),
         User(
             tenant=tenant,
+            role=Role.ADMIN,
+            oidc_issuer=ISSUER,
+            oidc_subject="reviewer-subject",
+            display_name="Reviewer",
+            work_email="reviewer@example.test",
+        ),
+        User(
+            tenant=tenant,
             role=Role.TEACHER,
             oidc_issuer=ISSUER,
             oidc_subject="teacher-subject",
@@ -133,11 +141,14 @@ def curriculum_context(session: Session, monkeypatch: pytest.MonkeyPatch) -> Cur
 
     monkeypatch.setattr(settings, "oidc_issuer", ISSUER)
     monkeypatch.setattr(settings, "oidc_tenant_slug", "pilot")
-    monkeypatch.setattr(settings, "curriculum_admin_subjects", "admin-subject")
+    monkeypatch.setattr(settings, "curriculum_admin_subjects", "admin-subject,reviewer-subject")
     app.dependency_overrides[get_session] = lambda: session
     app.dependency_overrides[get_token_verifier] = lambda: StaticVerifier(
         {
             "admin-token": VerifiedIdentity(issuer=ISSUER, subject="admin-subject", school_id=None),
+            "reviewer-token": VerifiedIdentity(
+                issuer=ISSUER, subject="reviewer-subject", school_id=None
+            ),
             "teacher-token": VerifiedIdentity(
                 issuer=ISSUER, subject="teacher-subject", school_id=None
             ),
@@ -157,6 +168,42 @@ def curriculum_context(session: Session, monkeypatch: pytest.MonkeyPatch) -> Cur
 
 def headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def import_document() -> dict[str, object]:
+    return {
+        "profile": {
+            "code": "example-math-2026",
+            "name": "Example Mathematics",
+            "jurisdiction": "example",
+            "version_label": "2026",
+        },
+        "source": {
+            "issuer": "Example Education Board",
+            "title": "Example curriculum metadata",
+            "canonical_url": "https://example.invalid/curriculum",
+            "document_number": "EX-2026-01",
+            "license": "CC BY 4.0",
+            "curated_at": "2026-07-21",
+        },
+        "grade_mappings": [{"internal_level": "G1", "external_label": "Grade 1", "position": 1}],
+        "objectives": [
+            {
+                "code": "EX-MATH-G1-NUM-001",
+                "grade_level": "G1",
+                "subject": "mathematics",
+                "domain": "number",
+                "text": "Represent small whole numbers with drawings and objects.",
+                "source_locator": "section 1",
+                "allowed_question_types": ["M1"],
+                "difficulty_min": 0.0,
+                "difficulty_max": 0.3,
+                "activity_type": "scored_question",
+                "change_summary": "Initial curated objective",
+            }
+        ],
+        "prerequisites": [],
+    }
 
 
 def test_openapi_exposes_curriculum_routes(curriculum_context: CurriculumContext) -> None:
@@ -525,3 +572,52 @@ def test_admin_creates_requires_prerequisite_and_rejects_a_cycle(
     assert created.json()["relation_type"] == "requires"
     assert cycle.status_code == 422
     assert cycle.json()["detail"] == "prerequisite cycle detected"
+
+
+def test_import_lifecycle_requires_a_different_admin_to_review_and_activate(
+    curriculum_context: CurriculumContext,
+) -> None:
+    dry_run = curriculum_context.client.post(
+        "/v1/admin/curriculum/imports/dry-run",
+        json={"format": "json", "document": import_document()},
+        headers=headers("admin-token"),
+    )
+
+    assert dry_run.status_code == 200
+    assert dry_run.json()["can_apply"] is True
+    created = curriculum_context.client.post(
+        "/v1/admin/curriculum/imports",
+        json={
+            "format": "json",
+            "document": import_document(),
+            "catalogue_fingerprint": dry_run.json()["catalogue_fingerprint"],
+        },
+        headers=headers("admin-token"),
+    )
+
+    assert created.status_code == 201
+    batch_id = created.json()["id"]
+    submitted = curriculum_context.client.post(
+        f"/v1/admin/curriculum/imports/{batch_id}/submit-review",
+        headers=headers("admin-token"),
+    )
+    assert submitted.status_code == 200
+    own_review = curriculum_context.client.post(
+        f"/v1/admin/curriculum/imports/{batch_id}/review",
+        json={"approve": True},
+        headers=headers("admin-token"),
+    )
+    assert own_review.status_code == 409
+    reviewed = curriculum_context.client.post(
+        f"/v1/admin/curriculum/imports/{batch_id}/review",
+        json={"approve": True},
+        headers=headers("reviewer-token"),
+    )
+    assert reviewed.status_code == 200
+    activated = curriculum_context.client.post(
+        f"/v1/admin/curriculum/imports/{batch_id}/activate",
+        headers=headers("reviewer-token"),
+    )
+
+    assert activated.status_code == 200
+    assert activated.json()["status"] == "active"
