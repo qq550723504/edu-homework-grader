@@ -703,6 +703,94 @@ def test_cross_tenant_published_questions_are_never_queried(session: Session) ->
     }
 
 
+def test_duplicate_feature_summary_uses_the_gate_snapshot(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    draft = generation_draft(session, candidate_json=valid_m1_candidate("Calculate two plus two."))
+    add_published_question(session, draft=draft, prompt="Name the capital of France.")
+    monkeypatch.setattr(verification.settings, "ai_duplicate_similarity_threshold", 0.92)
+
+    class MutatingSemanticGrader(PassingGrader):
+        def semantic_similarity(self, query: str, comparisons: list[str]) -> list[float]:
+            verification.settings.ai_duplicate_similarity_threshold = 0.5
+            add_batch_draft(
+                session,
+                draft=draft,
+                prompt="Added after the comparison snapshot",
+                ordinal=2,
+            )
+            return [0.1]
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=MutatingSemanticGrader()
+    )
+
+    assert run.status is ValidationRunStatus.PASSED
+    assert run.feature_summary_json == {
+        "finding_count": 0,
+        "fingerprint_version": "question-fingerprint-v1",
+        "similarity_threshold": 0.92,
+        "comparison_counts": {"published_question": 1, "batch_candidate": 0},
+    }
+
+
+def test_normalized_comparators_are_deduplicated_across_sources_with_published_precedence(
+    session: Session,
+) -> None:
+    draft = generation_draft(session, candidate_json=valid_m1_candidate("Calculate two plus two."))
+    add_published_question(session, draft=draft, prompt="Name the capital of France.")
+    add_batch_draft(
+        session,
+        draft=draft,
+        prompt="  ＮＡＭＥ   THE CAPITAL OF FRANCE.  ",
+        ordinal=2,
+    )
+    grader = SemanticGrader([[0.96]])
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    finding = finding_by_code(run, "duplicate_semantic_near_match")
+    assert grader.semantic_requests == [
+        ("Calculate two plus two.", ["Name the capital of France."])
+    ]
+    assert finding.evidence_json == {
+        "comparison": "published_question",
+        "method": "semantic",
+        "threshold_band": "at_or_above",
+    }
+    assert run.feature_summary_json["comparison_counts"] == {
+        "published_question": 1,
+        "batch_candidate": 0,
+    }
+
+
+def test_semantic_comparators_are_deduplicated_before_chunking(session: Session) -> None:
+    draft = generation_draft(session, candidate_json=valid_m1_candidate("Calculate two plus two."))
+    for ordinal in range(2, 131):
+        add_batch_draft(
+            session,
+            draft=draft,
+            prompt=f"Distinct comparison prompt {ordinal}",
+            ordinal=ordinal,
+        )
+    add_batch_draft(
+        session,
+        draft=draft,
+        prompt="  DISTINCT   COMPARISON PROMPT 2  ",
+        ordinal=131,
+    )
+    grader = SemanticGrader([[0.1] * 128, [0.1]])
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    assert run.status is ValidationRunStatus.PASSED
+    assert [len(comparisons) for _, comparisons in grader.semantic_requests] == [128, 1]
+    assert run.feature_summary_json["comparison_counts"] == {
+        "published_question": 0,
+        "batch_candidate": 129,
+    }
+
+
 def test_distinct_candidate_passes_duplicate_gate(session: Session) -> None:
     draft = generation_draft(session, candidate_json=valid_m1_candidate("Calculate two plus two."))
     add_published_question(session, draft=draft, prompt="Name the capital of France.")
@@ -773,6 +861,27 @@ def test_multi_chunk_semantic_failure_fails_closed(session: Session) -> None:
     assert finding.evidence_json == {"category": "similarity_unavailable"}
     assert [len(comparisons) for _, comparisons in grader.semantic_requests] == [128, 1]
     assert "private" not in finding.remediation
+
+
+def test_later_chunk_failure_overrides_an_earlier_above_threshold_match(
+    session: Session,
+) -> None:
+    draft = generation_draft(session, candidate_json=valid_m1_candidate("Calculate two plus two."))
+    for ordinal in range(2, 131):
+        add_batch_draft(
+            session,
+            draft=draft,
+            prompt=f"Distinct comparison prompt {ordinal}",
+            ordinal=ordinal,
+        )
+    grader = SemanticGrader([[0.99, *([0.1] * 127)], RuntimeError("private dependency diagnostic")])
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    finding = finding_by_code(run, "duplicate_semantic_check_unavailable")
+    assert finding.evidence_json == {"category": "similarity_unavailable"}
+    assert "duplicate_semantic_near_match" not in finding_codes(run)
+    assert [len(comparisons) for _, comparisons in grader.semantic_requests] == [128, 1]
 
 
 def test_valid_m1_candidate_persists_a_passing_run_and_rerun(session: Session) -> None:
