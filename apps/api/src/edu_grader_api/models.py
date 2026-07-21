@@ -733,13 +733,11 @@ class GeneratedQuestionDraft(Base):
 
     @validates("candidate_json")
     def _refresh_prompt_fingerprints(self, _key: str, candidate_json: object) -> dict[str, object]:
-        if isinstance(candidate_json, dict) and isinstance(
-            prompt := candidate_json.get("prompt"), str
-        ):
-            fingerprints = fingerprint_prompt(prompt)
-            self.fingerprint_version = fingerprints.version
-            self.exact_prompt_hash = fingerprints.exact_hash
-            self.normalized_prompt_hash = fingerprints.normalized_hash
+        prompt = candidate_json.get("prompt") if isinstance(candidate_json, dict) else None
+        fingerprints = fingerprint_prompt(prompt if isinstance(prompt, str) else "")
+        self.fingerprint_version = fingerprints.version
+        self.exact_prompt_hash = fingerprints.exact_hash
+        self.normalized_prompt_hash = fingerprints.normalized_hash
         return candidate_json
 
 

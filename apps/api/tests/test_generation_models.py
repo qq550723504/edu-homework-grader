@@ -161,3 +161,65 @@ def test_generated_draft_candidate_prompt_assignment_refreshes_persisted_fingerp
     assert stored.fingerprint_version == expected.version
     assert stored.exact_prompt_hash == expected.exact_hash
     assert stored.normalized_prompt_hash == expected.normalized_hash
+
+
+@pytest.mark.parametrize(
+    "malformed_candidate_json",
+    [
+        {"question_type": "M1"},
+        {"question_type": "M1", "prompt": 2},
+    ],
+)
+def test_generated_draft_malformed_candidate_assignment_replaces_old_fingerprints(
+    session: Session, malformed_candidate_json: dict[str, object]
+) -> None:
+    tenant = Tenant(slug="pilot", name="Pilot")
+    teacher = User(
+        tenant=tenant,
+        role=Role.TEACHER,
+        oidc_issuer="https://issuer.example.test",
+        oidc_subject="teacher-subject",
+        display_name="Teacher",
+        work_email="teacher@example.test",
+    )
+    session.add(teacher)
+    session.flush()
+    job = GenerationJob(
+        tenant_id=tenant.id,
+        teacher_user_id=teacher.id,
+        curriculum_objective_revision_id=uuid4(),
+        idempotency_key="malformed-fingerprint-draft",
+        status=GenerationJobStatus.READY_FOR_REVIEW,
+        requested_count=1,
+    )
+    attempt = GenerationAttempt(
+        job=job,
+        attempt_number=1,
+        provider_name="fake",
+        model_version="fake-v1",
+        prompt_version="generator-v1",
+        status="succeeded",
+    )
+    draft = GeneratedQuestionDraft(
+        job=job,
+        generation_attempt=attempt,
+        ordinal=1,
+        content_hash="c" * 64,
+        candidate_json={"question_type": "M1", "prompt": "What is 2 + 2?"},
+        teacher_state="pending_review",
+    )
+    session.add(draft)
+    session.commit()
+
+    old_exact_hash = draft.exact_prompt_hash
+    draft.candidate_json = malformed_candidate_json
+    session.commit()
+    session.expire_all()
+
+    stored = session.get(GeneratedQuestionDraft, draft.id)
+    assert stored is not None
+    expected = fingerprint_prompt("")
+    assert stored.exact_prompt_hash != old_exact_hash
+    assert stored.fingerprint_version == expected.version
+    assert stored.exact_prompt_hash == expected.exact_hash
+    assert stored.normalized_prompt_hash == expected.normalized_hash
