@@ -12,10 +12,24 @@ from edu_grader_api.db import Base, get_session
 from edu_grader_api.main import app
 from edu_grader_api.models import QuestionTestCase, QuestionVersion, Role, Tenant, User
 from edu_grader_api.routers import questions as questions_router
+from edu_grader_api.services.questions import _unmatched_text
 from edu_grader_api.settings import settings
 
 
 ISSUER = "http://localhost:8080/realms/edu-grader"
+
+
+def test_english_incorrect_template_uses_terminal_punctuation_normalization() -> None:
+    assert (
+        _unmatched_text(
+            {
+                "accepted_answers": ["x."],
+                "normalization": {"ignore_terminal_punctuation": True},
+            },
+            "accepted_answers",
+        )
+        == "q"
+    )
 
 
 @dataclass

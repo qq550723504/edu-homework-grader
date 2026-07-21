@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Protocol
 import unicodedata
 from uuid import UUID
@@ -21,6 +22,10 @@ from ..models import (
     utc_now,
 )
 from ..policies import POLICY_SCHEMAS, validate_new_question_policy, validate_policy
+
+
+_WHITESPACE = re.compile(r"\s+")
+_TERMINAL_PUNCTUATION = re.compile(r"[.!?。！？]+$")
 
 
 class QuestionVersionAccessError(PermissionError):
@@ -418,7 +423,7 @@ def _e4_incorrect_answer(evidence_phrase: str) -> str:
 
 def _unmatched_text(rule_json: dict[str, object], key: str) -> str:
     accepted = {
-        unicodedata.normalize("NFKC", value).strip().casefold()
+        _normalize_english_template_text(value, rule_json)
         for value in rule_json.get(key, [])
         if isinstance(value, str)
     }
@@ -426,6 +431,19 @@ def _unmatched_text(rule_json: dict[str, object], key: str) -> str:
         if candidate not in accepted:
             return candidate
     return _e4_incorrect_answer("".join(accepted))
+
+
+def _normalize_english_template_text(value: str, rule_json: dict[str, object]) -> str:
+    settings = rule_json.get("normalization")
+    normalization = settings if isinstance(settings, dict) else {}
+    normalized = unicodedata.normalize("NFKC", value).strip()
+    if normalization.get("collapse_whitespace", True) is not False:
+        normalized = _WHITESPACE.sub(" ", normalized)
+    if normalization.get("ignore_terminal_punctuation", True) is not False:
+        normalized = _TERMINAL_PUNCTUATION.sub("", normalized).rstrip()
+    if normalization.get("ignore_case", True) is not False:
+        normalized = normalized.casefold()
+    return normalized
 
 
 def publish_question_version(
