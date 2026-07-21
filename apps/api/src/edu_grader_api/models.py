@@ -483,7 +483,7 @@ class CurriculumImportBatch(Base):
     activated_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     change_summary: Mapped[str] = mapped_column(String(1_000), nullable=False)
-    summary_json: Mapped[dict[str, int]] = mapped_column(
+    summary_json: Mapped[dict[str, object]] = mapped_column(
         JSONB().with_variant(JSON(), "sqlite"), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

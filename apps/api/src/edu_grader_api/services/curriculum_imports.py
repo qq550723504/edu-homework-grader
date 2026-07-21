@@ -377,14 +377,12 @@ def _apply_profile_update(
                 internal_level=mapping_data.internal_level,
                 external_label=mapping_data.external_label,
                 position=mapping_data.position,
-                complexity_rules_json=mapping_data.complexity_rules,
             )
             session.add(mapping)
             mappings[mapping_data.internal_level] = mapping
         else:
             mapping.external_label = mapping_data.external_label
             mapping.position = mapping_data.position
-            mapping.complexity_rules_json = mapping_data.complexity_rules
     session.flush()
 
     objectives = {
@@ -473,6 +471,9 @@ def _apply_profile_update(
         "additions": additions,
         "updates": updates,
         "unchanged": len(document.objectives) - additions - updates,
+        "proposed_grade_complexity_rules": {
+            mapping.internal_level: mapping.complexity_rules for mapping in document.grade_mappings
+        },
     }
     session.flush()
     return batch
@@ -534,6 +535,28 @@ def activate_import(
         raise ImportLifecycleError("a different approving reviewer must activate the import")
     if batch.profile.status is CurriculumProfileStatus.IN_REVIEW:
         batch.profile.status = CurriculumProfileStatus.ACTIVE
+    proposed_rules = batch.summary_json.get("proposed_grade_complexity_rules", {})
+    if not isinstance(proposed_rules, dict):
+        raise ImportLifecycleError("invalid proposed grade complexity rules")
+    mappings = {
+        mapping.internal_level: mapping
+        for mapping in session.scalars(
+            select(CurriculumGradeMapping).where(
+                CurriculumGradeMapping.profile_id == batch.profile_id
+            )
+        )
+    }
+    complexity_rule_updates: list[tuple[CurriculumGradeMapping, dict[str, int]]] = []
+    for internal_level, proposed_rule_document in proposed_rules.items():
+        if not isinstance(internal_level, str) or internal_level not in mappings:
+            raise ImportLifecycleError("invalid proposed grade complexity rules")
+        try:
+            rules = validate_complexity_rules(proposed_rule_document)
+        except ValueError as error:
+            raise ImportLifecycleError("invalid proposed grade complexity rules") from error
+        complexity_rule_updates.append((mappings[internal_level], rules))
+    for mapping, rules in complexity_rule_updates:
+        mapping.complexity_rules_json = rules
     for revision in batch.objective_revisions:
         if revision.objective.status is CurriculumProfileStatus.IN_REVIEW:
             revision.objective.status = CurriculumProfileStatus.ACTIVE

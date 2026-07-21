@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from edu_grader_api.models import (
     Base,
+    CurriculumGradeMapping,
     CurriculumImportStatus,
     CurriculumObjective,
     CurriculumObjectiveRevision,
@@ -20,10 +21,13 @@ from edu_grader_api.models import (
 from edu_grader_api.services.curriculum_imports import (
     ImportDocument,
     StaleImportBaselineError,
+    activate_import,
     analyse_import,
     apply_import,
     export_active_profile,
     parse_csv_document,
+    review_import,
+    submit_import_for_review,
 )
 
 
@@ -86,6 +90,20 @@ def admin_user(session: Session) -> User:
         oidc_subject="curriculum-admin",
         display_name="Curriculum Admin",
         work_email="admin@example.test",
+    )
+    session.add(user)
+    session.flush()
+    return user
+
+
+def reviewer_user(session: Session, actor: User) -> User:
+    user = User(
+        tenant=actor.tenant,
+        role=Role.ADMIN,
+        oidc_issuer="https://issuer.example.test",
+        oidc_subject="curriculum-reviewer",
+        display_name="Curriculum Reviewer",
+        work_email="reviewer@example.test",
     )
     session.add(user)
     session.flush()
@@ -297,6 +315,77 @@ def test_changed_active_objective_creates_a_new_draft_revision(session: Session)
     ]
     assert revisions[1].import_batch_id == batch.id
     assert revisions[1].revision_number == 2
+
+
+def test_rejected_import_keeps_active_grade_complexity_rules_unchanged(session: Session) -> None:
+    actor = admin_user(session)
+    initial_document = ImportDocument.model_validate(MINIMAL_DOCUMENT)
+    apply_import(
+        session,
+        document=initial_document,
+        analysis=analyse_import(session, initial_document),
+        actor=actor,
+    )
+    profile = session.scalar(select(CurriculumProfile))
+    mapping = session.scalar(select(CurriculumGradeMapping))
+    assert profile is not None and mapping is not None
+    profile.status = CurriculumProfileStatus.ACTIVE
+    mapping.complexity_rules_json = {"max_prompt_units": 40}
+    session.flush()
+
+    changed_data = deepcopy(MINIMAL_DOCUMENT)
+    changed_data["grade_mappings"][0]["complexity_rules"] = {"max_prompt_units": 80}
+    changed_document = ImportDocument.model_validate(changed_data)
+    batch = apply_import(
+        session,
+        document=changed_document,
+        analysis=analyse_import(session, changed_document),
+        actor=actor,
+    )
+    assert batch.summary_json["proposed_grade_complexity_rules"] == {"G1": {"max_prompt_units": 80}}
+    submit_import_for_review(session, batch=batch)
+    review_import(session, batch=batch, reviewer=reviewer_user(session, actor), approve=False)
+
+    assert mapping.complexity_rules_json == {"max_prompt_units": 40}
+
+
+def test_approved_import_applies_grade_complexity_rules_only_on_activation(
+    session: Session,
+) -> None:
+    actor = admin_user(session)
+    initial_document = ImportDocument.model_validate(MINIMAL_DOCUMENT)
+    apply_import(
+        session,
+        document=initial_document,
+        analysis=analyse_import(session, initial_document),
+        actor=actor,
+    )
+    profile = session.scalar(select(CurriculumProfile))
+    mapping = session.scalar(select(CurriculumGradeMapping))
+    assert profile is not None and mapping is not None
+    profile.status = CurriculumProfileStatus.ACTIVE
+    mapping.complexity_rules_json = {"max_prompt_units": 40}
+    session.flush()
+
+    changed_data = deepcopy(MINIMAL_DOCUMENT)
+    changed_data["grade_mappings"][0]["complexity_rules"] = VALID_COMPLEXITY_RULES
+    changed_document = ImportDocument.model_validate(changed_data)
+    batch = apply_import(
+        session,
+        document=changed_document,
+        analysis=analyse_import(session, changed_document),
+        actor=actor,
+    )
+    assert batch.summary_json["proposed_grade_complexity_rules"] == {"G1": VALID_COMPLEXITY_RULES}
+    submit_import_for_review(session, batch=batch)
+    reviewer = reviewer_user(session, actor)
+    review_import(session, batch=batch, reviewer=reviewer, approve=True)
+
+    assert mapping.complexity_rules_json == {"max_prompt_units": 40}
+
+    activate_import(session, batch=batch, actor=reviewer)
+
+    assert mapping.complexity_rules_json == VALID_COMPLEXITY_RULES
 
 
 def test_apply_import_rejects_a_dry_run_after_its_catalogue_baseline_changes(
