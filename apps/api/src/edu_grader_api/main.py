@@ -11,6 +11,8 @@ from .routers.admin import router as admin_router
 from .routers.appeals import router as appeals_router
 from .routers.appeals import teacher_router as teacher_appeals_router
 from .routers.classes import router as classes_router
+from .routers.curriculum import admin_router as curriculum_admin_router
+from .routers.curriculum import router as curriculum_router
 from .routers.guardian_consents import router as guardian_consents_router
 from .routers.assignments import router as assignments_router
 from .routers.assignments import student_router as student_assignments_router
@@ -35,6 +37,8 @@ app.include_router(admin_router)
 app.include_router(appeals_router)
 app.include_router(teacher_appeals_router)
 app.include_router(classes_router)
+app.include_router(curriculum_router)
+app.include_router(curriculum_admin_router)
 app.include_router(guardian_consents_router)
 app.include_router(privacy_requests_router)
 app.include_router(assignments_router)
