@@ -317,6 +317,7 @@ class CurriculumGradeMapping(Base):
     note: Mapped[str | None] = mapped_column(String(500))
 
     profile: Mapped[CurriculumProfile] = relationship(back_populates="grade_mappings")
+    objectives: Mapped[list[CurriculumObjective]] = relationship(back_populates="grade_mapping")
 
 
 class CurriculumObjective(Base):
@@ -328,6 +329,9 @@ class CurriculumObjective(Base):
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     profile_id: Mapped[UUID] = mapped_column(ForeignKey("curriculum_profiles.id"), nullable=False)
+    grade_mapping_id: Mapped[UUID] = mapped_column(
+        ForeignKey("curriculum_grade_mappings.id"), nullable=False
+    )
     code: Mapped[str] = mapped_column(String(150), nullable=False)
     subject: Mapped[str] = mapped_column(String(100), nullable=False)
     domain: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -343,6 +347,7 @@ class CurriculumObjective(Base):
     )
 
     profile: Mapped[CurriculumProfile] = relationship(back_populates="objectives")
+    grade_mapping: Mapped[CurriculumGradeMapping] = relationship(back_populates="objectives")
     revisions: Mapped[list[CurriculumObjectiveRevision]] = relationship(back_populates="objective")
 
 

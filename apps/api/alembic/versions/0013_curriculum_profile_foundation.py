@@ -141,6 +141,7 @@ def upgrade() -> None:
         "curriculum_objectives",
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("profile_id", sa.Uuid(), nullable=False),
+        sa.Column("grade_mapping_id", sa.Uuid(), nullable=False),
         sa.Column("code", sa.String(length=150), nullable=False),
         sa.Column("subject", sa.String(length=100), nullable=False),
         sa.Column("domain", sa.String(length=200), nullable=False),
@@ -150,6 +151,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["profile_id"], ["curriculum_profiles.id"]),
+        sa.ForeignKeyConstraint(["grade_mapping_id"], ["curriculum_grade_mappings.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("profile_id", "code", name="uq_curriculum_objective_code"),
     )
@@ -255,6 +257,7 @@ def _seed_initial_catalogue() -> None:
         "curriculum_objectives",
         sa.column("id", sa.Uuid()),
         sa.column("profile_id", sa.Uuid()),
+        sa.column("grade_mapping_id", sa.Uuid()),
         sa.column("code", sa.String()),
         sa.column("subject", sa.String()),
         sa.column("domain", sa.String()),
@@ -335,6 +338,7 @@ def _seed_initial_catalogue() -> None:
         (
             UUID("00000000-0000-0000-0000-000000000151"),
             _PROFILES[0][0],
+            UUID("00000000-0000-0000-0000-000000000001"),
             "CN-K-NUMBER-SENSE-001",
             "early_learning",
             "number_sense",
@@ -343,6 +347,7 @@ def _seed_initial_catalogue() -> None:
         (
             UUID("00000000-0000-0000-0000-000000000152"),
             _PROFILES[1][0],
+            UUID("00000000-0000-0000-0000-000000000004"),
             "CN-COMP-MATH-G1-NUM-001",
             "mathematics",
             "number",
@@ -351,6 +356,7 @@ def _seed_initial_catalogue() -> None:
         (
             UUID("00000000-0000-0000-0000-000000000153"),
             _PROFILES[2][0],
+            UUID("00000000-0000-0000-0000-000000000013"),
             "CN-HS-MATH-G10-ALG-001",
             "mathematics",
             "algebra",
@@ -359,6 +365,7 @@ def _seed_initial_catalogue() -> None:
         (
             UUID("00000000-0000-0000-0000-000000000154"),
             _PROFILES[3][0],
+            UUID("00000000-0000-0000-0000-000000000016"),
             "CEFR-A2-READ-001",
             "english",
             "reading",
@@ -371,10 +378,11 @@ def _seed_initial_catalogue() -> None:
             {
                 "id": item[0],
                 "profile_id": item[1],
-                "code": item[2],
-                "subject": item[3],
-                "domain": item[4],
-                "knowledge_point": item[5],
+                "grade_mapping_id": item[2],
+                "code": item[3],
+                "subject": item[4],
+                "domain": item[5],
+                "knowledge_point": item[6],
                 "status": "active",
                 "created_at": now,
                 "updated_at": now,

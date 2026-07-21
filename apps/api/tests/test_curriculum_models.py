@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from edu_grader_api.models import (
     Base,
     CurriculumActivityType,
+    CurriculumGradeMapping,
     CurriculumObjective,
     CurriculumObjectiveRevision,
     CurriculumPrerequisite,
@@ -63,9 +64,23 @@ def revision(objective: CurriculumObjective, number: int) -> CurriculumObjective
     )
 
 
+def grade_mapping(session: Session, profile: CurriculumProfile) -> CurriculumGradeMapping:
+    mapping = CurriculumGradeMapping(
+        profile=profile,
+        internal_level="G1",
+        external_label="一年级",
+        position=1,
+    )
+    session.add(mapping)
+    session.flush()
+    return mapping
+
+
 def test_objective_revision_number_is_unique_per_objective(session: Session) -> None:
+    profile = active_profile(session)
     objective = CurriculumObjective(
-        profile=active_profile(session),
+        profile=profile,
+        grade_mapping=grade_mapping(session, profile),
         code="MATH-G1-NUM-001",
         subject="mathematics",
         domain="number",
@@ -78,8 +93,10 @@ def test_objective_revision_number_is_unique_per_objective(session: Session) -> 
 
 
 def test_prerequisite_cannot_reference_the_same_revision(session: Session) -> None:
+    profile = active_profile(session)
     objective = CurriculumObjective(
-        profile=active_profile(session),
+        profile=profile,
+        grade_mapping=grade_mapping(session, profile),
         code="MATH-G1-NUM-001",
         subject="mathematics",
         domain="number",
@@ -98,6 +115,28 @@ def test_prerequisite_cannot_reference_the_same_revision(session: Session) -> No
 
     with pytest.raises(IntegrityError):
         session.commit()
+
+
+def test_objective_belongs_to_one_profile_grade_mapping(session: Session) -> None:
+    profile = active_profile(session)
+    grade_mapping = CurriculumGradeMapping(
+        profile=profile,
+        internal_level="G1",
+        external_label="一年级",
+        position=1,
+    )
+    objective = CurriculumObjective(
+        profile=profile,
+        grade_mapping=grade_mapping,
+        code="MATH-G1-NUM-001",
+        subject="mathematics",
+        domain="number",
+        status=CurriculumProfileStatus.ACTIVE,
+    )
+    session.add_all([grade_mapping, objective])
+    session.commit()
+
+    assert objective.grade_mapping_id == grade_mapping.id
 
 
 def test_curriculum_foundation_is_the_alembic_head() -> None:
