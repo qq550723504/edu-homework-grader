@@ -149,16 +149,11 @@ def create_and_publish_assignment(
             "subject": "mathematics",
             "due_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
             "submission_rule": {"allow_late": False},
+            "question_version_ids": [version_id],
         },
     )
     assert created.status_code == 201
     assignment_id = created.json()["id"]
-    item = client.post(
-        f"/v1/assignments/{assignment_id}/items",
-        headers=authorize(client, teacher),
-        json={"question_version_id": version_id, "position": 1},
-    )
-    assert item.status_code == 201
     published = client.post(
         f"/v1/assignments/{assignment_id}/publish", headers=authorize(client, teacher)
     )
