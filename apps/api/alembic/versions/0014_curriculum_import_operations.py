@@ -61,6 +61,14 @@ def upgrade() -> None:
         "curriculum_import_batches",
         ["content_digest", "status"],
     )
+    with op.batch_alter_table("curriculum_objective_revisions") as batch:
+        batch.add_column(sa.Column("import_batch_id", sa.Uuid(), nullable=True))
+        batch.create_foreign_key(
+            "fk_curriculum_revision_import_batch",
+            "curriculum_import_batches",
+            ["import_batch_id"],
+            ["id"],
+        )
     op.create_table(
         "curriculum_import_issues",
         sa.Column("id", sa.Uuid(), nullable=False),
@@ -87,6 +95,9 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("curriculum_import_issues")
+    with op.batch_alter_table("curriculum_objective_revisions") as batch:
+        batch.drop_constraint("fk_curriculum_revision_import_batch", type_="foreignkey")
+        batch.drop_column("import_batch_id")
     op.drop_index(
         "ix_curriculum_import_batches_digest_status", table_name="curriculum_import_batches"
     )

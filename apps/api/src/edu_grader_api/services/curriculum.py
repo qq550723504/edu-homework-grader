@@ -153,12 +153,30 @@ def _validate_revision(
     difficulty_max: float,
     activity_type: CurriculumActivityType,
 ) -> None:
+    validate_revision_payload(
+        subject=objective.subject,
+        internal_level=objective.grade_mapping.internal_level,
+        allowed_question_types=allowed_question_types,
+        difficulty_min=difficulty_min,
+        difficulty_max=difficulty_max,
+        activity_type=activity_type,
+    )
+
+
+def validate_revision_payload(
+    *,
+    subject: str,
+    internal_level: str,
+    allowed_question_types: list[str],
+    difficulty_min: float,
+    difficulty_max: float,
+    activity_type: CurriculumActivityType,
+) -> None:
     if not text_value(allowed_question_types):
         raise CurriculumValidationError("at least one question type is required")
     if not 0 <= difficulty_min <= difficulty_max <= 1:
         raise CurriculumValidationError("difficulty must be between 0 and 1")
 
-    internal_level = objective.grade_mapping.internal_level
     if internal_level.startswith("K"):
         if activity_type is not CurriculumActivityType.LEARNING_ACTIVITY or set(
             allowed_question_types
@@ -175,7 +193,7 @@ def _validate_revision(
     allowed_for_subject = {
         "mathematics": {"M1", "M2"},
         "english": {"E1", "E2", "E3", "E4"},
-    }.get(objective.subject)
+    }.get(subject)
     if allowed_for_subject is None or not set(allowed_question_types).issubset(allowed_for_subject):
         raise CurriculumValidationError("question types do not match objective subject")
     if activity_type is not CurriculumActivityType.SCORED_QUESTION:

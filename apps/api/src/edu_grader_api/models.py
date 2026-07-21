@@ -403,10 +403,14 @@ class CurriculumObjectiveRevision(Base):
     reviewed_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    import_batch_id: Mapped[UUID | None] = mapped_column(ForeignKey("curriculum_import_batches.id"))
     change_summary: Mapped[str | None] = mapped_column(String(1_000))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     objective: Mapped[CurriculumObjective] = relationship(back_populates="revisions")
+    import_batch: Mapped[CurriculumImportBatch | None] = relationship(
+        back_populates="objective_revisions"
+    )
 
 
 class CurriculumPrerequisite(Base):
@@ -462,6 +466,9 @@ class CurriculumImportBatch(Base):
     profile: Mapped[CurriculumProfile] = relationship(back_populates="import_batches")
     issues: Mapped[list[CurriculumImportIssue]] = relationship(
         back_populates="batch", cascade="all, delete-orphan"
+    )
+    objective_revisions: Mapped[list[CurriculumObjectiveRevision]] = relationship(
+        back_populates="import_batch"
     )
 
 
