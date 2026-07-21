@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Enum,
     Float,
@@ -96,6 +97,25 @@ class PrivacyRequestStatus(StrEnum):
     APPROVED = "approved"
     REJECTED = "rejected"
     COMPLETED = "completed"
+
+
+class CurriculumProfileStatus(StrEnum):
+    DRAFT = "draft"
+    IN_REVIEW = "in_review"
+    ACTIVE = "active"
+    RETIRED = "retired"
+
+
+class CurriculumRevisionStatus(StrEnum):
+    DRAFT = "draft"
+    IN_REVIEW = "in_review"
+    ACTIVE = "active"
+    RETIRED = "retired"
+
+
+class CurriculumActivityType(StrEnum):
+    LEARNING_ACTIVITY = "learning_activity"
+    SCORED_QUESTION = "scored_question"
 
 
 ACTIVE_PRIVACY_REQUEST_STATUSES = (
@@ -234,6 +254,157 @@ class AuditChainHead(Base):
     tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id"), primary_key=True)
     next_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     latest_entry_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+
+
+class CurriculumSourceRecord(Base):
+    __tablename__ = "curriculum_source_records"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    issuer: Mapped[str] = mapped_column(String(200), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    canonical_url: Mapped[str] = mapped_column(String(2_000), nullable=False)
+    version_label: Mapped[str] = mapped_column(String(100), nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(Date)
+    effective_from: Mapped[datetime | None] = mapped_column(Date)
+    effective_until: Mapped[datetime | None] = mapped_column(Date)
+    editorial_note: Mapped[str | None] = mapped_column(String(1_000))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    profiles: Mapped[list[CurriculumProfile]] = relationship(back_populates="source_record")
+
+
+class CurriculumProfile(Base):
+    __tablename__ = "curriculum_profiles"
+    __table_args__ = (UniqueConstraint("code", name="uq_curriculum_profiles_code"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    code: Mapped[str] = mapped_column(String(100), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    jurisdiction: Mapped[str] = mapped_column(String(100), nullable=False)
+    version_label: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[CurriculumProfileStatus] = mapped_column(
+        Enum(CurriculumProfileStatus, native_enum=False, values_callable=role_values),
+        nullable=False,
+    )
+    source_record_id: Mapped[UUID] = mapped_column(
+        ForeignKey("curriculum_source_records.id"), nullable=False
+    )
+    effective_from: Mapped[datetime | None] = mapped_column(Date)
+    effective_until: Mapped[datetime | None] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+    source_record: Mapped[CurriculumSourceRecord] = relationship(back_populates="profiles")
+    grade_mappings: Mapped[list[CurriculumGradeMapping]] = relationship(back_populates="profile")
+    objectives: Mapped[list[CurriculumObjective]] = relationship(back_populates="profile")
+
+
+class CurriculumGradeMapping(Base):
+    __tablename__ = "curriculum_grade_mappings"
+    __table_args__ = (
+        UniqueConstraint(
+            "profile_id", "internal_level", "external_label", name="uq_curriculum_grade_mapping"
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    profile_id: Mapped[UUID] = mapped_column(ForeignKey("curriculum_profiles.id"), nullable=False)
+    internal_level: Mapped[str] = mapped_column(String(10), nullable=False)
+    external_label: Mapped[str] = mapped_column(String(200), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    note: Mapped[str | None] = mapped_column(String(500))
+
+    profile: Mapped[CurriculumProfile] = relationship(back_populates="grade_mappings")
+
+
+class CurriculumObjective(Base):
+    __tablename__ = "curriculum_objectives"
+    __table_args__ = (
+        UniqueConstraint("profile_id", "code", name="uq_curriculum_objective_code"),
+        Index("ix_curriculum_objectives_profile_subject_domain", "profile_id", "subject", "domain"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    profile_id: Mapped[UUID] = mapped_column(ForeignKey("curriculum_profiles.id"), nullable=False)
+    code: Mapped[str] = mapped_column(String(150), nullable=False)
+    subject: Mapped[str] = mapped_column(String(100), nullable=False)
+    domain: Mapped[str] = mapped_column(String(200), nullable=False)
+    unit: Mapped[str | None] = mapped_column(String(200))
+    knowledge_point: Mapped[str | None] = mapped_column(String(200))
+    status: Mapped[CurriculumProfileStatus] = mapped_column(
+        Enum(CurriculumProfileStatus, native_enum=False, values_callable=role_values),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+    profile: Mapped[CurriculumProfile] = relationship(back_populates="objectives")
+    revisions: Mapped[list[CurriculumObjectiveRevision]] = relationship(back_populates="objective")
+
+
+class CurriculumObjectiveRevision(Base):
+    __tablename__ = "curriculum_objective_revisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "objective_id", "revision_number", name="uq_curriculum_objective_revision"
+        ),
+        CheckConstraint(
+            "difficulty_min >= 0 AND difficulty_max <= 1 AND difficulty_min <= difficulty_max",
+            name="ck_curriculum_revision_difficulty_range",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    objective_id: Mapped[UUID] = mapped_column(
+        ForeignKey("curriculum_objectives.id"), nullable=False
+    )
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(String(2_000), nullable=False)
+    source_locator: Mapped[str] = mapped_column(String(500), nullable=False)
+    allowed_question_types: Mapped[list[str]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False
+    )
+    difficulty_min: Mapped[float] = mapped_column(Float, nullable=False)
+    difficulty_max: Mapped[float] = mapped_column(Float, nullable=False)
+    activity_type: Mapped[CurriculumActivityType] = mapped_column(
+        Enum(CurriculumActivityType, native_enum=False, values_callable=role_values), nullable=False
+    )
+    status: Mapped[CurriculumRevisionStatus] = mapped_column(
+        Enum(CurriculumRevisionStatus, native_enum=False, values_callable=role_values),
+        nullable=False,
+    )
+    reviewed_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    objective: Mapped[CurriculumObjective] = relationship(back_populates="revisions")
+
+
+class CurriculumPrerequisite(Base):
+    __tablename__ = "curriculum_prerequisites"
+    __table_args__ = (
+        UniqueConstraint(
+            "objective_revision_id", "prerequisite_revision_id", name="uq_curriculum_prerequisite"
+        ),
+        CheckConstraint(
+            "objective_revision_id <> prerequisite_revision_id",
+            name="ck_curriculum_prerequisite_not_self",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    objective_revision_id: Mapped[UUID] = mapped_column(
+        ForeignKey("curriculum_objective_revisions.id"), nullable=False
+    )
+    prerequisite_revision_id: Mapped[UUID] = mapped_column(
+        ForeignKey("curriculum_objective_revisions.id"), nullable=False
+    )
+    relation_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class StudentGuardianConsent(Base):
