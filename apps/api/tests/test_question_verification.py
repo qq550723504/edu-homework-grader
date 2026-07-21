@@ -757,6 +757,36 @@ def test_e4_material_mismatch_blocks_before_grader_and_never_echoes_text(
     assert "road was open" not in finding.remediation
 
 
+def test_e4_punctuation_only_evidence_is_invalid_without_grader_calls(
+    session: Session,
+) -> None:
+    candidate = valid_e4_candidate()
+    candidate["rule_json"]["scoring_points"] = [
+        {
+            "id": "reason",
+            "evidence_phrases": ["."],
+            "score": 2,
+        }
+    ]
+    candidate["rule_json"]["max_score"] = 2
+    grader = PassingE4Grader()
+
+    run = verification.run_candidate_verification(
+        session,
+        draft=generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate),
+        grader_client=grader,
+    )
+
+    finding = next(item for item in run.findings if item.code == "e4_scoring_points_invalid")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {
+        "reason": "normalized_empty_phrase",
+        "scoring_point_count": 1,
+        "evidence_phrase_count": 1,
+    }
+    assert grader.grade_requests == []
+
+
 def test_e4_normalized_material_match_and_material_safety_scan(session: Session) -> None:
     candidate = valid_e4_candidate()
     candidate["reading_material"] = "BECAUSE the bridge was closed.  THEY arrived late!"

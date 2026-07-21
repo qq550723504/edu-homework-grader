@@ -550,6 +550,18 @@ def _e4_findings(
                 "Use distinct scoring-point identifiers.",
             )
         ]
+    if any(not _normalize_e2_form(phrase) for phrase in evidence_phrases):
+        return [
+            _blocked(
+                "e4_scoring_points_invalid",
+                {
+                    "reason": "normalized_empty_phrase",
+                    "scoring_point_count": point_count,
+                    "evidence_phrase_count": len(evidence_phrases),
+                },
+                "Use evidence phrases that contain text after normalization.",
+            )
+        ]
     if _has_normalized_duplicates(evidence_phrases, normalizer=_normalize_e2_form):
         return [
             _blocked(
