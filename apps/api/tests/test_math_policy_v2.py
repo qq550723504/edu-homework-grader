@@ -62,6 +62,40 @@ def test_m2_v2_client_calls_v2_grader_endpoint(monkeypatch: pytest.MonkeyPatch) 
     }
 
 
+def test_m2_v2_client_forwards_null_mathjson_to_grader(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_post(url: str, *, json: dict[str, object], timeout: int) -> _Response:
+        captured.update({"url": url, "json": json, "timeout": timeout})
+        return _Response(
+            {
+                "decision": "needs_review",
+                "score": 0,
+                "criteria": [],
+                "grader_version": "grader-0.1.0",
+            }
+        )
+
+    monkeypatch.setattr("edu_grader_api.services.grader.httpx.post", fake_post)
+    result = HttpGraderClient("http://grader").grade(
+        "M2",
+        {"expected": ["Add", 1, "x"], "variables": ["x"]},
+        {"mathjson": None},
+        policy_version="2",
+    )
+
+    assert result.decision == "needs_review"
+    assert captured["url"] == "http://grader/v1/grade/math/expression-v2"
+    assert captured["json"] == {
+        "student_mathjson": None,
+        "expected_mathjson": ["Add", 1, "x"],
+        "variables": ["x"],
+        "required_form": None,
+        "form_score": 0,
+        "max_score": 1,
+    }
+
+
 def test_normalizer_maps_typed_grader_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     error = __import__("httpx").HTTPStatusError(
         "unprocessable",

@@ -193,9 +193,9 @@ def _mathjson_request(
     expected = rule_json.get("expected")
     if isinstance(expected, bool) or not isinstance(expected, list | str | int | float):
         raise ValueError("M2@2 rules require a MathJSON expected value")
-    student_mathjson = answer_json.get("mathjson")
-    if student_mathjson is None:
+    if "mathjson" not in answer_json:
         raise ValueError("M2@2 answers require MathJSON")
+    student_mathjson = answer_json["mathjson"]
     variables = rule_json.get("variables", [])
     if not isinstance(variables, list) or not all(
         isinstance(variable, str) for variable in variables
