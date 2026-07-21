@@ -76,7 +76,12 @@
 
     <section v-if="selectedVersion" class="card wide" aria-labelledby="question-tests-heading">
       <span class="tag">发布门禁</span>
-      <h2 id="question-tests-heading">{{ selectedVersion.title }}：测试与发布</h2>
+       <h2 id="question-tests-heading">{{ selectedVersion.title }}：测试与发布</h2>
+       <div v-if="['E1', 'E2', 'E3', 'E4'].includes(selectedVersion.question_type)" class="actions">
+         <button class="button secondary" :disabled="saving" type="button" @click="loadSuggestedTestCases">加载建议测试</button>
+         <button v-for="template in suggestedTestCases" :key="template.category" class="button secondary" :disabled="saving" type="button" @click="applySuggestedTestCase(template)">使用 {{ template.category }} 模板</button>
+         <button class="button secondary" :disabled="saving" type="button" @click="refreshTestCasePreview">刷新测试预览</button>
+       </div>
       <form class="stack" @submit.prevent="submitTestCase">
         <label>用例类别<input v-model.trim="testCase.category" aria-label="用例类别" required placeholder="correct / incorrect / empty / boundary"></label>
         <label>学生答案（JSON）<textarea v-model.trim="testCase.answerJson" aria-label="学生答案 JSON" required rows="3" /></label>
@@ -173,7 +178,7 @@
 
 <script setup lang="ts">
 import { fetchCurrentPrincipal } from '../../lib/student-api'
-import { createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, fetchQuestionPolicyCatalog, fetchTeacherRosterClasses, fetchTeacherWorkspace, importTeacherRoster, publishAssignment, publishQuestionVersion, runQuestionTests, updateAssignment, type CreateQuestionInput, type QuestionPolicyCatalogEntry, type QuestionTestRun, type TeacherAssignment, type TeacherQuestionVersion, type TeacherRosterClass } from '../../lib/teacher-api'
+import { createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, fetchQuestionPolicyCatalog, fetchQuestionTestCaseTemplates, fetchTeacherRosterClasses, fetchTeacherWorkspace, importTeacherRoster, previewQuestionTestCase, publishAssignment, publishQuestionVersion, runQuestionTests, updateAssignment, type CreateQuestionInput, type QuestionPolicyCatalogEntry, type QuestionTestCaseTemplate, type QuestionTestRun, type TeacherAssignment, type TeacherQuestionVersion, type TeacherRosterClass } from '../../lib/teacher-api'
 import { addQuestionToComposition, availableQuestionsForSubject, compositionSummary, moveQuestion, removeQuestion, type AssignmentSubject } from '../../lib/assignment-composition'
 import { buildEnglishQuestionRule, defaultEnglishDraft, fieldForPolicyError, type EnglishQuestionType } from '../../lib/english-question-authoring'
 import { teacherModules, type TeacherModule } from '../../lib/teacher-workbench'
@@ -194,6 +199,7 @@ const questionPolicies = ref<QuestionPolicyCatalogEntry[]>([])
 const englishDraft = reactive(defaultEnglishDraft('E1'))
 const advancedJsonMode = ref(false)
 const questionErrors = ref<Record<string, string>>({})
+const suggestedTestCases = ref<QuestionTestCaseTemplate[]>([])
 const activeModule = ref<TeacherModule>('overview')
 const route = useRoute()
 
@@ -465,6 +471,41 @@ async function submitAssignment() {
     }
     await loadWorkspace()
   } catch (error: unknown) { message.value = error instanceof Error ? error.message : '创建作业失败。' }
+  finally { saving.value = false }
+}
+
+async function loadSuggestedTestCases() {
+  if (!selectedVersionId.value) return
+  saving.value = true
+  try {
+    suggestedTestCases.value = await fetchQuestionTestCaseTemplates($fetch, selectedVersionId.value)
+    if (suggestedTestCases.value[0]) await applySuggestedTestCase(suggestedTestCases.value[0])
+    message.value = '已加载可编辑的建议测试。'
+  } catch (error: unknown) { message.value = error instanceof Error ? error.message : '加载建议测试失败。' }
+  finally { saving.value = false }
+}
+
+async function applySuggestedTestCase(template: QuestionTestCaseTemplate) {
+  testCase.category = template.category
+  testCase.answerJson = JSON.stringify(template.answer)
+  await refreshTestCasePreview()
+}
+
+async function refreshTestCasePreview() {
+  if (!selectedVersionId.value) return
+  saving.value = true
+  try {
+    const preview = await previewQuestionTestCase(
+      $fetch,
+      await csrfToken(),
+      selectedVersionId.value,
+      JSON.parse(testCase.answerJson) as Record<string, unknown>,
+    )
+    testCase.expectedDecision = preview.decision
+    testCase.expectedScore = preview.score
+    testCase.expectedEvidenceJson = JSON.stringify(preview.evidence)
+    message.value = '已刷新测试预览，可继续编辑后添加。'
+  } catch (error: unknown) { message.value = error instanceof Error ? error.message : '刷新测试预览失败。' }
   finally { saving.value = false }
 }
 

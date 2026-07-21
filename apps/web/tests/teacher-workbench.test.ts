@@ -59,6 +59,8 @@ describe('teacher workbench UI contract', () => {
     expect(teacherPage).toContain('高级 JSON 模式')
     expect(teacherPage).toContain('fetchQuestionPolicyCatalog')
     expect(teacherPage).toContain('buildEnglishQuestionRule')
+    expect(teacherPage).toContain('加载建议测试')
+    expect(teacherPage).toContain('刷新测试预览')
   })
 
   it('requires the visible assignment creation fields', () => {

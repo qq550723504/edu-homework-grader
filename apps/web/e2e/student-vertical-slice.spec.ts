@@ -164,21 +164,46 @@ test('teacher creates an M1 draft question through the browser', async ({ page }
   await expect(createdQuestion).toContainText('draft')
 })
 
-test('teacher creates guided E1 through E4 draft questions with current policies', async ({ page }) => {
+test('teacher creates, tests, and publishes guided E1 through E4 questions with current policies', async ({ page }) => {
   await establishTeacherSession(page)
   await page.goto(`${webBaseUrl}/teacher#questions`)
 
   const scenarios = [
-    { type: 'E1', title: 'Browser E1', fill: async () => page.getByLabel('可接受答案').fill('cat') },
+    {
+      type: 'E1', title: 'Browser E1', fill: async () => page.getByLabel('可接受答案').fill('cat'),
+      cases: [
+        ['correct', 'cat', 'auto_accepted', 1, { criterion: 'accepted_answers', matched: true, max_score: 1 }],
+        ['incorrect', 'dog', 'auto_rejected', 0, { criterion: 'accepted_answers', matched: false, max_score: 1 }],
+        ['empty', '', 'auto_rejected', 0, { criterion: 'accepted_answers', matched: false, max_score: 1 }],
+        ['boundary', ' CAT. ', 'auto_accepted', 1, { criterion: 'accepted_answers', matched: true, max_score: 1 }],
+      ],
+    },
     { type: 'E2', title: 'Browser E2', fill: async () => {
       await page.getByLabel('词元').fill('go')
       await page.getByLabel('可接受词形').fill('went')
-    } },
-    { type: 'E3', title: 'Browser E3', fill: async () => page.getByRole('radio', { name: '启用语法反馈', exact: true }).check() },
+    }, cases: [
+      ['correct', 'went', 'auto_accepted', 1, { criterion: 'accepted_forms', matched: true, max_score: 1 }],
+      ['incorrect', 'go', 'auto_rejected', 0, { criterion: 'accepted_forms', matched: false, max_score: 1 }],
+      ['empty', '', 'auto_rejected', 0, { criterion: 'accepted_forms', matched: false, max_score: 1 }],
+      ['boundary', ' WENT. ', 'auto_accepted', 1, { criterion: 'accepted_forms', matched: true, max_score: 1 }],
+    ] },
+    { type: 'E3', title: 'Browser E3', fill: async () => page.getByRole('radio', { name: '启用语法反馈', exact: true }).check(), cases: [
+      ['correct', 'I go.', 'needs_review', 0, { criterion: 'grammar_assistance', requires_review: true }],
+      ['incorrect', 'I went.', 'needs_review', 0, { criterion: 'grammar_assistance', requires_review: true }],
+      ['empty', '', 'needs_review', 0, { criterion: 'grammar_assistance', requires_review: true }],
+      ['boundary', 'I go.', 'needs_review', 0, { criterion: 'grammar_assistance', requires_review: true }],
+      ['grammar_feedback', 'I go.', 'needs_review', 0, { criterion: 'grammar_assistance', requires_review: true }],
+    ] },
     { type: 'E4', title: 'Browser E4', fill: async () => {
       await page.getByLabel('评分点名称').fill('cause')
       await page.getByLabel('证据短语').fill('bridge closed')
-    } },
+    }, cases: [
+      ['correct', 'The bridge closed.', 'needs_review', 0, { criterion: 'scoring_point_review', requires_review: true }],
+      ['incorrect', 'The road opened.', 'needs_review', 0, { criterion: 'scoring_point_review', requires_review: true }],
+      ['empty', '', 'needs_review', 0, { criterion: 'scoring_point_review', requires_review: true }],
+      ['boundary', 'The bridge closed.', 'needs_review', 0, { criterion: 'scoring_point_review', requires_review: true }],
+      ['needs_review', 'The bridge closed.', 'needs_review', 0, { criterion: 'scoring_point_review', requires_review: true }],
+    ] },
   ]
 
   for (const scenario of scenarios) {
@@ -195,6 +220,26 @@ test('teacher creates guided E1 through E4 draft questions with current policies
       expect(request.postDataJSON()).toMatchObject({ question_type: 'E4', policy_version: '2' })
     }
     await expect(page.getByText('草稿题目已创建')).toBeVisible()
+    if (scenario.type === 'E1') {
+      await page.getByRole('button', { name: '加载建议测试' }).click()
+      await expect(page.getByRole('button', { name: '使用 correct 模板' })).toBeVisible()
+      await page.getByRole('button', { name: '使用 correct 模板' }).click()
+      await expect(page.getByLabel('学生答案 JSON')).toHaveValue('{"format":"text-v1","text":"cat"}')
+      await expect(page.getByLabel('预期判定')).toHaveValue('auto_accepted')
+    }
+    for (const [category, answer, decision, score, evidence] of scenario.cases) {
+      await page.getByLabel('用例类别').fill(category)
+      await page.getByLabel('学生答案 JSON').fill(JSON.stringify({ format: 'text-v1', text: answer }))
+      await page.getByLabel('预期判定').fill(decision)
+      await page.getByLabel('预期分数').fill(String(score))
+      await page.getByLabel('预期证据 JSON').fill(JSON.stringify(evidence))
+      await page.getByRole('button', { name: '添加测试用例' }).click()
+      await expect(page.getByText('测试用例已添加')).toBeVisible()
+    }
+    await page.getByRole('button', { name: '运行测试' }).click()
+    await expect(page.getByText('全部测试通过，可以发布。')).toBeVisible()
+    await page.getByRole('button', { name: '发布题目版本' }).click()
+    await expect(page.getByText('题目版本已发布')).toBeVisible()
   }
 })
 
