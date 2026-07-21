@@ -207,6 +207,6 @@ def _load_model_metadata(directory: Path) -> dict[str, str]:
 
 
 def _valid_similarity(value: float) -> float:
-    if not math.isfinite(value) or value < 0 or value > 1:
+    if not math.isfinite(value) or value < -1 or value > 1:
         raise EnglishDependencyError("invalid similarity score")
     return value
