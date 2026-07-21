@@ -203,6 +203,11 @@ created_at
 
 ### 6.2 学习事件
 
+本节的字段草图仅用于说明早期业务边界，已由
+[Learning Event v1 数据契约](contracts/learning-events-v1.md)取代。迁移、存储 Schema、幂等键、
+映射快照、重放游标、事件类型和证据替代规则必须以该契约为唯一规范；不得根据下列草图实现
+`is_final_evidence` 或不同的事件字段语义。
+
 `learning_events`
 
 ```text
