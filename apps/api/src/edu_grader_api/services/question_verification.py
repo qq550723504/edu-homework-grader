@@ -339,6 +339,7 @@ def _m1_findings(
             )
         ]
     remediation = "Correct the numeric rule so its boundary probes match the grading policy."
+    first_failure: str | None = None
     for probe in probes:
         try:
             result = grader_client.grade(
@@ -347,18 +348,26 @@ def _m1_findings(
                 {"format": "text-v1", "text": probe.text},
                 policy_version="1",
             )
+            score = result.score
+            score_is_finite = (
+                not isinstance(score, bool)
+                and isinstance(score, int | float)
+                and math.isfinite(score)
+            )
+            if not score_is_finite:
+                probe_passed = False
+            else:
+                probe_passed = (
+                    result.decision == "auto_accepted" and score > 0
+                    if probe.expects_acceptance
+                    else result.decision == "auto_rejected" and score == 0
+                )
         except Exception:
-            return [_blocked("m1_grader_probe_failed", {"probe": probe.name}, remediation)]
-        score_is_finite = isinstance(result.score, int | float) and math.isfinite(result.score)
-        if not score_is_finite:
-            return [_blocked("m1_grader_probe_failed", {"probe": probe.name}, remediation)]
-        result_is_expected = (
-            result.decision == "auto_accepted" and result.score > 0
-            if probe.expects_acceptance
-            else result.decision == "auto_rejected" and result.score == 0
-        )
-        if not result_is_expected:
-            return [_blocked("m1_grader_probe_failed", {"probe": probe.name}, remediation)]
+            probe_passed = False
+        if not probe_passed and first_failure is None:
+            first_failure = probe.name
+    if first_failure is not None:
+        return [_blocked("m1_grader_probe_failed", {"probe": first_failure}, remediation)]
     return []
 
 
