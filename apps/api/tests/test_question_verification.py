@@ -371,7 +371,7 @@ def test_valid_e2_candidate_probes_every_accepted_form(session: Session) -> None
 
 def test_e2_normalized_duplicate_forms_are_blocked(session: Session) -> None:
     duplicate = valid_e2_candidate()
-    duplicate["rule_json"] = {"lemma": "go", "accepted_forms": ["Went", " went "]}
+    duplicate["rule_json"] = {"lemma": "go", "accepted_forms": ["Went", " went."]}
     duplicate_draft = generation_draft(
         session, allowed_question_types=["E2"], candidate_json=duplicate
     )
@@ -380,7 +380,8 @@ def test_e2_normalized_duplicate_forms_are_blocked(session: Session) -> None:
         session, draft=duplicate_draft, grader_client=PassingE2Grader()
     )
 
-    assert "e2_forms_invalid" in finding_codes(duplicate_run)
+    finding = next(item for item in duplicate_run.findings if item.code == "e2_forms_invalid")
+    assert finding.evidence_json == {"reason": "normalized_duplicate", "accepted_form_count": 2}
 
 
 @pytest.mark.parametrize("grader", [FailingE2Grader(), PartialE2Grader()])
@@ -393,7 +394,7 @@ def test_e2_grader_failure_is_safely_blocked(session: Session, grader: PassingE2
     )
 
     finding = next(item for item in failed_run.findings if item.code == "e2_grader_probe_failed")
-    assert finding.evidence_json == {"probe": "accepted_forms"}
+    assert finding.evidence_json == {"probe": "accepted_forms", "accepted_form_count": 1}
     assert "went" not in finding.remediation
 
 

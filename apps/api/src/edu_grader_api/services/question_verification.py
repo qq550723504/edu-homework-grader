@@ -28,6 +28,7 @@ from .questions import GradeResult
 VALIDATOR_VERSION = "verification-v1"
 RULESET_VERSION = "rules-v1"
 _WHITESPACE = re.compile(r"\s+")
+_E2_TERMINAL_PUNCTUATION = re.compile(r"[.!?。！？]+$")
 _UNSAFE_MINOR_TERMS = (
     ("pornographic", "adult_content"),
     ("sexual content", "adult_content"),
@@ -369,7 +370,12 @@ def _e2_findings(
         return [
             _blocked(
                 "e2_forms_invalid",
-                {"reason": "missing_forms"},
+                {
+                    "reason": "missing_forms",
+                    "accepted_form_count": len(accepted_forms)
+                    if isinstance(accepted_forms, list)
+                    else 0,
+                },
                 "Provide at least one accepted form.",
             )
         ]
@@ -379,16 +385,19 @@ def _e2_findings(
             return [
                 _blocked(
                     "e2_forms_invalid",
-                    {"reason": "invalid_form"},
+                    {"reason": "invalid_form", "accepted_form_count": len(accepted_forms)},
                     "Provide non-empty accepted forms within the supported length.",
                 )
             ]
-        normalized_forms.append(_normalize_text(form))
+        normalized_forms.append(_normalize_e2_form(form))
     if len(set(normalized_forms)) != len(normalized_forms):
         return [
             _blocked(
                 "e2_forms_invalid",
-                {"reason": "normalized_duplicate"},
+                {
+                    "reason": "normalized_duplicate",
+                    "accepted_form_count": len(accepted_forms),
+                },
                 "Remove accepted forms that normalize to the same value.",
             )
         ]
@@ -407,7 +416,10 @@ def _e2_findings(
                 return [
                     _blocked(
                         "e2_grader_probe_failed",
-                        {"probe": "accepted_forms"},
+                        {
+                            "probe": "accepted_forms",
+                            "accepted_form_count": len(accepted_forms),
+                        },
                         "Correct the E2 forms or constraints so every form receives full credit.",
                     )
                 ]
@@ -415,7 +427,10 @@ def _e2_findings(
         return [
             _blocked(
                 "e2_grader_probe_failed",
-                {"probe": "accepted_forms"},
+                {
+                    "probe": "accepted_forms",
+                    "accepted_form_count": len(accepted_forms),
+                },
                 "Retry validation after the English grader is available.",
             )
         ]
@@ -510,6 +525,12 @@ def _text_values(value: object) -> list[str]:
 
 def _normalize_text(value: str) -> str:
     return _WHITESPACE.sub(" ", unicodedata.normalize("NFKC", value).strip()).casefold()
+
+
+def _normalize_e2_form(value: str) -> str:
+    """Mirror the E2 Grader's fixed case and terminal-punctuation normalization."""
+
+    return _E2_TERMINAL_PUNCTUATION.sub("", _normalize_text(value)).rstrip()
 
 
 def _is_finite_number(value: object) -> bool:
