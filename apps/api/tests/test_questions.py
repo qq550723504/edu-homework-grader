@@ -261,9 +261,10 @@ def test_teacher_e4_templates_keep_the_incorrect_answer_free_of_evidence_phrase(
             "policy_version": "2",
             "rule": {
                 "scoring_points": [
-                    {"id": "cause", "evidence_phrases": ["bridge closed"], "score": 1}
+                    {"id": "cause", "evidence_phrases": ["bridge closed"], "score": 1},
+                    {"id": "condition", "evidence_phrases": ["road flooded"], "score": 2},
                 ],
-                "max_score": 1,
+                "max_score": 3,
             },
         },
     )
@@ -273,13 +274,16 @@ def test_teacher_e4_templates_keep_the_incorrect_answer_free_of_evidence_phrase(
     )
 
     assert response.status_code == 200
-    incorrect = next(
-        template["answer"]["text"]
+    templates = {
+        template["category"]: template["answer"]["text"]
         for template in response.json()["templates"]
-        if template["category"] == "incorrect"
-    )
+    }
+    incorrect = templates["incorrect"]
+    assert templates["correct"] == "bridge closed\nroad flooded"
+    assert templates["needs_review"] == "bridge closed\nroad flooded"
     assert incorrect == "x"
     assert "bridge closed" not in incorrect.casefold()
+    assert "road flooded" not in incorrect.casefold()
 
 
 def test_teacher_lists_and_filters_question_versions(client: TestClient, session: Session) -> None:

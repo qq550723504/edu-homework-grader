@@ -354,7 +354,7 @@ def suggested_question_test_cases(
         answer = _first_rule_text(draft.rule_json, "accepted_answers", "I write a sentence.")
         return _text_test_templates(answer) + [_text_test_template("grammar_feedback", answer)]
     if draft.question_type == "E4":
-        answer = _first_e4_evidence_phrase(draft.rule_json)
+        answer = _e4_evidence_text(draft.rule_json)
         return _text_test_templates(answer, incorrect=_e4_incorrect_answer(answer)) + [
             _text_test_template("needs_review", answer)
         ]
@@ -383,15 +383,18 @@ def _first_rule_text(rule_json: dict[str, object], key: str, fallback: str) -> s
     return fallback
 
 
-def _first_e4_evidence_phrase(rule_json: dict[str, object]) -> str:
+def _e4_evidence_text(rule_json: dict[str, object]) -> str:
     points = rule_json.get("scoring_points")
+    evidence_phrases: list[str] = []
     if isinstance(points, list):
         for point in points:
             if not isinstance(point, dict):
                 continue
-            phrase = _first_rule_text(point, "evidence_phrases", "evidence")
+            phrase = _first_rule_text(point, "evidence_phrases", "")
             if phrase:
-                return phrase
+                evidence_phrases.append(phrase)
+    if evidence_phrases:
+        return "\n".join(evidence_phrases)
     return "evidence"
 
 
