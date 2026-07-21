@@ -10,6 +10,33 @@ import {
 } from '../app/lib/teacher-workbench'
 
 describe('teacher workbench UI contract', () => {
+  it('renders desktop navigation inside the workbench sidebar shell', () => {
+    const teacherPage = readFileSync(new URL('../app/pages/teacher/index.vue', import.meta.url), 'utf8')
+
+    expect(teacherPage).toContain('<aside class="teacher-workbench__sidebar">')
+    expect(teacherPage).toContain('<section class="teacher-workbench__content">')
+    expect(teacherPage).toContain('<TeacherWorkbenchNav :active-module="activeModule" />')
+  })
+
+  it('renders the selected class roster with an empty state', () => {
+    const teacherPage = readFileSync(new URL('../app/pages/teacher/index.vue', import.meta.url), 'utf8')
+
+    expect(teacherPage).toContain('@click="selectRosterClass(classroom.id)"')
+    expect(teacherPage).toContain('班级学生')
+    expect(teacherPage).toContain('v-for="student in rosterStudents"')
+    expect(teacherPage).toContain('该班暂未录入学生。')
+  })
+
+  it('offers editing and confirmed removal for roster students', () => {
+    const teacherPage = readFileSync(new URL('../app/pages/teacher/index.vue', import.meta.url), 'utf8')
+
+    expect(teacherPage).toContain('编辑姓名')
+    expect(teacherPage).toContain('移出班级')
+    expect(teacherPage).toContain('window.confirm')
+    expect(teacherPage).toContain('updateTeacherRosterStudent')
+    expect(teacherPage).toContain('removeTeacherRosterStudent')
+  })
+
   it('mounts the workbench navigation and live workspace modules on the teacher route', () => {
     const teacherPage = readFileSync(new URL('../app/pages/teacher/index.vue', import.meta.url), 'utf8')
     const overview = readFileSync(new URL('../app/components/teacher/TeacherOverview.vue', import.meta.url), 'utf8')

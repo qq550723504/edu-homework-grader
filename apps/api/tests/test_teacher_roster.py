@@ -153,6 +153,113 @@ def test_teacher_adds_student_to_owned_class(
     assert consent.status is GuardianConsentStatus.NOT_REQUIRED
 
 
+def test_teacher_lists_students_in_owned_class(
+    teacher_context: TeacherContext, session: Session
+) -> None:
+    classroom = create_owned_class(session, teacher_context.teacher_id)
+    for school_id, display_name in (("S-001", "Ada"), ("S-002", "Grace")):
+        response = teacher_context.client.post(
+            f"/v1/teacher/classes/{classroom.id}/students",
+            json={
+                "school_id": school_id,
+                "display_name": display_name,
+                "under_14": False,
+                "guardian_consent_status": "not_required",
+            },
+            headers=auth_headers(),
+        )
+        assert response.status_code == 201
+
+    response = teacher_context.client.get(
+        f"/v1/teacher/classes/{classroom.id}/students", headers=auth_headers()
+    )
+
+    students = list(
+        session.scalars(
+            select(User).where(User.school_id.in_(["S-001", "S-002"])).order_by(User.school_id)
+        )
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "items": [
+            {
+                "id": str(student.id),
+                "school_id": student.school_id,
+                "display_name": student.display_name,
+            }
+            for student in students
+        ]
+    }
+
+
+def test_teacher_updates_a_student_display_name_in_owned_class(
+    teacher_context: TeacherContext, session: Session
+) -> None:
+    classroom = create_owned_class(session, teacher_context.teacher_id)
+    teacher_context.client.post(
+        f"/v1/teacher/classes/{classroom.id}/students",
+        json={
+            "school_id": "S-001",
+            "display_name": "Ada",
+            "under_14": False,
+            "guardian_consent_status": "not_required",
+        },
+        headers=auth_headers(),
+    )
+    student = session.scalar(select(User).where(User.school_id == "S-001"))
+    assert student is not None
+
+    response = teacher_context.client.patch(
+        f"/v1/teacher/classes/{classroom.id}/students/{student.id}",
+        json={"display_name": "Ada Lovelace"},
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": str(student.id),
+        "school_id": "S-001",
+        "display_name": "Ada Lovelace",
+    }
+    session.refresh(student)
+    assert student.display_name == "Ada Lovelace"
+    assert (
+        session.scalar(select(AuditLog).where(AuditLog.event_type == "roster.student_name_updated"))
+        is not None
+    )
+
+
+def test_teacher_removes_a_student_from_an_owned_class_without_deleting_the_account(
+    teacher_context: TeacherContext, session: Session
+) -> None:
+    classroom = create_owned_class(session, teacher_context.teacher_id)
+    teacher_context.client.post(
+        f"/v1/teacher/classes/{classroom.id}/students",
+        json={
+            "school_id": "S-001",
+            "display_name": "Ada",
+            "under_14": False,
+            "guardian_consent_status": "not_required",
+        },
+        headers=auth_headers(),
+    )
+    student = session.scalar(select(User).where(User.school_id == "S-001"))
+    assert student is not None
+
+    response = teacher_context.client.delete(
+        f"/v1/teacher/classes/{classroom.id}/students/{student.id}",
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 204
+    assert session.get(Enrollment, (classroom.id, student.id)) is None
+    assert session.get(User, student.id) is not None
+    assert (
+        session.scalar(select(AuditLog).where(AuditLog.event_type == "roster.student_removed"))
+        is not None
+    )
+
+
 def test_teacher_imports_csv_for_owned_class(
     teacher_context: TeacherContext, session: Session
 ) -> None:
