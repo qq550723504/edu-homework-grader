@@ -32,6 +32,8 @@ class GrammarChecker(Protocol):
 class SemanticSimilarity(Protocol):
     def score(self, left: str, right: str) -> float: ...
 
+    def score_many(self, query: str, comparisons: list[str]) -> list[float]: ...
+
 
 class _HttpResponse(Protocol):
     def raise_for_status(self) -> None: ...
@@ -78,12 +80,18 @@ class StaticSimilarity:
     def score(self, left: str, right: str) -> float:
         return _valid_similarity(self._value)
 
+    def score_many(self, query: str, comparisons: list[str]) -> list[float]:
+        return [_valid_similarity(self._value) for _ in comparisons]
+
 
 class UnavailableSimilarity:
     def __init__(self, message: str) -> None:
         self._message = message
 
     def score(self, left: str, right: str) -> float:
+        raise EnglishDependencyError(self._message)
+
+    def score_many(self, query: str, comparisons: list[str]) -> list[float]:
         raise EnglishDependencyError(self._message)
 
 
@@ -109,14 +117,29 @@ class SentenceTransformerSimilarity:
             raise EnglishDependencyError("English embedding model is unavailable.") from error
 
     def score(self, left: str, right: str) -> float:
+        return self.score_many(left, [right])[0]
+
+    def score_many(self, query: str, comparisons: list[str]) -> list[float]:
         try:
-            vectors = self._model.encode([left, right], normalize_embeddings=True)
-            score = sum(float(a) * float(b) for a, b in zip(vectors[0], vectors[1], strict=True))
-        except (OSError, TypeError, ValueError) as error:
+            vectors = self._model.encode([query, *comparisons], normalize_embeddings=True)
+            if len(vectors) != len(comparisons) + 1:
+                raise ValueError("English embedding model returned an incomplete batch.")
+            query_vector = vectors[0]
+            return [
+                _valid_similarity(
+                    sum(
+                        float(query_value) * float(comparison_value)
+                        for query_value, comparison_value in zip(
+                            query_vector, comparison_vector, strict=True
+                        )
+                    )
+                )
+                for comparison_vector in vectors[1:]
+            ]
+        except (OSError, RuntimeError, TypeError, ValueError) as error:
             raise EnglishDependencyError(
                 "English embedding model could not score the answer."
             ) from error
-        return _valid_similarity(score)
 
 
 def _grammar_match(value: object) -> GrammarMatch:

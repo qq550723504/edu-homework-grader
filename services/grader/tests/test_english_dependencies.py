@@ -63,3 +63,11 @@ def test_languagetool_maps_match_offsets_categories_and_replacements() -> None:
 def test_similarity_rejects_non_finite_scores() -> None:
     with pytest.raises(EnglishDependencyError, match="invalid similarity score"):
         StaticSimilarity(math.nan).score("left", "right")
+
+
+def test_static_similarity_scores_each_comparison_in_order() -> None:
+    similarity = StaticSimilarity(0.75)
+
+    scores = similarity.score_many("query", ["first", "second"])
+
+    assert scores == [0.75, 0.75]

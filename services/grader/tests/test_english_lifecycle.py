@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+import pytest
 
 from edu_grader.english_dependencies import EnglishDependencyError
 import edu_grader.main as main
@@ -25,6 +26,34 @@ class FakeGrammarChecker:
 class FailingSimilarity:
     def __init__(self, *args: object, **kwargs: object) -> None:
         raise EnglishDependencyError("model directory is unavailable")
+
+
+class OrderedBatchSimilarity:
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    def score(self, left: str, right: str) -> float:
+        return 1.0
+
+    def score_many(self, query: str, comparisons: list[str]) -> list[float]:
+        assert query == "query"
+        assert comparisons == ["first", "second"]
+        return [0.25, 0.75]
+
+
+class NonFiniteBatchSimilarity(OrderedBatchSimilarity):
+    def score_many(self, query: str, comparisons: list[str]) -> list[float]:
+        return [float("nan")]
+
+
+class IncompleteBatchSimilarity(OrderedBatchSimilarity):
+    def score_many(self, query: str, comparisons: list[str]) -> list[float]:
+        return []
+
+
+class FailingBatchSimilarity(OrderedBatchSimilarity):
+    def score_many(self, query: str, comparisons: list[str]) -> list[float]:
+        raise RuntimeError("model inference failed")
 
 
 def test_english_similarity_is_loaded_once_and_reported_ready(monkeypatch) -> None:
@@ -91,3 +120,74 @@ def test_missing_embedding_model_is_degraded_and_e4_stays_review_safe(monkeypatc
     assert response.status_code == 200
     assert response.json()["decision"] == "needs_review"
     assert response.json()["requires_review"] is True
+
+
+def test_semantic_similarity_returns_ordered_scores_and_embedding_metadata(monkeypatch) -> None:
+    monkeypatch.setattr(main, "SentenceTransformerSimilarity", OrderedBatchSimilarity)
+    monkeypatch.setenv("ENGLISH_EMBEDDING_MODEL_ID", "test-model")
+    monkeypatch.setenv("ENGLISH_EMBEDDING_MODEL_REVISION", "test-revision")
+    monkeypatch.setenv("ENGLISH_EMBEDDING_MODEL_DIGEST", "sha256:test-digest")
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/v1/semantic-similarity",
+            json={"query": "query", "comparisons": ["first", "second"]},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "scores": [0.25, 0.75],
+        "embedding": {
+            "id": "test-model",
+            "revision": "test-revision",
+            "digest": "sha256:test-digest",
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"query": "", "comparisons": ["comparison"]},
+        {"query": "q" * 10_001, "comparisons": ["comparison"]},
+        {"query": "query", "comparisons": []},
+        {"query": "query", "comparisons": ["comparison"] * 129},
+        {"query": "query", "comparisons": [""]},
+        {"query": "query", "comparisons": ["c" * 10_001]},
+    ],
+)
+def test_semantic_similarity_enforces_request_bounds(monkeypatch, payload) -> None:
+    monkeypatch.setattr(main, "SentenceTransformerSimilarity", OrderedBatchSimilarity)
+
+    with TestClient(main.app) as client:
+        response = client.post("/v1/semantic-similarity", json=payload)
+
+    assert response.status_code == 422
+
+
+def test_semantic_similarity_returns_503_when_embedding_model_is_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(main, "SentenceTransformerSimilarity", FailingSimilarity)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/v1/semantic-similarity",
+            json={"query": "query", "comparisons": ["comparison"]},
+        )
+
+    assert response.status_code == 503
+
+
+@pytest.mark.parametrize(
+    "similarity_type",
+    [NonFiniteBatchSimilarity, IncompleteBatchSimilarity, FailingBatchSimilarity],
+)
+def test_semantic_similarity_rejects_invalid_batch_scores(monkeypatch, similarity_type) -> None:
+    monkeypatch.setattr(main, "SentenceTransformerSimilarity", similarity_type)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/v1/semantic-similarity",
+            json={"query": "query", "comparisons": ["comparison"]},
+        )
+
+    assert response.status_code == 503
