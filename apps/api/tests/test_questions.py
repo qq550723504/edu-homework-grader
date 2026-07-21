@@ -150,10 +150,17 @@ def test_teacher_previews_a_draft_test_answer_without_persisting_it(
         "evidence": {"criterion": "numeric_value"},
         "grader_version": "preview@1",
     }
-    assert session.scalar(select(QuestionVersion).where(QuestionVersion.id == UUID(created.json()["id"])))
-    assert session.scalars(
-        select(QuestionTestCase).where(QuestionTestCase.question_version_id == UUID(created.json()["id"]))
-    ).all() == []
+    assert session.scalar(
+        select(QuestionVersion).where(QuestionVersion.id == UUID(created.json()["id"]))
+    )
+    assert (
+        session.scalars(
+            select(QuestionTestCase).where(
+                QuestionTestCase.question_version_id == UUID(created.json()["id"])
+            )
+        ).all()
+        == []
+    )
 
 
 def test_teacher_receives_editable_english_test_case_templates(

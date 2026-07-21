@@ -272,11 +272,15 @@ def preview_test_case_route(
             grader_client=HttpGraderClient(settings.grader_base_url),
         )
     except QuestionVersionAccessError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found") from None
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+        ) from None
     except QuestionVersionStateError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     except Exception:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="grader preview failed") from None
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail="grader preview failed"
+        ) from None
     return {
         "decision": result.decision,
         "score": result.score,
@@ -299,7 +303,9 @@ def test_case_templates_route(
             actor_user_id=UUID(principal.user_id),
         )
     except QuestionVersionAccessError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found") from None
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+        ) from None
     except QuestionVersionStateError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     return {"templates": templates}
