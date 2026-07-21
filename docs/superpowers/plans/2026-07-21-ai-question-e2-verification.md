@@ -78,7 +78,7 @@
 
 - [x] **Step 2: Confirm scope.** Invalid E2 rules retain `policy_schema_invalid` without calling the Grader; E2 evidence is sanitized, and this slice adds no external dependency or `QuestionVersion` mutation.
 
-- [ ] **Step 3: Push and open a PR.**
+- [x] **Step 3: Push and open a PR.**
 
   ```powershell
   git push -u origin codex/ai-question-e2-verification
