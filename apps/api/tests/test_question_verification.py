@@ -403,7 +403,13 @@ class PassingM2Grader:
 
     def normalize_math_answer(self, answer_json: dict[str, object]) -> dict[str, object]:
         self.normalization_requests.append(answer_json)
-        return {"kind": "expression", "value": "x_plus_1"}
+        return {
+            "type": "add",
+            "args": [
+                {"type": "symbol", "name": "x"},
+                {"type": "number", "value": "1"},
+            ],
+        }
 
     def grade(
         self,
@@ -473,6 +479,30 @@ class FloatingPointM2Grader(PassingM2Grader):
         )
 
 
+class ComplexM2Grader(PassingM2Grader):
+    def normalize_math_answer(self, answer_json: dict[str, object]) -> dict[str, object]:
+        self.normalization_requests.append(answer_json)
+        return {
+            "type": "add",
+            "args": [
+                {"type": "symbol", "name": "x"},
+                {
+                    "type": "mul",
+                    "args": [
+                        {"type": "number", "value": "2"},
+                        {"type": "symbol", "name": "x"},
+                    ],
+                },
+            ],
+        }
+
+
+class InvalidSafeAstM2Grader(PassingM2Grader):
+    def normalize_math_answer(self, answer_json: dict[str, object]) -> dict[str, object]:
+        self.normalization_requests.append(answer_json)
+        return {"kind": "expression", "value": "x_plus_1"}
+
+
 def valid_m2_candidate() -> dict[str, object]:
     return {
         "question_type": "M2",
@@ -486,6 +516,15 @@ def valid_m2_candidate() -> dict[str, object]:
         },
         "explanation": "The expression is already expanded.",
     }
+
+
+def complex_m2_candidate() -> dict[str, object]:
+    candidate = valid_m2_candidate()
+    candidate["rule_json"] = {
+        **candidate["rule_json"],
+        "expected": ["Add", "x", ["Multiply", 2, "x"]],
+    }
+    return candidate
 
 
 def generation_draft(
@@ -593,6 +632,15 @@ def generation_draft(
     session.add(draft)
     session.flush()
     return draft
+
+
+def configure_grade_complexity_rules(
+    session: Session, draft: GeneratedQuestionDraft, rules: object
+) -> None:
+    job = session.get(GenerationJob, draft.job_id)
+    assert job is not None
+    job.curriculum_objective_revision.objective.grade_mapping.complexity_rules_json = rules  # type: ignore[assignment]
+    session.flush()
 
 
 def add_batch_draft(
@@ -1969,6 +2017,194 @@ def test_m2_full_score_tolerates_grader_float_representation(session: Session) -
     )
 
     assert run.status is ValidationRunStatus.PASSED
+
+
+@pytest.mark.parametrize(
+    ("prompt", "expected_observed"),
+    [
+        ("One two three four.", None),
+        ("One two three four five.", 5),
+    ],
+)
+def test_grade_complexity_warns_only_above_prompt_unit_limit(
+    session: Session, prompt: str, expected_observed: int | None
+) -> None:
+    draft = generation_draft(session, candidate_json=valid_m1_candidate(prompt))
+    configure_grade_complexity_rules(session, draft, {"max_prompt_units": 4})
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=PassingGrader()
+    )
+
+    findings = [item for item in run.findings if item.code == "grade_complexity_warning"]
+    if expected_observed is None:
+        assert findings == []
+    else:
+        assert findings[0].evidence_json == {
+            "grade_level": "G5",
+            "metric": "max_prompt_units",
+            "observed": expected_observed,
+            "limit": 4,
+        }
+
+
+def test_grade_complexity_uses_cjk_units_and_largest_sentence(session: Session) -> None:
+    assert verification._lexical_unit_count("One 2's 中文") == 4
+    assert verification._max_sentence_units("One two. Three four five.") == 3
+
+    draft = generation_draft(
+        session, candidate_json=valid_m1_candidate("One two. Three four five.")
+    )
+    configure_grade_complexity_rules(session, draft, {"max_sentence_units": 2})
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=PassingGrader()
+    )
+
+    finding = next(item for item in run.findings if item.code == "grade_complexity_warning")
+    assert finding.evidence_json == {
+        "grade_level": "G5",
+        "metric": "max_sentence_units",
+        "observed": 3,
+        "limit": 2,
+    }
+
+
+def test_grade_complexity_measures_m1_numeric_values_without_echoing_rule_fields(
+    session: Session,
+) -> None:
+    candidate = {
+        "question_type": "M1",
+        "policy_version": "1",
+        "prompt": "Add the numbers.",
+        "rule_json": {"expected": 11, "tolerance": 10},
+        "explanation": "Use addition.",
+    }
+    draft = generation_draft(session, allowed_question_types=["M1"], candidate_json=candidate)
+    configure_grade_complexity_rules(session, draft, {"max_numeric_absolute_value": 10})
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=PassingGrader()
+    )
+
+    finding = next(item for item in run.findings if item.code == "grade_complexity_warning")
+    assert finding.evidence_json == {
+        "grade_level": "G5",
+        "metric": "max_numeric_absolute_value",
+        "observed": 11,
+        "limit": 10,
+    }
+    assert "expected" not in finding.evidence_json
+    assert "tolerance" not in finding.evidence_json
+    assert "expected" not in finding.remediation
+    assert "tolerance" not in finding.remediation
+
+
+def test_grade_complexity_reuses_m2_normalization_for_safe_metrics(session: Session) -> None:
+    draft = generation_draft(
+        session, allowed_question_types=["M2"], candidate_json=complex_m2_candidate()
+    )
+    configure_grade_complexity_rules(
+        session,
+        draft,
+        {"max_math_operation_nodes": 1},
+    )
+    grader = ComplexM2Grader()
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    findings = [item for item in run.findings if item.code == "grade_complexity_warning"]
+    assert [item.evidence_json["metric"] for item in findings] == ["max_math_operation_nodes"]
+    assert findings[0].evidence_json == {
+        "grade_level": "G5",
+        "metric": "max_math_operation_nodes",
+        "observed": 2,
+        "limit": 1,
+    }
+    assert grader.normalization_requests == [
+        {
+            "mathjson": ["Add", "x", ["Multiply", 2, "x"]],
+            "variables": ["x"],
+        }
+    ]
+    for finding in findings:
+        assert "MathJSON" not in finding.remediation
+        assert "ast" not in finding.evidence_json
+        assert "args" not in finding.evidence_json
+        assert "value" not in finding.evidence_json
+
+
+def test_grade_complexity_uses_stable_metric_order_and_skips_absent_rules(session: Session) -> None:
+    absent_rules_draft = generation_draft(
+        session, candidate_json=valid_m1_candidate("One two three four five.")
+    )
+    configure_grade_complexity_rules(session, absent_rules_draft, {})
+    absent_rules_run = verification.run_candidate_verification(
+        session, draft=absent_rules_draft, grader_client=PassingGrader()
+    )
+    assert "grade_complexity_warning" not in finding_codes(absent_rules_run)
+
+    draft = generation_draft(
+        session,
+        ordinal=2,
+        allowed_question_types=["M2"],
+        candidate_json={
+            **complex_m2_candidate(),
+            "prompt": "One two. Three four five.",
+        },
+    )
+    configure_grade_complexity_rules(
+        session,
+        draft,
+        {
+            "max_math_operation_nodes": 1,
+            "max_prompt_units": 4,
+            "max_numeric_absolute_value": 10,
+            "max_sentence_units": 2,
+        },
+    )
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=ComplexM2Grader()
+    )
+
+    findings = [item for item in run.findings if item.code == "grade_complexity_warning"]
+    assert [item.evidence_json["metric"] for item in findings] == [
+        "max_prompt_units",
+        "max_sentence_units",
+        "max_math_operation_nodes",
+    ]
+    for finding in findings:
+        assert set(finding.evidence_json) == {"grade_level", "metric", "observed", "limit"}
+        assert "One two" not in finding.remediation
+        assert "Add" not in finding.remediation
+
+
+def test_malformed_persisted_grade_complexity_rules_fail_closed(session: Session) -> None:
+    draft = generation_draft(session)
+    configure_grade_complexity_rules(session, draft, {"max_prompt_units": True})
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=PassingGrader()
+    )
+
+    assert finding_codes(run) == {"grade_complexity_rules_invalid"}
+    finding = run.findings[0]
+    assert finding.evidence_json == {"grade_level": "G5"}
+
+
+def test_m2_unexpected_safe_ast_is_blocked_before_grader_probe(session: Session) -> None:
+    draft = generation_draft(
+        session, allowed_question_types=["M2"], candidate_json=valid_m2_candidate()
+    )
+    grader = InvalidSafeAstM2Grader()
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    finding = next(item for item in run.findings if item.code == "m2_mathjson_invalid")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {"probe": "expected_mathjson"}
+    assert grader.grade_requests == []
 
 
 def test_invalid_m2_schema_preserves_policy_finding(session: Session) -> None:
