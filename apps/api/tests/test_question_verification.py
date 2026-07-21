@@ -29,7 +29,26 @@ from edu_grader_api.models import (
     VersionStatus,
 )
 from edu_grader_api.services.questions import GradeResult
+from edu_grader_api.services.grader import (
+    EmbeddingDependencyVersion,
+    SemanticSimilarityResult,
+)
+from edu_grader_api.services.question_fingerprints import fingerprint_prompt
 import edu_grader_api.services.question_verification as verification
+
+
+DEFAULT_EMBEDDING = EmbeddingDependencyVersion(
+    id="local-model",
+    revision="test-revision",
+    digest="sha256:test",
+)
+
+
+def semantic_result(
+    scores: list[object],
+    embedding: EmbeddingDependencyVersion = DEFAULT_EMBEDDING,
+) -> SemanticSimilarityResult:
+    return SemanticSimilarityResult(scores=scores, embedding=embedding)  # type: ignore[arg-type]
 
 
 def test_question_verification_service_module_exists() -> None:
@@ -60,8 +79,8 @@ class PassingGrader:
             grader_version="fake-grader-v1",
         )
 
-    def semantic_similarity(self, query: str, comparisons: list[str]) -> list[float]:
-        return [0.0] * len(comparisons)
+    def semantic_similarity(self, query: str, comparisons: list[str]) -> SemanticSimilarityResult:
+        return semantic_result([0.0] * len(comparisons))
 
 
 class SemanticGrader(PassingGrader):
@@ -69,14 +88,16 @@ class SemanticGrader(PassingGrader):
         self.responses = list(responses)
         self.semantic_requests: list[tuple[str, list[str]]] = []
 
-    def semantic_similarity(self, query: str, comparisons: list[str]) -> list[float]:
+    def semantic_similarity(self, query: str, comparisons: list[str]) -> SemanticSimilarityResult:
         self.semantic_requests.append((query, comparisons))
         if not self.responses:
             raise RuntimeError("unexpected semantic similarity call")
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
-        return response  # type: ignore[return-value]
+        if isinstance(response, SemanticSimilarityResult):
+            return response
+        return semantic_result(response)  # type: ignore[arg-type]
 
 
 class MissingSemanticGrader:
@@ -646,8 +667,18 @@ def test_semantic_published_question_is_blocked_without_raw_comparator(
     assert run.feature_summary_json == {
         "finding_count": len(run.findings),
         "fingerprint_version": "question-fingerprint-v1",
+        "candidate_prompt_fingerprint": {
+            "version": "question-fingerprint-v1",
+            "exact_hash": fingerprint_prompt("Calculate two plus two.").exact_hash,
+            "normalized_hash": fingerprint_prompt("Calculate two plus two.").normalized_hash,
+        },
         "similarity_threshold": 0.92,
         "comparison_counts": {"published_question": 1, "batch_candidate": 0},
+        "embedding_dependency": {
+            "id": "local-model",
+            "revision": "test-revision",
+            "digest": "sha256:test",
+        },
     }
 
 
@@ -711,7 +742,9 @@ def test_duplicate_feature_summary_uses_the_gate_snapshot(
     monkeypatch.setattr(verification.settings, "ai_duplicate_similarity_threshold", 0.92)
 
     class MutatingSemanticGrader(PassingGrader):
-        def semantic_similarity(self, query: str, comparisons: list[str]) -> list[float]:
+        def semantic_similarity(
+            self, query: str, comparisons: list[str]
+        ) -> SemanticSimilarityResult:
             verification.settings.ai_duplicate_similarity_threshold = 0.5
             add_batch_draft(
                 session,
@@ -719,7 +752,7 @@ def test_duplicate_feature_summary_uses_the_gate_snapshot(
                 prompt="Added after the comparison snapshot",
                 ordinal=2,
             )
-            return [0.1]
+            return semantic_result([0.1])
 
     run = verification.run_candidate_verification(
         session, draft=draft, grader_client=MutatingSemanticGrader()
@@ -729,8 +762,18 @@ def test_duplicate_feature_summary_uses_the_gate_snapshot(
     assert run.feature_summary_json == {
         "finding_count": 0,
         "fingerprint_version": "question-fingerprint-v1",
+        "candidate_prompt_fingerprint": {
+            "version": "question-fingerprint-v1",
+            "exact_hash": fingerprint_prompt("Calculate two plus two.").exact_hash,
+            "normalized_hash": fingerprint_prompt("Calculate two plus two.").normalized_hash,
+        },
         "similarity_threshold": 0.92,
         "comparison_counts": {"published_question": 1, "batch_candidate": 0},
+        "embedding_dependency": {
+            "id": "local-model",
+            "revision": "test-revision",
+            "digest": "sha256:test",
+        },
     }
 
 
@@ -882,6 +925,70 @@ def test_later_chunk_failure_overrides_an_earlier_above_threshold_match(
     assert finding.evidence_json == {"category": "similarity_unavailable"}
     assert "duplicate_semantic_near_match" not in finding_codes(run)
     assert [len(comparisons) for _, comparisons in grader.semantic_requests] == [128, 1]
+
+
+def test_semantic_embedding_metadata_mismatch_across_chunks_fails_closed(
+    session: Session,
+) -> None:
+    draft = generation_draft(session, candidate_json=valid_m1_candidate("Calculate two plus two."))
+    for ordinal in range(2, 131):
+        add_batch_draft(
+            session,
+            draft=draft,
+            prompt=f"Distinct comparison prompt {ordinal}",
+            ordinal=ordinal,
+        )
+    grader = SemanticGrader(
+        [
+            semantic_result([0.1] * 128),
+            semantic_result(
+                [0.1],
+                EmbeddingDependencyVersion(
+                    id="local-model",
+                    revision="different-revision",
+                    digest="sha256:test",
+                ),
+            ),
+        ]
+    )
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    finding = finding_by_code(run, "duplicate_semantic_check_unavailable")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {"category": "similarity_unavailable"}
+    assert run.feature_summary_json["embedding_dependency"] is None
+
+
+def test_candidate_mutation_during_semantic_scoring_blocks_stale_validation_run(
+    session: Session,
+) -> None:
+    original_prompt = "Calculate two plus two."
+    draft = generation_draft(session, candidate_json=valid_m1_candidate(original_prompt))
+    add_published_question(session, draft=draft, prompt="Name the capital of France.")
+
+    class CandidateMutatingGrader(PassingGrader):
+        def semantic_similarity(
+            self, query: str, comparisons: list[str]
+        ) -> SemanticSimilarityResult:
+            draft.candidate_json = {**draft.candidate_json, "prompt": "What is 9 + 9?"}
+            session.flush()
+            return semantic_result([0.1])
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=CandidateMutatingGrader()
+    )
+
+    finding = finding_by_code(run, "duplicate_semantic_check_unavailable")
+    expected = fingerprint_prompt(original_prompt)
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {"category": "similarity_unavailable"}
+    assert run.feature_summary_json["candidate_prompt_fingerprint"] == {
+        "version": expected.version,
+        "exact_hash": expected.exact_hash,
+        "normalized_hash": expected.normalized_hash,
+    }
+    assert "What is 9 + 9?" not in str(run.feature_summary_json)
 
 
 def test_valid_m1_candidate_persists_a_passing_run_and_rerun(session: Session) -> None:

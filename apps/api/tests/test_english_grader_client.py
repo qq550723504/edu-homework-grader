@@ -3,7 +3,14 @@ import math
 import pytest
 from edu_grader_processor_policy import ProcessorPolicyError
 
-from edu_grader_api.services.grader import HttpGraderClient
+from edu_grader_api.services.grader import (
+    EmbeddingDependencyVersion,
+    HttpGraderClient,
+    SemanticSimilarityResult,
+)
+
+
+EMBEDDING = {"id": "local-model", "revision": "test-revision", "digest": "sha256:test"}
 
 
 class FakeResponse:
@@ -73,13 +80,16 @@ def test_http_grader_client_posts_semantic_batch(monkeypatch: pytest.MonkeyPatch
 
     def post(url: str, *, json: dict[str, object], timeout: float) -> FakeResponse:
         captured.update(url=url, json=json, timeout=timeout)
-        return FakeResponse({"scores": [0.94, 0.03], "embedding": {"id": "local-model"}})
+        return FakeResponse({"scores": [0.94, 0.03], "embedding": EMBEDDING})
 
     monkeypatch.setattr("edu_grader_api.services.grader.httpx.post", post)
 
-    scores = HttpGraderClient("http://grader").semantic_similarity("query", ["first", "second"])
+    result = HttpGraderClient("http://grader").semantic_similarity("query", ["first", "second"])
 
-    assert scores == [0.94, 0.03]
+    assert result == SemanticSimilarityResult(
+        scores=[0.94, 0.03],
+        embedding=EmbeddingDependencyVersion(**EMBEDDING),
+    )
     assert captured == {
         "url": "http://grader/v1/semantic-similarity",
         "json": {"query": "query", "comparisons": ["first", "second"]},
@@ -92,13 +102,13 @@ def test_http_grader_client_posts_semantic_batch(monkeypatch: pytest.MonkeyPatch
     [
         [],
         {},
-        {"scores": "not-a-list"},
-        {"scores": [0.5]},
-        {"scores": [True, 0.5]},
-        {"scores": [math.nan, 0.5]},
-        {"scores": [math.inf, 0.5]},
-        {"scores": [-0.01, 0.5]},
-        {"scores": [1.01, 0.5]},
+        {"scores": "not-a-list", "embedding": EMBEDDING},
+        {"scores": [0.5], "embedding": EMBEDDING},
+        {"scores": [True, 0.5], "embedding": EMBEDDING},
+        {"scores": [math.nan, 0.5], "embedding": EMBEDDING},
+        {"scores": [math.inf, 0.5], "embedding": EMBEDDING},
+        {"scores": [-0.01, 0.5], "embedding": EMBEDDING},
+        {"scores": [1.01, 0.5], "embedding": EMBEDDING},
     ],
 )
 def test_http_grader_client_rejects_malformed_semantic_scores(
@@ -110,6 +120,29 @@ def test_http_grader_client_rejects_malformed_semantic_scores(
 
     with pytest.raises(ValueError, match="semantic similarity response is invalid"):
         HttpGraderClient("http://grader").semantic_similarity("query", ["first", "second"])
+
+
+@pytest.mark.parametrize(
+    "embedding",
+    [
+        None,
+        {},
+        {"id": "", "revision": "revision", "digest": "sha256:test"},
+        {"id": "local-model", "revision": 1, "digest": "sha256:test"},
+        {"id": "local-model", "revision": "revision", "digest": ""},
+        {"id": "local-model", "revision": "revision"},
+    ],
+)
+def test_http_grader_client_rejects_invalid_semantic_embedding_metadata(
+    monkeypatch: pytest.MonkeyPatch, embedding: object
+) -> None:
+    monkeypatch.setattr(
+        "edu_grader_api.services.grader.httpx.post",
+        lambda *args, **kwargs: FakeResponse({"scores": [0.5], "embedding": embedding}),
+    )
+
+    with pytest.raises(ValueError, match="semantic similarity response is invalid"):
+        HttpGraderClient("http://grader").semantic_similarity("query", ["comparison"])
 
 
 def test_http_grader_client_validates_processor_policy_before_post(
