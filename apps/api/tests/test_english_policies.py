@@ -60,4 +60,6 @@ def test_question_policy_catalog_uses_the_current_english_defaults() -> None:
     assert {"question_type": "E1", "policy_version": "2"} in catalog
     assert {"question_type": "E4", "policy_version": "2"} in catalog
     assert {"question_type": "E4", "policy_version": "1"} not in catalog
-    assert catalog == sorted(catalog, key=lambda entry: (entry["question_type"], entry["policy_version"]))
+    assert catalog == sorted(
+        catalog, key=lambda entry: (entry["question_type"], entry["policy_version"])
+    )
