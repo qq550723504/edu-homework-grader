@@ -157,12 +157,14 @@ def _evaluate_candidate(
 
     policy_version = candidate.get("policy_version")
     rule_json = candidate.get("rule_json")
-    if (
-        not isinstance(question_type, str)
-        or not isinstance(policy_version, str)
-        or not isinstance(rule_json, dict)
-        or validate_policy(question_type, policy_version, rule_json)
-    ):
+    policy_errors = (
+        validate_policy(question_type, policy_version, rule_json)
+        if isinstance(question_type, str)
+        and isinstance(policy_version, str)
+        and isinstance(rule_json, dict)
+        else [{"path": "/", "message": "candidate policy fields are invalid"}]
+    )
+    if policy_errors:
         findings.append(
             _blocked(
                 "policy_schema_invalid",
@@ -222,7 +224,7 @@ def _evaluate_candidate(
 
     if question_type == "M1" and isinstance(rule_json, dict):
         findings.extend(_m1_findings(rule_json, policy_version, grader_client))
-    if question_type == "M2" and isinstance(rule_json, dict):
+    if question_type == "M2" and isinstance(rule_json, dict) and not policy_errors:
         findings.extend(_m2_findings(rule_json, policy_version, grader_client))
     if question_type == "E1" and isinstance(rule_json, dict):
         findings.extend(_e1_findings(rule_json))
@@ -308,7 +310,9 @@ def _m2_findings(
             )
         ]
     max_score = float(rule_json.get("max_score", 1))
-    if result.decision not in {"auto_accepted", "correct"} or result.score != max_score:
+    if result.decision != "auto_accepted" or not math.isclose(
+        result.score, max_score, rel_tol=0, abs_tol=1e-9
+    ):
         return [
             _blocked(
                 "m2_grader_probe_failed",

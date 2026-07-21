@@ -88,7 +88,7 @@ class PassingM2Grader:
     ) -> GradeResult:
         self.grade_requests.append((question_type, rule_json, answer_json, policy_version))
         return GradeResult(
-            decision="correct",
+            decision="auto_accepted",
             score=4,
             evidence={"probe": "accepted"},
             grader_version="fake-m2-v1",
@@ -122,8 +122,25 @@ class PartialM2Grader(PassingM2Grader):
         policy_version: str | None = None,
     ) -> GradeResult:
         return GradeResult(
-            decision="correct",
+            decision="auto_accepted",
             score=3,
+            evidence={},
+            grader_version="fake-m2-v1",
+        )
+
+
+class FloatingPointM2Grader(PassingM2Grader):
+    def grade(
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
+    ) -> GradeResult:
+        return GradeResult(
+            decision="auto_accepted",
+            score=0.9 - 0.2 + 0.2,
             evidence={},
             grader_version="fake-m2-v1",
         )
@@ -315,6 +332,37 @@ def test_m2_failed_probe_is_safely_blocked(session: Session, grader: PassingM2Gr
     finding = next(item for item in run.findings if item.code == "m2_grader_probe_failed")
     assert run.status is ValidationRunStatus.BLOCKED
     assert finding.evidence_json == {"probe": "expected_mathjson"}
+
+
+def test_m2_full_score_tolerates_grader_float_representation(session: Session) -> None:
+    candidate = valid_m2_candidate()
+    candidate["rule_json"] = {
+        "expected": ["Add", "x", 1],
+        "variables": ["x"],
+        "required_form": "expanded",
+        "form_score": 0.2,
+        "max_score": 0.9,
+    }
+    draft = generation_draft(session, allowed_question_types=["M2"], candidate_json=candidate)
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=FloatingPointM2Grader()
+    )
+
+    assert run.status is ValidationRunStatus.PASSED
+
+
+def test_invalid_m2_schema_preserves_policy_finding(session: Session) -> None:
+    candidate = valid_m2_candidate()
+    candidate["rule_json"] = {"variables": ["x"], "max_score": 4}
+    draft = generation_draft(session, allowed_question_types=["M2"], candidate_json=candidate)
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=PassingM2Grader()
+    )
+
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding_codes(run) == {"policy_schema_invalid"}
 
 
 def test_inactive_revision_blocks_the_candidate(session: Session) -> None:
