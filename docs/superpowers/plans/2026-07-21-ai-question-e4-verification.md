@@ -85,7 +85,7 @@
 
   Add separate tests for normalized duplicate IDs, normalized duplicate phrases, and an unequal score total. Assert `e4_scoring_points_invalid` or `e4_score_total_invalid`, sanitized count/number evidence, and no Grader calls. Add a floating-point-valid total such as scores `0.7` and `0.2` with `max_score=0.9` and assert it passes deterministic validation.
 
-  Add parametrized fakes returning a thrown exception, `auto_accepted`, partial score, and `float("nan")`; assert `e4_grader_probe_failed` is blocked with exactly `{"probe": "evidence_phrases", "scoring_point_count": 2, "evidence_phrase_count": 2}` and never contains phrase text or exception text. Add a malformed E4 rule missing `scoring_points`; assert `policy_schema_invalid` and no Grader calls.
+  Add parametrized fakes returning a thrown exception, `auto_accepted`, partial score, and `float("nan")`; assert `e4_grader_probe_failed` is blocked with exactly `{"probe": "evidence_phrases", "scoring_point_count": 2, "evidence_phrase_count": 2}` and never contains phrase text or exception text. Add separate `NaN` point-score and `NaN` maximum-score candidates; assert `e4_score_total_invalid` with `{"reason": "non_finite_score", "scoring_point_count": 2, "evidence_phrase_count": 2}` and zero Grader calls. Add a malformed E4 rule missing `scoring_points`; assert `policy_schema_invalid` and no Grader calls.
 
 - [x] **Step 2: Run focused E4 tests and confirm failure.**
 

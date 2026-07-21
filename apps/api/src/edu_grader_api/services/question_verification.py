@@ -564,7 +564,17 @@ def _e4_findings(
     if not all(_is_finite_number(score) for score in point_scores) or not _is_finite_number(
         max_score
     ):
-        return []
+        return [
+            _blocked(
+                "e4_score_total_invalid",
+                {
+                    "reason": "non_finite_score",
+                    "scoring_point_count": point_count,
+                    "evidence_phrase_count": len(evidence_phrases),
+                },
+                "Provide finite scoring-point and maximum scores.",
+            )
+        ]
     point_score_total = sum(float(score) for score in point_scores)
     configured_max_score = float(max_score)
     if not math.isclose(point_score_total, configured_max_score, rel_tol=0, abs_tol=1e-9):

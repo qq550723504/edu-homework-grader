@@ -744,6 +744,30 @@ def test_e4_score_total_uses_floating_point_tolerance(session: Session) -> None:
     assert run.status is ValidationRunStatus.PASSED
 
 
+@pytest.mark.parametrize("target", ["point_score", "max_score"])
+def test_e4_non_finite_scores_are_blocked_without_grader_calls(
+    session: Session, target: str
+) -> None:
+    candidate = valid_e4_candidate()
+    if target == "point_score":
+        candidate["rule_json"]["scoring_points"][0]["score"] = float("nan")
+    else:
+        candidate["rule_json"]["max_score"] = float("nan")
+    draft = generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate)
+    grader = PassingE4Grader()
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    finding = next(item for item in run.findings if item.code == "e4_score_total_invalid")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {
+        "reason": "non_finite_score",
+        "scoring_point_count": 2,
+        "evidence_phrase_count": 2,
+    }
+    assert grader.grade_requests == []
+
+
 @pytest.mark.parametrize(
     "grader",
     [FailingE4Grader(), UnexpectedE4DecisionGrader(), PartialE4Grader(), NonFiniteE4Grader()],

@@ -17,6 +17,7 @@ This slice handles only schema-valid E4@2 candidates.
 - Verify normalized scoring-point IDs are unique.
 - Verify normalized evidence phrases are unique across the complete rubric, so the same student phrase cannot silently award multiple points.
 - Verify the sum of all point scores equals the configured `max_score`, using the existing default of `1` when `max_score` is absent and `math.isclose` for floating-point safety.
+- Reject non-finite point scores or `max_score` before arithmetic or Grader probes. JSON Schema treats `NaN` as a number, so this guard must be explicit and fail closed.
 - For every evidence phrase, construct an in-memory rule containing only its scoring point, with `max_score` set to that point's score. Probe it through `VerificationGraderClient.grade("E4", single_point_rule, {"format": "text-v1", "text": phrase}, policy_version="2")`.
 - Require the probe decision to be `needs_review` and its score to equal the isolated point's score. This verifies literal evidence linkage and the review-only Grader contract without treating semantic similarity as automatic credit.
 - Treat any Grader/similarity dependency failure, malformed response, wrong decision, or partial/no score as blocked.
@@ -39,7 +40,7 @@ Findings store only stable categories, counts, and numeric score values. They ne
 | Code | Severity | Sanitized evidence | Meaning |
 | --- | --- | --- | --- |
 | `e4_scoring_points_invalid` | `blocked` | `{"reason": "normalized_duplicate_id" | "normalized_duplicate_phrase", "scoring_point_count": N, "evidence_phrase_count": N}` | The rubric can award ambiguous or duplicate credit. |
-| `e4_score_total_invalid` | `blocked` | `{"scoring_point_count": N, "point_score_total": N, "max_score": N}` | Configured point values do not add up to the rubric maximum. |
+| `e4_score_total_invalid` | `blocked` | `{"scoring_point_count": N, "point_score_total": N, "max_score": N}` or `{"reason": "non_finite_score", "scoring_point_count": N, "evidence_phrase_count": N}` | Configured point values do not add up to the rubric maximum or contain a non-finite number. |
 | `e4_grader_probe_failed` | `blocked` | `{"probe": "evidence_phrases", "scoring_point_count": N, "evidence_phrase_count": N}` | An isolated point could not safely demonstrate its configured credit through the review-only Grader. |
 
 ## Teacher Review Semantics
@@ -53,6 +54,7 @@ Focused tests will cover:
 - a valid two-point E4 candidate probes every phrase with isolated rules and leaves the stored candidate rule unchanged;
 - normalized duplicate point IDs and phrases block before any Grader call;
 - point-score total mismatch uses floating-point tolerance and blocks invalid totals;
+- `NaN` point scores and `NaN` maximum scores block before any Grader call;
 - wrong decision, partial score, non-finite score, malformed result, and Grader/similarity exceptions yield only the sanitized blocked finding;
 - schema-invalid E4 policies do not call the Grader;
 - an otherwise valid E4 run remains candidate-verification `passed` without changing E4's external review-only policy.
