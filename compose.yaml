@@ -57,6 +57,7 @@ services:
         condition: service_healthy
 
   languagetool:
+    image: edu-homework-grader/languagetool:ci
     build:
       context: ./infra/languagetool
     healthcheck:
@@ -66,6 +67,7 @@ services:
       retries: 10
 
   grader:
+    image: edu-homework-grader/grader:ci
     build:
       context: .
       dockerfile: ./services/grader/Dockerfile

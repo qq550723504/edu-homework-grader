@@ -75,10 +75,18 @@ jobs:
       KEYCLOAK_POSTGRES_PASSWORD: ci-keycloak-postgres-password
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v4
       - name: Validate Compose configuration
         run: docker compose config --quiet
       - name: Build application images
-        run: docker compose build api grader web languagetool
+        uses: docker/bake-action@v7
+        with:
+          source: .
+          files: |
+            compose.yaml
+            docker-bake.ci.hcl
+          targets: api,web
+          load: true
 
   live-grader-integration:
     runs-on: ubuntu-latest
@@ -91,14 +99,24 @@ jobs:
       KEYCLOAK_POSTGRES_PASSWORD: ci-keycloak-postgres-password
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
           cache: pip
       - name: Install Core API and Grader packages
         run: make install-python
+      - name: Build real Grader dependencies
+        uses: docker/bake-action@v7
+        with:
+          source: .
+          files: |
+            compose.yaml
+            docker-bake.ci.hcl
+          targets: grader,languagetool
+          load: true
       - name: Start real Grader dependencies
-        run: docker compose up --build --detach --wait languagetool grader
+        run: docker compose up --detach --wait --no-build languagetool grader
       - name: Exercise Core API HTTP Grader adapter
         env:
           LIVE_GRADER_INTEGRATION: "1"
@@ -123,13 +141,6 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-          cache: pip
-      - name: Install Python API runtime
-        working-directory: .
-        run: make install-python
       - name: Install web dependencies
         run: npm ci
       - name: Run unit tests
