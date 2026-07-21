@@ -229,6 +229,13 @@ def _evaluate_candidate(
         findings.extend(_m2_findings(rule_json, policy_version, grader_client))
     if question_type == "E2" and isinstance(rule_json, dict) and not policy_errors:
         findings.extend(_e2_findings(rule_json, policy_version, grader_client))
+    if (
+        question_type == "E3"
+        and isinstance(rule_json, dict)
+        and isinstance(prompt, str)
+        and not policy_errors
+    ):
+        findings.extend(_e3_findings(rule_json, policy_version, prompt, grader_client))
     if question_type == "E1" and isinstance(rule_json, dict):
         findings.extend(_e1_findings(rule_json))
     return findings
@@ -435,6 +442,73 @@ def _e2_findings(
             )
         ]
     return []
+
+
+def _e3_findings(
+    rule_json: dict[str, object],
+    policy_version: object,
+    prompt: str,
+    grader_client: VerificationGraderClient,
+) -> list[VerificationFinding]:
+    if policy_version != "1":
+        return []
+    accepted_answers = rule_json.get("accepted_answers", [])
+    if not isinstance(accepted_answers, list) or not all(
+        isinstance(answer, str) for answer in accepted_answers
+    ):
+        return [
+            _blocked(
+                "e3_grammar_probe_failed",
+                {"target": "prompt", "reference_answer_count": 0},
+                "Retry validation after the grammar checker is available.",
+            )
+        ]
+    probe_rule = {**rule_json, "grammar_feedback_required": True}
+    findings: list[VerificationFinding] = []
+    probes = [("prompt", prompt), *(("reference_answers", answer) for answer in accepted_answers)]
+    for target, text in probes:
+        try:
+            result = grader_client.grade(
+                "E3",
+                probe_rule,
+                {"format": "text-v1", "text": text},
+                policy_version="1",
+            )
+            grammar_match_count = _e3_feedback_count(result)
+        except Exception:
+            return [
+                *findings,
+                _blocked(
+                    "e3_grammar_probe_failed",
+                    {"target": target, "reference_answer_count": len(accepted_answers)},
+                    "Retry validation after the grammar checker is available.",
+                ),
+            ]
+        if grammar_match_count:
+            findings.append(
+                VerificationFinding(
+                    code="e3_grammar_warning",
+                    severity=ValidationFindingSeverity.WARNING,
+                    evidence={
+                        "target": target,
+                        "grammar_match_count": grammar_match_count,
+                        "reference_answer_count": len(accepted_answers),
+                    },
+                    remediation="Revise the generated language before teacher review.",
+                )
+            )
+    return findings
+
+
+def _e3_feedback_count(result: GradeResult) -> int:
+    feedback = result.evidence.get("feedback")
+    if (
+        result.decision != "needs_review"
+        or not isinstance(feedback, list)
+        or not all(isinstance(item, dict) and item.get("type") == "grammar" for item in feedback)
+    ):
+        raise ValueError("unexpected E3 grammar response")
+    return len(feedback)
 
 
 def _persist_run(
