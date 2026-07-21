@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from edu_grader_api.services.curriculum import (
     CurriculumValidationError,
+    create_prerequisite,
     create_objective_revision,
     list_active_objective_revisions,
     retire_objective_revision,
@@ -201,3 +202,60 @@ def test_retired_revision_is_excluded_from_active_objective_selection(session: S
 
     retire_objective_revision(session, item)
     assert item.id not in {revision.id for revision in list_active_objective_revisions(session)}
+
+
+def test_retired_profile_is_excluded_from_active_objective_selection(session: Session) -> None:
+    profile = active_profile(session)
+    objective = CurriculumObjective(
+        profile=profile,
+        grade_mapping=grade_mapping(session, profile),
+        code="MATH-G1-NUM-001",
+        subject="mathematics",
+        domain="number",
+        status=CurriculumProfileStatus.ACTIVE,
+    )
+    item = revision(objective, 1)
+    session.add_all([objective, item])
+    session.commit()
+
+    profile.status = CurriculumProfileStatus.RETIRED
+    session.commit()
+
+    assert item.id not in {revision.id for revision in list_active_objective_revisions(session)}
+
+
+def test_prerequisite_rejects_an_indirect_cycle(session: Session) -> None:
+    profile = active_profile(session)
+    mapping = grade_mapping(session, profile)
+    first_objective = CurriculumObjective(
+        profile=profile,
+        grade_mapping=mapping,
+        code="MATH-G1-NUM-001",
+        subject="mathematics",
+        domain="number",
+        status=CurriculumProfileStatus.ACTIVE,
+    )
+    second_objective = CurriculumObjective(
+        profile=profile,
+        grade_mapping=mapping,
+        code="MATH-G1-NUM-002",
+        subject="mathematics",
+        domain="number",
+        status=CurriculumProfileStatus.ACTIVE,
+    )
+    first_revision = revision(first_objective, 1)
+    second_revision = revision(second_objective, 1)
+    session.add_all([first_objective, second_objective, first_revision, second_revision])
+    session.flush()
+
+    create_prerequisite(
+        session,
+        objective_revision=first_revision,
+        prerequisite_revision=second_revision,
+    )
+    with pytest.raises(CurriculumValidationError, match="prerequisite cycle"):
+        create_prerequisite(
+            session,
+            objective_revision=second_revision,
+            prerequisite_revision=first_revision,
+        )

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -7,8 +9,11 @@ from ..models import (
     CurriculumActivityType,
     CurriculumObjective,
     CurriculumObjectiveRevision,
+    CurriculumPrerequisite,
+    CurriculumProfile,
     CurriculumProfileStatus,
     CurriculumRevisionStatus,
+    utc_now,
 )
 from ..policies import question_policy_catalog
 
@@ -57,12 +62,67 @@ def retire_objective_revision(session: Session, revision: CurriculumObjectiveRev
     session.flush()
 
 
+def activate_objective_revision(
+    session: Session,
+    *,
+    revision: CurriculumObjectiveRevision,
+    reviewer_user_id: UUID,
+) -> CurriculumObjectiveRevision:
+    """Activate exactly one immutable revision for an objective."""
+    if revision.status is not CurriculumRevisionStatus.IN_REVIEW:
+        raise CurriculumValidationError("only in-review revisions can be activated")
+    if revision.objective.profile.status is not CurriculumProfileStatus.ACTIVE:
+        raise CurriculumValidationError("objective profile is not active")
+    if revision.objective.status is not CurriculumProfileStatus.ACTIVE:
+        raise CurriculumValidationError("objective is not active")
+
+    active_revisions = session.scalars(
+        select(CurriculumObjectiveRevision).where(
+            CurriculumObjectiveRevision.objective_id == revision.objective_id,
+            CurriculumObjectiveRevision.status == CurriculumRevisionStatus.ACTIVE,
+            CurriculumObjectiveRevision.id != revision.id,
+        )
+    )
+    for active_revision in active_revisions:
+        active_revision.status = CurriculumRevisionStatus.RETIRED
+
+    revision.status = CurriculumRevisionStatus.ACTIVE
+    revision.reviewed_by_user_id = reviewer_user_id
+    revision.reviewed_at = utc_now()
+    session.add(revision)
+    session.flush()
+    return revision
+
+
+def create_prerequisite(
+    session: Session,
+    *,
+    objective_revision: CurriculumObjectiveRevision,
+    prerequisite_revision: CurriculumObjectiveRevision,
+) -> CurriculumPrerequisite:
+    """Add a requires edge after proving it cannot create a dependency cycle."""
+    if objective_revision.id == prerequisite_revision.id:
+        raise CurriculumValidationError("prerequisite cannot reference itself")
+    if _depends_on(session, start=prerequisite_revision.id, target=objective_revision.id):
+        raise CurriculumValidationError("prerequisite cycle detected")
+    prerequisite = CurriculumPrerequisite(
+        objective_revision_id=objective_revision.id,
+        prerequisite_revision_id=prerequisite_revision.id,
+        relation_type="requires",
+    )
+    session.add(prerequisite)
+    session.flush()
+    return prerequisite
+
+
 def list_active_objective_revisions(session: Session) -> list[CurriculumObjectiveRevision]:
     return list(
         session.scalars(
             select(CurriculumObjectiveRevision)
             .join(CurriculumObjective)
+            .join(CurriculumProfile)
             .where(
+                CurriculumProfile.status == CurriculumProfileStatus.ACTIVE,
                 CurriculumObjective.status == CurriculumProfileStatus.ACTIVE,
                 CurriculumObjectiveRevision.status == CurriculumRevisionStatus.ACTIVE,
             )
@@ -103,3 +163,23 @@ def _validate_revision(
 
 def text_value(question_types: list[str]) -> bool:
     return bool(question_types) and all(isinstance(item, str) and item for item in question_types)
+
+
+def _depends_on(session: Session, *, start: UUID, target: UUID) -> bool:
+    pending = [start]
+    visited = set()
+    while pending:
+        revision_id = pending.pop()
+        if revision_id == target:
+            return True
+        if revision_id in visited:
+            continue
+        visited.add(revision_id)
+        pending.extend(
+            session.scalars(
+                select(CurriculumPrerequisite.prerequisite_revision_id).where(
+                    CurriculumPrerequisite.objective_revision_id == revision_id
+                )
+            )
+        )
+    return False

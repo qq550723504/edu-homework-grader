@@ -31,6 +31,19 @@ def require_role(role: Role) -> Callable[[CurrentPrincipal], CurrentPrincipal]:
     return dependency
 
 
+def require_any_role(*roles: Role) -> Callable[[CurrentPrincipal], CurrentPrincipal]:
+    """Require one of the supplied platform roles without revealing the resource."""
+
+    def dependency(
+        principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+    ) -> CurrentPrincipal:
+        if principal.role not in roles:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
+        return principal
+
+    return dependency
+
+
 def require_student_consent(
     principal: Annotated[CurrentPrincipal, Depends(require_role(Role.STUDENT))],
     session: Annotated[Session, Depends(get_session)],
