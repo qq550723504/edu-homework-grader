@@ -346,10 +346,14 @@ def suggested_question_test_cases(
         raise QuestionVersionStateError("only draft versions can load test templates")
     if draft.question_type == "E1":
         answer = _first_rule_text(draft.rule_json, "accepted_answers", "answer")
-        return _text_test_templates(answer)
+        return _text_test_templates(
+            answer, incorrect=_unmatched_text(draft.rule_json, "accepted_answers")
+        )
     if draft.question_type == "E2":
         answer = _first_rule_text(draft.rule_json, "accepted_forms", "form")
-        return _text_test_templates(answer)
+        return _text_test_templates(
+            answer, incorrect=_unmatched_text(draft.rule_json, "accepted_forms")
+        )
     if draft.question_type == "E3":
         answer = _first_rule_text(draft.rule_json, "accepted_answers", "I write a sentence.")
         return _text_test_templates(answer) + [_text_test_template("grammar_feedback", answer)]
@@ -410,6 +414,18 @@ def _e4_incorrect_answer(evidence_phrase: str) -> str:
         if candidate not in normalized_phrase:
             return candidate
     raise QuestionVersionStateError("unable to create an E4 incorrect test template")
+
+
+def _unmatched_text(rule_json: dict[str, object], key: str) -> str:
+    accepted = {
+        unicodedata.normalize("NFKC", value).strip().casefold()
+        for value in rule_json.get(key, [])
+        if isinstance(value, str)
+    }
+    for candidate in "xqzjkvbw":
+        if candidate not in accepted:
+            return candidate
+    return _e4_incorrect_answer("".join(accepted))
 
 
 def publish_question_version(

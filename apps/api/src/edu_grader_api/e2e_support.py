@@ -150,9 +150,29 @@ class DeterministicE2EGraderClient:
             raise ValueError("English answers require a text-v1 envelope")
         if not isinstance(accepted, list) or not all(isinstance(value, str) for value in accepted):
             raise ValueError(f"English rules require {accepted_key}")
-        normalized = text.strip().casefold().rstrip(".")
+        normalization = (
+            rule_json.get("normalization", {}) if accepted_key == "accepted_answers" else {}
+        )
+        if not isinstance(normalization, dict):
+            normalization = {}
+        normalized = text.strip()
+        if normalization.get("ignore_terminal_punctuation", True):
+            normalized = normalized.rstrip(".!?。！？").rstrip()
+        if normalization.get("ignore_case", True):
+            normalized = normalized.casefold()
         matched = bool(normalized) and normalized in {
-            value.strip().casefold().rstrip(".") for value in accepted
+            (
+                value.strip().rstrip(".!?。！？").rstrip()
+                if normalization.get("ignore_terminal_punctuation", True)
+                else value.strip()
+            ).casefold()
+            if normalization.get("ignore_case", True)
+            else (
+                value.strip().rstrip(".!?。！？").rstrip()
+                if normalization.get("ignore_terminal_punctuation", True)
+                else value.strip()
+            )
+            for value in accepted
         }
         max_score = rule_json.get("max_score", 1)
         if isinstance(max_score, bool) or not isinstance(max_score, int | float):

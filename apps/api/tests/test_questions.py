@@ -230,7 +230,7 @@ def test_teacher_receives_editable_english_test_case_templates(
     assert response.json() == {
         "templates": [
             {"category": "correct", "answer": {"format": "text-v1", "text": "cat"}},
-            {"category": "incorrect", "answer": {"format": "text-v1", "text": "not cat"}},
+            {"category": "incorrect", "answer": {"format": "text-v1", "text": "x"}},
             {"category": "empty", "answer": {"format": "text-v1", "text": ""}},
             {"category": "boundary", "answer": {"format": "text-v1", "text": " cat. "}},
         ]
