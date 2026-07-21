@@ -176,6 +176,7 @@ def _evaluate_candidate(
 
     prompt = candidate.get("prompt")
     explanation = candidate.get("explanation")
+    reading_material = candidate.get("reading_material")
     if (
         not isinstance(prompt, str)
         or not prompt.strip()
@@ -199,6 +200,7 @@ def _evaluate_candidate(
         _safety_findings(
             prompt if isinstance(prompt, str) else "",
             explanation if isinstance(explanation, str) else "",
+            reading_material if isinstance(reading_material, str) else "",
             *(_text_values(rule_json) if isinstance(rule_json, dict) else []),
         )
     )
@@ -237,7 +239,7 @@ def _evaluate_candidate(
     ):
         findings.extend(_e3_findings(rule_json, policy_version, prompt, grader_client))
     if question_type == "E4" and isinstance(rule_json, dict) and not policy_errors:
-        findings.extend(_e4_findings(rule_json, policy_version, grader_client))
+        findings.extend(_e4_findings(rule_json, policy_version, reading_material, grader_client))
     if question_type == "E1" and isinstance(rule_json, dict):
         findings.extend(_e1_findings(rule_json))
     return findings
@@ -516,6 +518,7 @@ def _e3_feedback_count(result: GradeResult) -> int:
 def _e4_findings(
     rule_json: dict[str, object],
     policy_version: object,
+    reading_material: object,
     grader_client: VerificationGraderClient,
 ) -> list[VerificationFinding]:
     if policy_version != "2":
@@ -599,6 +602,43 @@ def _e4_findings(
                     "max_score": configured_max_score,
                 },
                 "Make the scoring-point total equal the rubric maximum score.",
+            )
+        ]
+    if not isinstance(reading_material, str) or not reading_material.strip():
+        return [
+            _blocked(
+                "e4_reading_material_invalid",
+                {
+                    "reason": "missing_or_blank",
+                    "scoring_point_count": point_count,
+                    "evidence_phrase_count": len(evidence_phrases),
+                },
+                "Generate a non-empty reading passage for this E4 candidate.",
+            )
+        ]
+    if len(reading_material) > 8_000:
+        return [
+            _blocked(
+                "e4_reading_material_invalid",
+                {
+                    "reason": "too_long",
+                    "scoring_point_count": point_count,
+                    "evidence_phrase_count": len(evidence_phrases),
+                },
+                "Generate a reading passage within the supported length.",
+            )
+        ]
+    normalized_material = _normalize_e2_form(reading_material)
+    if any(_normalize_e2_form(phrase) not in normalized_material for phrase in evidence_phrases):
+        return [
+            _blocked(
+                "e4_evidence_material_mismatch",
+                {
+                    "probe": "reading_material",
+                    "scoring_point_count": point_count,
+                    "evidence_phrase_count": len(evidence_phrases),
+                },
+                "Regenerate the candidate so each rubric phrase occurs in its reading passage.",
             )
         ]
     for point in scoring_points:
