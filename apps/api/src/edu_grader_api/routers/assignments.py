@@ -187,12 +187,20 @@ def update_assignment_route(
                 question_version_ids=body.question_version_ids,
             )
     except AssignmentAccessError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found") from None
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+        ) from None
     except AssignmentStateError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     except AssignmentValidationError as error:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
-    return {"id": str(assignment.id), "status": assignment.status.value, "positions": [item.position for item in items]}
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from error
+    return {
+        "id": str(assignment.id),
+        "status": assignment.status.value,
+        "positions": [item.position for item in items],
+    }
 
 
 @router.post("/{assignment_id}/items", status_code=status.HTTP_201_CREATED)

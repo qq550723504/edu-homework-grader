@@ -195,7 +195,10 @@ def test_teacher_creates_an_ordered_multi_question_assignment_atomically(
     assert response.json()["positions"] == [1, 2]
     assignment = session.get(Assignment, UUID(response.json()["id"]))
     assert assignment is not None
-    assert [item.question_version_id for item in sorted(assignment.items, key=lambda item: item.position)] == [
+    assert [
+        item.question_version_id
+        for item in sorted(assignment.items, key=lambda item: item.position)
+    ] == [
         published_m2.id,
         published_m1.id,
     ]
@@ -216,7 +219,10 @@ def test_teacher_creates_an_ordered_english_assignment_atomically(
         "/v1/assignments",
         headers=authorize(client, teacher),
         json=assignment_payload(classroom)
-        | {"subject": "english", "question_version_ids": [str(published_e4.id), str(published_e1.id)]},
+        | {
+            "subject": "english",
+            "question_version_ids": [str(published_e4.id), str(published_e1.id)],
+        },
     )
 
     assert response.status_code == 201
@@ -305,14 +311,20 @@ def test_teacher_can_replace_a_draft_composition_but_not_a_published_one(
     assignment = session.get(Assignment, UUID(assignment_id))
     assert assignment is not None
     assert assignment.title == "Reordered algebra"
-    assert [item.question_version_id for item in sorted(assignment.items, key=lambda item: item.position)] == [
+    assert [
+        item.question_version_id
+        for item in sorted(assignment.items, key=lambda item: item.position)
+    ] == [
         published_m2.id,
         published_m1.id,
     ]
 
-    assert client.post(
-        f"/v1/assignments/{assignment_id}/publish", headers=authorize(client, teacher)
-    ).status_code == 200
+    assert (
+        client.post(
+            f"/v1/assignments/{assignment_id}/publish", headers=authorize(client, teacher)
+        ).status_code
+        == 200
+    )
     frozen = client.put(
         f"/v1/assignments/{assignment_id}",
         headers=authorize(client, teacher),

@@ -168,16 +168,24 @@ def add_assignment_item(
         raise AssignmentStateError("only draft assignments can add items")
 
     question_version = _composition_versions(session, assignment, [question_version_id])[0]
-    if session.scalar(
-        select(AssignmentItem.id).where(
-            AssignmentItem.assignment_id == assignment.id,
-            AssignmentItem.question_version_id == question_version_id,
+    if (
+        session.scalar(
+            select(AssignmentItem.id).where(
+                AssignmentItem.assignment_id == assignment.id,
+                AssignmentItem.question_version_id == question_version_id,
+            )
         )
-    ) is not None:
+        is not None
+    ):
         raise AssignmentValidationError("assignment items cannot repeat a question version")
-    expected_position = (session.scalar(
-        select(func.count(AssignmentItem.id)).where(AssignmentItem.assignment_id == assignment.id)
-    ) or 0) + 1
+    expected_position = (
+        session.scalar(
+            select(func.count(AssignmentItem.id)).where(
+                AssignmentItem.assignment_id == assignment.id
+            )
+        )
+        or 0
+    ) + 1
     if position != expected_position:
         raise AssignmentValidationError("assignment item positions must be continuous")
 
