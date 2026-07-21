@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 import math
 import re
 from typing import Callable, Protocol
@@ -42,6 +42,7 @@ _SEMANTIC_CHUNK_SIZE = 128
 _DUPLICATE_REMEDIATION = "Revise the prompt to make the candidate meaningfully distinct."
 _WHITESPACE = re.compile(r"\s+")
 _E2_TERMINAL_PUNCTUATION = re.compile(r"[.!?。！？]+$")
+_M1_PROBE_TEXT_LIMIT = 100
 _GRADE_TEXT_LIMITS = {
     "G1": 300,
     "G2": 400,
@@ -379,27 +380,46 @@ def _m1_probes(expected: int | float, tolerance: int | float) -> tuple[_M1Probe,
         raise ValueError("M1 probe construction failed") from error
     if not expected_decimal.is_finite() or not tolerance_decimal.is_finite():
         raise ValueError("M1 probe values must be finite")
-    values = (
-        ("expected_answer", expected_decimal, True),
-        ("empty_answer", None, False),
-        ("lower_tolerance_boundary", expected_decimal - tolerance_decimal, True),
-        ("upper_tolerance_boundary", expected_decimal + tolerance_decimal, True),
-        ("below_tolerance_boundary", expected_decimal - tolerance_decimal - Decimal(1), False),
-        ("above_tolerance_boundary", expected_decimal + tolerance_decimal + Decimal(1), False),
-    )
+    unit = Decimal(1)
+    with localcontext() as context:
+        context.prec = _m1_probe_precision(expected_decimal, tolerance_decimal, unit)
+        lower_boundary = expected_decimal - tolerance_decimal
+        upper_boundary = expected_decimal + tolerance_decimal
+        values = (
+            ("expected_answer", expected_decimal, True),
+            ("empty_answer", None, False),
+            ("lower_tolerance_boundary", lower_boundary, True),
+            ("upper_tolerance_boundary", upper_boundary, True),
+            ("below_tolerance_boundary", lower_boundary - unit, False),
+            ("above_tolerance_boundary", upper_boundary + unit, False),
+        )
     probes = tuple(
         _M1Probe(name, "" if value is None else _m1_probe_text(value), accepts)
         for name, value, accepts in values
     )
-    if any(len(probe.text) > 100 for probe in probes):
+    if any(len(probe.text) > _M1_PROBE_TEXT_LIMIT for probe in probes):
         raise ValueError("M1 probe exceeds the numeric answer envelope")
     return probes
+
+
+def _m1_probe_precision(*values: Decimal) -> int:
+    nonzero_values = tuple(value for value in values if value)
+    precision = (
+        max(value.adjusted() for value in nonzero_values)
+        - min(value.as_tuple().exponent for value in nonzero_values)
+        + 1
+    )
+    if precision > _M1_PROBE_TEXT_LIMIT:
+        raise ValueError("M1 probe precision exceeds the numeric answer envelope")
+    return max(precision, 1)
 
 
 def _m1_probe_text(value: Decimal) -> str:
     if not value.is_finite():
         raise ValueError("M1 probe value must be finite")
-    normalized = value.normalize()
+    with localcontext() as context:
+        context.prec = max(len(value.as_tuple().digits), 1)
+        normalized = value.normalize()
     return "0" if normalized == 0 else str(normalized)
 
 

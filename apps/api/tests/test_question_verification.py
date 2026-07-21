@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+from edu_grader_api.e2e_support import DeterministicE2EGraderClient
 from edu_grader_api.models import (
     Base,
     CurriculumActivityType,
@@ -1164,6 +1165,63 @@ def test_m1_negative_numbers_use_safe_decimal_probe_text(session: Session) -> No
         "-2.5",
         "-4.5",
         "-1.5",
+    ]
+
+
+def test_m1_large_expected_preserves_exact_outside_tolerance_probes(session: Session) -> None:
+    expected = 1e30
+    rule_json = {"expected": expected, "tolerance": 0}
+    probes = verification._m1_probes(expected, 0)
+
+    assert [probe.text for probe in probes] == [
+        "1E+30",
+        "",
+        "1E+30",
+        "1E+30",
+        "999999999999999999999999999999",
+        "1000000000000000000000000000001",
+    ]
+    grader = DeterministicE2EGraderClient("")
+    decisions = [
+        grader.grade(
+            "M1", rule_json, {"format": "text-v1", "text": probe.text}, policy_version="1"
+        ).decision
+        for probe in probes
+    ]
+    assert decisions == [
+        "auto_accepted",
+        "auto_rejected",
+        "auto_accepted",
+        "auto_accepted",
+        "auto_rejected",
+        "auto_rejected",
+    ]
+
+    run = verification.run_candidate_verification(
+        session,
+        draft=generation_draft(
+            session,
+            candidate_json={
+                **valid_m1_candidate("Calculate a large number."),
+                "rule_json": rule_json,
+            },
+        ),
+        grader_client=grader,
+    )
+
+    assert run.status is ValidationRunStatus.PASSED
+
+
+def test_m1_tiny_expected_preserves_unit_outside_tolerance_probes() -> None:
+    probes = verification._m1_probes(1e-30, 0)
+
+    assert [probe.text for probe in probes] == [
+        "1E-30",
+        "",
+        "1E-30",
+        "1E-30",
+        f"-0.{'9' * 30}",
+        f"1.{'0' * 29}1",
     ]
 
 
