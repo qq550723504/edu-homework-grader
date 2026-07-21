@@ -36,7 +36,7 @@
 - `HttpGraderClient.grade("M2", rule_json, {"mathjson": None}, policy_version="2")` posts JSON with `student_mathjson: null` to `/v1/grade/math/expression-v2`.
 - The existing Grader endpoint returns `needs_review` with score `0` for a null student expression and does not raise a transport/schema error.
 
-- [ ] **Step 1: Add failing Core-adapter and Grader endpoint tests.**
+- [x] **Step 1: Add failing Core-adapter and Grader endpoint tests.**
 
   In `test_math_policy_v2.py`, mock `httpx.post`, grade an M2 rule with
   `{"mathjson": None}`, and assert the exact outgoing JSON keeps
@@ -50,7 +50,7 @@
   assert response.json()["score"] == 0
   ```
 
-- [ ] **Step 2: Run the focused tests and confirm RED.**
+- [x] **Step 2: Run the focused tests and confirm RED.**
 
   ```powershell
   $env:PYTHONPATH = "$(Join-Path $PWD 'apps\api\src');$(Join-Path $PWD 'services\grader\src')"
@@ -60,7 +60,7 @@
   Expected: the Core adapter test fails because `_mathjson_request` raises on
   `None`; the endpoint test establishes the current Grader review contract.
 
-- [ ] **Step 3: Forward a present null MathJSON value without weakening rule validation.**
+- [x] **Step 3: Forward a present null MathJSON value without weakening rule validation.**
 
   Change `_mathjson_request` so it requires the `mathjson` key but permits its
   value to be `None`, then passes that value unchanged as `student_mathjson`.
@@ -68,7 +68,7 @@
   envelope unchanged. Do not modify the Grader route: its `Any` input and
   `MathJsonValidationError` review result are already the authority.
 
-- [ ] **Step 4: Run focused adapter/Grader tests and static checks.**
+- [x] **Step 4: Run focused adapter/Grader tests and static checks.**
 
   ```powershell
   $env:PYTHONPATH = "$(Join-Path $PWD 'apps\api\src');$(Join-Path $PWD 'services\grader\src')"
@@ -78,7 +78,7 @@
   git diff --check
   ```
 
-- [ ] **Step 5: Commit Task 1.**
+- [x] **Step 5: Commit Task 1.**
 
   ```powershell
   git add apps/api/src/edu_grader_api/services/grader.py apps/api/tests/test_math_policy_v2.py services/grader/tests/test_mathjson.py
@@ -98,7 +98,7 @@
 - `_m2_probes(expected: object) -> tuple[_M2Probe, ...]` returns the five global-contract probes in their fixed order.
 - `_m2_findings(...)` normalizes the expected expression once, then grades all five probes and returns one sanitized failure finding at most.
 
-- [ ] **Step 1: Add RED tests for exact calls and outcomes.**
+- [x] **Step 1: Add RED tests for exact calls and outcomes.**
 
   Extend `PassingM2Grader` into a recording fixture that responds according to
   these probe answer envelopes. Assert that valid M2 verification calls the
@@ -122,7 +122,7 @@
   from evidence and remediation. Cover a `required_form="expanded"` candidate
   to prove the expected-answer full-score requirement is retained.
 
-- [ ] **Step 2: Run focused verifier tests and confirm RED.**
+- [x] **Step 2: Run focused verifier tests and confirm RED.**
 
   ```powershell
   $env:PYTHONPATH = (Join-Path $PWD 'src')
@@ -132,7 +132,7 @@
   Expected: failures because `_m2_findings` currently grades only
   `expected_mathjson`.
 
-- [ ] **Step 3: Add bounded probe construction and strict response checking.**
+- [x] **Step 3: Add bounded probe construction and strict response checking.**
 
   Define `_M2Probe` beside `_M1Probe`. Build the nested negate tree iteratively
   with exactly 21 operators; do not inspect or transform `expected` beyond
@@ -144,7 +144,7 @@
   nesting level and may correctly hit the Grader resource guard. Catch every injected-Grader exception as a failed
   probe, but continue iterating. Do not call `normalize_math_answer` again.
 
-- [ ] **Step 4: Run focused and complete verifier checks.**
+- [x] **Step 4: Run focused and complete verifier checks.**
 
   ```powershell
   $env:PYTHONPATH = (Join-Path $PWD 'src')
@@ -155,7 +155,7 @@
   git diff --check
   ```
 
-- [ ] **Step 5: Commit Task 2.**
+- [x] **Step 5: Commit Task 2.**
 
   ```powershell
   git add apps/api/src/edu_grader_api/services/question_verification.py apps/api/tests/test_question_verification.py
@@ -176,14 +176,14 @@
   Grader probes; it does not infer misconceptions, auto-publish, or replace
   #41/#42 work.
 
-- [ ] **Step 1: Update the adoption boundary and completed checkboxes.**
+- [x] **Step 1: Update the adoption boundary and completed checkboxes.**
 
   Add a compact M2 probe statement to `docs/ai-question-generation-plan.md`.
   Mark only completed spec and plan steps, and state that explicit curated
   misconception corpora remain #42 work rather than treating an offset probe as
   learner-behavior evidence.
 
-- [ ] **Step 2: Run complete relevant verification.**
+- [x] **Step 2: Run complete relevant verification.**
 
   ```powershell
   $env:PYTHONPATH = "$(Join-Path $PWD 'apps\api\src');$(Join-Path $PWD 'services\generator\src');$(Join-Path $PWD 'packages\processor-policy\src');$(Join-Path $PWD 'services\grader\src')"
@@ -196,14 +196,14 @@
   Expected: all tests pass; only the established Alembic `path_separator`
   deprecation warning is allowed.
 
-- [ ] **Step 3: Audit delivery boundaries.**
+- [x] **Step 3: Audit delivery boundaries.**
 
   Verify the final diff has no new parser/evaluator/dependency, no raw probe or
   candidate content in findings, no second expected normalizer call, no
   `QuestionVersion` mutation, no teacher acknowledgement/publication behavior,
   and no claim that a synthetic offset is a real common misconception.
 
-- [ ] **Step 4: Commit Task 3.**
+- [x] **Step 4: Commit Task 3.**
 
   ```powershell
   git add docs/ai-question-generation-plan.md docs/superpowers/specs/2026-07-22-m2-candidate-grader-probes-design.md docs/superpowers/plans/2026-07-22-m2-candidate-grader-probes.md

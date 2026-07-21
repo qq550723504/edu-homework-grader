@@ -102,3 +102,12 @@ service test suites.
   migration, or dependency.
 - No change to the #41 teacher review/acknowledgement workflow or #42 evaluation
   datasets/calibration.
+
+## Delivered Boundary
+
+This implementation delivers only deterministic, in-memory Grader probes during
+M2 candidate validation. A synthetic one-unit offset is a consistency check, not
+evidence of a learner common misconception. Curated misconception corpora and
+their outcome calibration remain #42 work; teacher acknowledgement, acceptance,
+conversion, and publication remain deferred to #41 and the existing publication
+gate.
