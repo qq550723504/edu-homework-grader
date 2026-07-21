@@ -38,3 +38,13 @@ def test_ci_completes_required_jobs_without_heavy_steps_for_docs_only_pull_reque
         assert "Skip docs-only pull request" in job
         assert "if: needs.changes.outputs.non_docs != 'true'" in job
         assert "if: needs.changes.outputs.non_docs == 'true'" in job
+
+    for job_name in ("web", "browser-e2e"):
+        job = job_block(workflow, job_name)
+        assert re.search(
+            r"- name: Skip docs-only pull request\n"
+            r"\s+if: needs\.changes\.outputs\.non_docs != 'true'\n"
+            r"\s+working-directory: \.\n"
+            r"\s+run: echo",
+            job,
+        )
