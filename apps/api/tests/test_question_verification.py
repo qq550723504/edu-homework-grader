@@ -119,6 +119,72 @@ def valid_e2_candidate() -> dict[str, object]:
     }
 
 
+class PassingE3Grader(PassingGrader):
+    def __init__(self, feedback: list[object] | None = None) -> None:
+        self.feedback = feedback or []
+        self.grade_requests: list[tuple[str, dict[str, object], dict[str, object], str | None]] = []
+
+    def grade(
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
+    ) -> GradeResult:
+        self.grade_requests.append((question_type, rule_json, answer_json, policy_version))
+        return GradeResult("needs_review", 0, {"feedback": self.feedback}, "fake-e3-v1")
+
+
+class FailingE3Grader(PassingE3Grader):
+    def grade(
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
+    ) -> GradeResult:
+        raise RuntimeError("LanguageTool diagnostic")
+
+
+class UnexpectedE3DecisionGrader(PassingE3Grader):
+    def grade(
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
+    ) -> GradeResult:
+        return GradeResult("auto_accepted", 1, {"feedback": []}, "fake-e3-v1")
+
+
+class MalformedE3FeedbackGrader(PassingE3Grader):
+    def grade(
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
+    ) -> GradeResult:
+        return GradeResult("needs_review", 0, {"feedback": ["not-an-object"]}, "fake-e3-v1")
+
+
+def valid_e3_candidate() -> dict[str, object]:
+    return {
+        "question_type": "E3",
+        "policy_version": "1",
+        "prompt": "Write one sentence about a trip.",
+        "rule_json": {
+            "grammar_feedback_required": False,
+            "accepted_answers": ["I went to the park.", "We travelled by train."],
+        },
+        "explanation": "Use a complete sentence.",
+    }
+
+
 class PassingM2Grader:
     def __init__(self) -> None:
         self.normalization_requests: list[dict[str, object]] = []
@@ -403,6 +469,76 @@ def test_e2_schema_invalid_rules_do_not_call_the_grader(session: Session) -> Non
     candidate["rule_json"] = {"lemma": "go", "accepted_forms": []}
     draft = generation_draft(session, allowed_question_types=["E2"], candidate_json=candidate)
     grader = PassingE2Grader()
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    assert "policy_schema_invalid" in finding_codes(run)
+    assert grader.grade_requests == []
+
+
+def test_valid_e3_candidate_probes_prompt_and_reference_answers(session: Session) -> None:
+    draft = generation_draft(
+        session, allowed_question_types=["E3"], candidate_json=valid_e3_candidate()
+    )
+    grader = PassingE3Grader()
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    assert run.status is ValidationRunStatus.PASSED
+    assert [request[2]["text"] for request in grader.grade_requests] == [
+        draft.candidate_json["prompt"],
+        "I went to the park.",
+        "We travelled by train.",
+    ]
+    assert all(request[1]["grammar_feedback_required"] is True for request in grader.grade_requests)
+    assert draft.candidate_json["rule_json"]["grammar_feedback_required"] is False
+
+
+def test_e3_grammar_matches_are_sanitized_warnings(session: Session) -> None:
+    candidate = valid_e3_candidate()
+    candidate["rule_json"] = {
+        "grammar_feedback_required": False,
+        "accepted_answers": ["I went to the park."],
+    }
+    draft = generation_draft(session, allowed_question_types=["E3"], candidate_json=candidate)
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=PassingE3Grader(feedback=[{}, {}])
+    )
+
+    warnings = [finding for finding in run.findings if finding.code == "e3_grammar_warning"]
+    assert run.status is ValidationRunStatus.WARNING
+    assert [finding.evidence_json for finding in warnings] == [
+        {"target": "prompt", "grammar_match_count": 2, "reference_answer_count": 1},
+        {"target": "reference_answers", "grammar_match_count": 2, "reference_answer_count": 1},
+    ]
+
+
+@pytest.mark.parametrize(
+    "grader",
+    [FailingE3Grader(), UnexpectedE3DecisionGrader(), MalformedE3FeedbackGrader()],
+)
+def test_e3_grammar_probe_failures_are_safely_blocked(
+    session: Session, grader: PassingE3Grader
+) -> None:
+    draft = generation_draft(
+        session, allowed_question_types=["E3"], candidate_json=valid_e3_candidate()
+    )
+
+    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+
+    finding = next(item for item in run.findings if item.code == "e3_grammar_probe_failed")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {"target": "prompt", "reference_answer_count": 2}
+    assert "LanguageTool diagnostic" not in finding.remediation
+    assert "Write one sentence about a trip." not in finding.remediation
+
+
+def test_e3_schema_invalid_rules_do_not_call_the_grader(session: Session) -> None:
+    candidate = valid_e3_candidate()
+    candidate["rule_json"] = {"max_score": 1}
+    draft = generation_draft(session, allowed_question_types=["E3"], candidate_json=candidate)
+    grader = PassingE3Grader()
 
     run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
 
