@@ -22,6 +22,7 @@ from edu_grader_api.models import (
     Classroom,
     Enrollment,
     GuardianConsentStatus,
+    GradingPolicy,
     Question,
     QuestionVersion,
     Role,
@@ -439,6 +440,53 @@ def published_assignment_for_student(
     return student, classroom, assignment, item, published
 
 
+def published_e4_assignment_for_student(
+    session: Session,
+) -> tuple[User, Classroom, Assignment, AssignmentItem, QuestionVersion]:
+    teacher, _, student, classroom, _, _ = make_classroom_data(session)
+    policy = GradingPolicy(question_type="E4", policy_version="2", json_schema={})
+    question = Question(
+        tenant=classroom.tenant,
+        created_by_user=teacher,
+        title="Reading comprehension",
+    )
+    published = QuestionVersion(
+        question=question,
+        version_number=1,
+        status=VersionStatus.PUBLISHED,
+        prompt="Why did the students arrive late?",
+        reading_material="Because the bridge was closed, the students arrived late.",
+        question_type="E4",
+        grading_policy=policy,
+        rule_json={
+            "scoring_points": [
+                {
+                    "id": "cause",
+                    "evidence_phrases": ["because the bridge was closed"],
+                    "score": 1,
+                }
+            ],
+            "max_score": 1,
+        },
+        created_by_user=teacher,
+    )
+    assignment = Assignment(
+        tenant=classroom.tenant,
+        classroom=classroom,
+        created_by_user=teacher,
+        title="Published English reading",
+        subject="english",
+        due_at=datetime.now(timezone.utc) + timedelta(days=1),
+        submission_rule_json={"allow_late": False},
+        status=AssignmentStatus.PUBLISHED,
+        published_at=datetime(2026, 7, 18, tzinfo=timezone.utc),
+    )
+    item = AssignmentItem(assignment=assignment, question_version=published, position=1)
+    session.add_all([policy, question, published, assignment, item])
+    session.commit()
+    return student, classroom, assignment, item, published
+
+
 def test_published_assignment_fixture_uses_a_future_deadline(session: Session) -> None:
     _, _, assignment, _, _ = published_assignment_for_student(session)
 
@@ -466,11 +514,7 @@ def test_enrolled_student_lists_pending_and_opens_frozen_assignment(
 def test_student_assignment_projects_e4_reading_material_separately(
     client: TestClient, session: Session
 ) -> None:
-    student, _, assignment, _, published = published_assignment_for_student(session)
-    published.question_type = "E4"
-    published.prompt = "Why did the students arrive late?"
-    published.reading_material = "Because the bridge was closed, the students arrived late."
-    session.commit()
+    student, _, assignment, _, published = published_e4_assignment_for_student(session)
 
     detail = client.get(
         f"/v1/student/assignments/{assignment.id}", headers=authorize(client, student)

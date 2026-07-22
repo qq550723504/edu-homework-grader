@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs'
-
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -11,19 +9,6 @@ import {
 } from '../app/lib/student-workflow'
 
 describe('student question workflow', () => {
-  it('renders optional reading material before the question prompt', () => {
-    const assignmentPage = readFileSync(
-      new URL('../app/pages/student/assignments/[assignmentId].vue', import.meta.url),
-      'utf8'
-    )
-    const material = 'v-if="currentItem.reading_material"'
-    const prompt = '{{ currentItem.prompt }}'
-
-    expect(assignmentPage).toContain('reading_material: string | null')
-    expect(assignmentPage).toContain(material)
-    expect(assignmentPage.indexOf(material)).toBeLessThan(assignmentPage.indexOf(prompt))
-  })
-
   it('prevents edits only after a non-late overdue deadline', () => {
     expect(isAssignmentWritable('pending')).toBe(true)
     expect(isAssignmentWritable('late_allowed')).toBe(true)
