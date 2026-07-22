@@ -25,16 +25,23 @@ from ..settings import settings
 
 
 router = APIRouter(prefix="/v1", tags=["AI question validation"])
-_PUBLIC_FEATURE_SUMMARY_KEYS = frozenset(
-    {
-        "comparison_counts",
-        "content_policy_version",
-        "difficulty_signal",
-        "embedding_dependency",
-        "finding_count",
-        "similarity_threshold",
-    }
+_PUBLIC_SUMMARY_SCALAR_KEYS = (
+    "finding_count",
+    "content_policy_version",
+    "similarity_threshold",
 )
+_PUBLIC_DIFFICULTY_SCALAR_KEYS = (
+    "version",
+    "availability",
+    "reason",
+    "target",
+    "estimated",
+    "deviation",
+)
+_PUBLIC_DIFFICULTY_RANGE_KEYS = ("min", "max")
+_PUBLIC_DIFFICULTY_FEATURE_KEYS = ("type", "value", "contribution")
+_PUBLIC_COMPARISON_COUNT_KEYS = ("published_question", "batch_candidate")
+_PUBLIC_EMBEDDING_DEPENDENCY_KEYS = ("id", "revision")
 _PRIVATE_FEATURE_KEY_PARTS = ("digest", "fingerprint", "hash")
 
 
@@ -152,11 +159,54 @@ def _run_payload(run: GenerationValidationRun) -> dict[str, object]:
 
 
 def _public_feature_summary(summary: dict[str, object]) -> dict[str, object]:
+    public_summary: dict[str, object] = _public_scalar_fields(summary, _PUBLIC_SUMMARY_SCALAR_KEYS)
+    difficulty_signal = summary.get("difficulty_signal")
+    if isinstance(difficulty_signal, dict):
+        public_summary["difficulty_signal"] = _public_difficulty_signal(difficulty_signal)
+    comparison_counts = summary.get("comparison_counts")
+    if isinstance(comparison_counts, dict):
+        public_summary["comparison_counts"] = _public_scalar_fields(
+            comparison_counts, _PUBLIC_COMPARISON_COUNT_KEYS
+        )
+    embedding_dependency = summary.get("embedding_dependency")
+    if embedding_dependency is None and "embedding_dependency" in summary:
+        public_summary["embedding_dependency"] = None
+    elif isinstance(embedding_dependency, dict):
+        public_summary["embedding_dependency"] = _public_scalar_fields(
+            embedding_dependency, _PUBLIC_EMBEDDING_DEPENDENCY_KEYS
+        )
+    return {key: _without_private_feature_keys(value) for key, value in public_summary.items()}
+
+
+def _public_difficulty_signal(signal: dict[object, object]) -> dict[str, object]:
+    public_signal: dict[str, object] = _public_scalar_fields(signal, _PUBLIC_DIFFICULTY_SCALAR_KEYS)
+    curriculum_range = signal.get("curriculum_range")
+    if isinstance(curriculum_range, dict):
+        public_signal["curriculum_range"] = _public_scalar_fields(
+            curriculum_range, _PUBLIC_DIFFICULTY_RANGE_KEYS
+        )
+    features = signal.get("features")
+    if isinstance(features, list):
+        public_signal["features"] = [
+            _public_scalar_fields(feature, _PUBLIC_DIFFICULTY_FEATURE_KEYS)
+            for feature in features
+            if isinstance(feature, dict)
+        ]
+    return public_signal
+
+
+def _public_scalar_fields(
+    source: dict[object, object], fields: tuple[str, ...]
+) -> dict[str, object]:
     return {
-        key: _without_private_feature_keys(value)
-        for key, value in summary.items()
-        if key in _PUBLIC_FEATURE_SUMMARY_KEYS
+        field: source[field]
+        for field in fields
+        if field in source and _is_public_scalar(source[field])
     }
+
+
+def _is_public_scalar(value: object) -> bool:
+    return value is None or isinstance(value, str | int | float | bool)
 
 
 def _without_private_feature_keys(value: object) -> object:

@@ -874,14 +874,14 @@ def test_nested_grader_mutation_does_not_change_revision_or_provider_original(
 ) -> None:
     draft = generation_draft(
         session,
-        allowed_question_types=["E4"],
-        candidate_json=valid_e4_candidate(),
+        allowed_question_types=["M2"],
+        candidate_json=valid_m2_candidate(),
     )
     revision = current_review_revision(session, draft)
     revision_before = deepcopy(revision.candidate_json)
     provider_original_before = deepcopy(draft.candidate_json)
 
-    class NestedRuleMutatingGrader(PassingE4Grader):
+    class NestedRuleMutatingGrader(PassingM2Grader):
         mutated = False
 
         def grade(
@@ -892,12 +892,11 @@ def test_nested_grader_mutation_does_not_change_revision_or_provider_original(
             *,
             policy_version: str | None = None,
         ) -> GradeResult:
-            scoring_points = rule_json.get("scoring_points")
-            assert isinstance(scoring_points, list)
-            first_point = scoring_points[0]
-            assert isinstance(first_point, dict)
-            first_point["id"] = "mutated-by-grader"
-            self.mutated = True
+            expected = rule_json.get("expected")
+            assert isinstance(expected, list)
+            if not self.mutated:
+                expected.append(["Number", 99])
+                self.mutated = True
             return super().grade(
                 question_type,
                 rule_json,

@@ -107,12 +107,41 @@ def test_public_validation_feature_summary_uses_recursive_allowlist() -> None:
     summary = validation_router._public_feature_summary(
         {
             "finding_count": 1,
+            "content_policy_version": "minor-content-policy-v1",
+            "similarity_threshold": 0.9,
+            "comparison_counts": {
+                "published_question": 2,
+                "batch_candidate": 3,
+                "future_count": 999,
+            },
+            "embedding_dependency": {
+                "id": "public-model",
+                "revision": "public-revision",
+                "digest": "private-digest",
+                "future_provider_field": "private-by-default",
+            },
             "difficulty_signal": {
+                "version": "rule-based-difficulty-v1",
                 "availability": "available",
-                "nested": {
-                    "content_hash": "private-content-hash",
-                    "safe_value": "public-value",
+                "reason": None,
+                "target": 0.6,
+                "estimated": 0.5,
+                "deviation": 0.1,
+                "curriculum_range": {
+                    "min": 0.2,
+                    "max": 0.8,
+                    "future_range_field": "private-by-default",
                 },
+                "features": [
+                    {
+                        "type": "prompt_units",
+                        "value": 5,
+                        "contribution": 0.01,
+                        "future_feature_field": "private-by-default",
+                        "content_hash": "private-content-hash",
+                    }
+                ],
+                "future_signal_field": "private-by-default",
             },
             "candidate_prompt_fingerprint": {"exact_hash": "private-prompt-hash"},
             "future_unreviewed_field": "private-by-default",
@@ -121,9 +150,22 @@ def test_public_validation_feature_summary_uses_recursive_allowlist() -> None:
 
     assert summary == {
         "finding_count": 1,
+        "content_policy_version": "minor-content-policy-v1",
+        "similarity_threshold": 0.9,
+        "comparison_counts": {"published_question": 2, "batch_candidate": 3},
+        "embedding_dependency": {
+            "id": "public-model",
+            "revision": "public-revision",
+        },
         "difficulty_signal": {
+            "version": "rule-based-difficulty-v1",
             "availability": "available",
-            "nested": {"safe_value": "public-value"},
+            "reason": None,
+            "target": 0.6,
+            "estimated": 0.5,
+            "deviation": 0.1,
+            "curriculum_range": {"min": 0.2, "max": 0.8},
+            "features": [{"type": "prompt_units", "value": 5, "contribution": 0.01}],
         },
     }
 
