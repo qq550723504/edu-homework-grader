@@ -59,3 +59,16 @@ def test_rejects_stable_pii_patterns_in_free_text(text: str) -> None:
 )
 def test_allows_math_constraints_that_are_not_phone_numbers(text: str) -> None:
     assert_deidentified_text(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Guardian phone: 81234567.",
+        "联系电话：81234567",
+        "Student phone number: 2125551234.",
+    ],
+)
+def test_rejects_phone_digits_when_preceded_by_a_phone_label(text: str) -> None:
+    with pytest.raises(ProcessorPolicyError, match="free-text PII"):
+        assert_deidentified_text(text)

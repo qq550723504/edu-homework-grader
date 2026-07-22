@@ -38,6 +38,20 @@ _PHONE_PATTERN = re.compile(
     (?!\w)
     """
 )
+_PHONE_LABELLED_NUMBER_PATTERN = re.compile(
+    r"""(?ix)
+    (?:
+        \b(?:phone|telephone|contact)\b\s*(?:number|no\.?)?
+        | 联系电话
+        | 联系号码
+        | 电话(?:号码)?
+        | 手机(?:号|号码)
+    )
+    \s*[:：#-]?\s*
+    \d{7,15}
+    (?!\d)
+    """
+)
 _STUDENT_IDENTITY_PATTERN = re.compile(
     r"(?ix)(?:\b(?:student|pupil)\s*(?:name|id|number|no\.?)\b|(?:学生)?(?:姓名|名字|学号|编号))\s*[:：#]?\s*(?:[a-z0-9][a-z0-9_-]*|[\u4e00-\u9fff]{2,})"
 )
@@ -61,7 +75,12 @@ def assert_deidentified_text(text: str) -> None:
 
     if any(
         pattern.search(text) is not None
-        for pattern in (_EMAIL_PATTERN, _PHONE_PATTERN, _STUDENT_IDENTITY_PATTERN)
+        for pattern in (
+            _EMAIL_PATTERN,
+            _PHONE_PATTERN,
+            _PHONE_LABELLED_NUMBER_PATTERN,
+            _STUDENT_IDENTITY_PATTERN,
+        )
     ):
         raise ProcessorPolicyError("free-text PII is not allowed in processor payloads")
 

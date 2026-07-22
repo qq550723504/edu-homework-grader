@@ -406,6 +406,26 @@ def test_generation_create_rejects_a_phone_number_teacher_constraint(
     assert response.json() == {"detail": {"code": "teacher_constraint_contains_pii"}}
 
 
+def test_generation_create_rejects_a_phone_label_with_unformatted_digits(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+
+    response = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=authorize(client, teacher) | {"Idempotency-Key": "pii-create-labelled-phone"},
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "question_types": ["M1"],
+            "requested_count": 1,
+            "teacher_constraint": "Guardian phone: 81234567.",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": {"code": "teacher_constraint_contains_pii"}}
+
+
 def test_generation_regeneration_rejects_pii_teacher_constraint_without_echoing_it(
     client: TestClient, session: Session
 ) -> None:
