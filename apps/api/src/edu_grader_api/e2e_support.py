@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta, timezone
 import unicodedata
+from uuid import UUID
 
+from edu_generator.providers import FakeGenerationProvider
 from jwt.exceptions import InvalidTokenError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -15,7 +18,17 @@ from .models import (
     AssignmentStatus,
     ClassTeacher,
     Classroom,
+    CurriculumActivityType,
+    CurriculumGradeMapping,
+    CurriculumObjective,
+    CurriculumObjectiveRevision,
+    CurriculumProfile,
+    CurriculumProfileStatus,
+    CurriculumRevisionStatus,
+    CurriculumSourceRecord,
     Enrollment,
+    GeneratedQuestionDraftRevision,
+    GenerationJob,
     GuardianConsentStatus,
     GradingPolicy,
     Question,
@@ -26,12 +39,18 @@ from .models import (
     User,
     VersionStatus,
 )
+from .services.ai_question_review import create_review_revision
+from .services.generation import GenerationJobRequest, create_or_get_job, run_generation_job
+from .services.grader import EmbeddingDependencyVersion, SemanticSimilarityResult
+from .services.question_verification import run_candidate_verification
 from .services.questions import GradeResult
 
 
 STUDENT_TOKEN = "e2e-student-token"
 TEACHER_TOKEN = "e2e-teacher-token"
 E2E_ISSUER = "http://localhost:8080/realms/edu-grader"
+AI_REVIEW_JOB_KEY = "e2e-ai-review-batch-v1"
+AI_REVIEW_OBJECTIVE_REVISION_ID = UUID("00000000-0000-0000-0000-000000000037")
 
 M2_RULE = {
     "expected": ["Add", "x", 1],
@@ -83,6 +102,16 @@ class DeterministicE2EGraderClient:
 
     def normalize_math_answer(self, answer_json: dict[str, object]) -> dict[str, object]:
         return {"kind": "symbol", "value": "x_plus_1"}
+
+    def semantic_similarity(self, query: str, comparisons: list[str]) -> SemanticSimilarityResult:
+        return SemanticSimilarityResult(
+            scores=[0.0 for _ in comparisons],
+            embedding=EmbeddingDependencyVersion(
+                id="e2e-no-duplicates",
+                revision="1",
+                digest="0" * 64,
+            ),
+        )
 
     def grade(
         self,
@@ -268,6 +297,17 @@ def seed_demo_assignment(session: Session) -> None:
             )
         )
         if existing_assignment is not None:
+            teacher = session.scalar(
+                select(User).where(
+                    User.tenant_id == tenant.id,
+                    User.oidc_issuer == E2E_ISSUER,
+                    User.oidc_subject == "e2e-teacher",
+                )
+            )
+            if teacher is None:
+                raise RuntimeError("E2E teacher is missing")
+            _seed_ai_review_batch(session, tenant=tenant, teacher=teacher)
+            session.commit()
             return
 
     now = datetime.now(timezone.utc)
@@ -404,3 +444,110 @@ def seed_demo_assignment(session: Session) -> None:
         ]
     )
     session.commit()
+    _seed_ai_review_batch(session, tenant=tenant, teacher=teacher)
+    session.commit()
+
+
+def _seed_ai_review_batch(session: Session, *, tenant: Tenant, teacher: User) -> None:
+    existing_job = session.scalar(
+        select(GenerationJob.id).where(
+            GenerationJob.tenant_id == tenant.id,
+            GenerationJob.idempotency_key == AI_REVIEW_JOB_KEY,
+        )
+    )
+    if existing_job is not None:
+        return
+
+    revision = session.get(CurriculumObjectiveRevision, AI_REVIEW_OBJECTIVE_REVISION_ID)
+    if revision is None:
+        source = CurriculumSourceRecord(
+            issuer="E2E Curriculum Board",
+            title="E2E AI review curriculum",
+            canonical_url="https://example.test/e2e-ai-review-curriculum",
+            version_label="2026",
+        )
+        profile = CurriculumProfile(
+            code="e2e-ai-review-math-2026",
+            name="E2E AI Review Mathematics",
+            jurisdiction="e2e",
+            version_label="2026",
+            status=CurriculumProfileStatus.ACTIVE,
+            source_record=source,
+        )
+        grade = CurriculumGradeMapping(
+            profile=profile,
+            internal_level="G5",
+            external_label="Grade 5",
+            position=5,
+        )
+        objective = CurriculumObjective(
+            profile=profile,
+            grade_mapping=grade,
+            code="E2E-AI-REVIEW-M1",
+            subject="mathematics",
+            domain="number",
+            knowledge_point="whole-number practice",
+            status=CurriculumProfileStatus.ACTIVE,
+        )
+        revision = CurriculumObjectiveRevision(
+            id=AI_REVIEW_OBJECTIVE_REVISION_ID,
+            objective=objective,
+            revision_number=1,
+            text="Solve whole-number practice items.",
+            source_locator="e2e fixture",
+            allowed_question_types=["M1"],
+            difficulty_min=0,
+            difficulty_max=1,
+            activity_type=CurriculumActivityType.SCORED_QUESTION,
+            status=CurriculumRevisionStatus.ACTIVE,
+        )
+        session.add(revision)
+        session.flush()
+
+    job = create_or_get_job(
+        session,
+        request=GenerationJobRequest(
+            curriculum_objective_revision_id=revision.id,
+            grade="Grade 5",
+            subject="E2E AI review batch",
+            question_types=["M1", "M1"],
+            requested_count=2,
+            idempotency_key=AI_REVIEW_JOB_KEY,
+            policy_catalog_version="2026.07",
+            prompt_version="generator-v1",
+        ),
+        actor=teacher,
+    )
+    run_generation_job(session, job=job, provider=FakeGenerationProvider(seed=0))
+
+    drafts = sorted(job.drafts, key=lambda draft: draft.ordinal)
+    if len(drafts) != 2:
+        raise RuntimeError("E2E AI review batch did not create two candidates")
+
+    blocked_candidate = deepcopy(drafts[0].current_revision.candidate_json)
+    blocked_candidate["rule_json"] = {"expected": "six"}
+    create_review_revision(
+        session,
+        drafts[0],
+        teacher,
+        1,
+        blocked_candidate,
+        DeterministicE2EGraderClient("unused"),
+        idempotency_key="e2e-ai-review-blocked-revision-v1",
+        request_digest="e2e-ai-review-blocked-revision-v1",
+    )
+
+    second_revision = session.scalar(
+        select(GeneratedQuestionDraftRevision).where(
+            GeneratedQuestionDraftRevision.id == drafts[1].current_revision_id,
+            GeneratedQuestionDraftRevision.generated_question_draft_id == drafts[1].id,
+        )
+    )
+    if second_revision is None:
+        raise RuntimeError("E2E AI review candidate revision is missing")
+    run_candidate_verification(
+        session,
+        draft=drafts[1],
+        revision=second_revision,
+        grader_client=DeterministicE2EGraderClient("unused"),
+    )

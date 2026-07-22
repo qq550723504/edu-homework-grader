@@ -21,6 +21,7 @@ from .e2e_support import (
     seed_demo_assignment,
 )
 from .main import app as production_app
+from .routers import ai_question_generation as ai_question_generation_router
 from .routers import questions as questions_router
 from .services import assignments as assignments_service
 from .services import reviews as reviews_service
@@ -62,10 +63,12 @@ def e2e_session() -> Generator[Session, None, None]:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    original_ai_question_client = ai_question_generation_router.HttpGraderClient
     original_question_client = questions_router.HttpGraderClient
     original_assignment_client = assignments_service.HttpGraderClient
     original_review_client = reviews_service.HttpGraderClient
     questions_router.HttpGraderClient = DeterministicM2Client
+    ai_question_generation_router.HttpGraderClient = DeterministicM2Client
     assignments_service.HttpGraderClient = DeterministicM2Client
     reviews_service.HttpGraderClient = DeterministicM2Client
     try:
@@ -74,6 +77,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             seed_demo_assignment(session)
         yield
     finally:
+        ai_question_generation_router.HttpGraderClient = original_ai_question_client
         questions_router.HttpGraderClient = original_question_client
         assignments_service.HttpGraderClient = original_assignment_client
         reviews_service.HttpGraderClient = original_review_client
