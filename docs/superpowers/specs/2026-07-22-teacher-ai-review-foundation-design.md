@@ -22,6 +22,7 @@
 
 - 每份候选在写入时建立第 1 个修订，内容与原稿相同；
 - 教师编辑只追加修订，递增 `revision_number`，写入编辑人、内容摘要哈希和时间；
+- 教师编辑修订和审核决定都保存请求的 idempotency key 与请求摘要；同一 key 只能重放完全相同的操作；
 - 修订使用 `GeneratedCandidate` 的严格 schema，禁止额外字段；`objective_revision_id`、`question_type` 和 `policy_version` 必须与原始候选一致，避免借由编辑跨课程、跨题型或跨政策；
 - `GeneratedQuestionDraft.current_revision_id` 指向当前修订；`teacher_state` 只取 `pending_review`、`rejected`、`accepted`。
 
@@ -37,7 +38,7 @@ pending_review --拒绝--> rejected
 pending_review --接受--> accepted (创建 Question + draft QuestionVersion)
 ```
 
-- 编辑、拒绝、接受均要求请求携带当前 `revision_number`；不匹配时返回稳定的 `409 review_revision_conflict`，不覆盖他人的操作。
+- 编辑、拒绝、接受均要求请求携带当前 `revision_number` 和 idempotency key；不匹配时返回稳定的 `409 review_revision_conflict`，不覆盖他人的操作。同一 key 且相同请求重放原结果；同一 key 的不同请求返回冲突。
 - 编辑成功后立即以新修订调用现有验证器；API 返回新修订和该验证运行。所有旧运行仍可读取，但不再可作为接受依据。
 - `blocked` 的当前修订不能接受；`warning` 只能在 `confirm_warnings=true` 时接受；`passed` 不需要确认。
 - 只允许 `pending_review` 转换。重复接受或拒绝返回冲突，绝不创建第二个题库草稿。
