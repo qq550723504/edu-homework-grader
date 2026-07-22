@@ -41,6 +41,33 @@
 2. 明确 #39、#41、#42 和 #43 其余项不在本次范围。
 3. 审查 `git diff --check` 和变更文件范围。
 
+### Task 4: 扩展不可变 ID 兼容性
+
+**文件：**
+- 修改：`services/generator/src/edu_generator/model_snapshots.py`
+- 修改：`services/generator/src/edu_generator/openai_provider.py`
+- 修改：`services/generator/tests/test_contracts.py`
+- 修改：`apps/api/src/edu_grader_api/settings.py`
+- 修改：`apps/api/tests/test_settings.py`
+- 修改：本设计与计划
+
+**步骤：**
+1. 为旧式有效月日快照和固定四段 fine-tuned ID 添加 Settings 与 Provider 的先失败测试。
+2. 将校验语义从“日期快照”扩展为“明确不可变模型 ID”，同时仍拒绝可漂移别名与格式不完整值。
+3. 更新设计与验收记录，重新运行最终组合验证。
+
+### Task 5: 消除跨字段设置校验的结构化密钥泄露
+
+**文件：**
+- 修改：`apps/api/src/edu_grader_api/settings.py`
+- 修改：`apps/api/tests/test_settings.py`
+- 修改：本设计与计划
+
+**步骤：**
+1. 添加回归测试，证明含 API key 的非法生产 OpenAI 配置不会从字符串或结构化错误暴露密钥。
+2. 将跨字段生产设置校验移出会附带完整输入的 Pydantic model validator，保留相同安全控制、优先序和错误消息。
+3. 更新设计和验收记录，重新运行最终组合验证。
+
 ## 最终验证
 
 ```powershell
@@ -55,7 +82,10 @@ git diff --check
 
 - 任务 1 已完成：执行 `python -m pytest services/generator/tests/test_contracts.py -q`，结果为 `20 passed`；对应的 `ruff check`、`ruff format --check` 与 `git diff --check` 均通过。
 - 任务 2 已完成：执行 `python -m pytest apps/api/tests/test_settings.py -q`，结果为 `24 passed`；对应的 `ruff check`、`ruff format --check` 与 `git diff --check` 均通过。
-- 最终组合验证已完成：`python -m pytest services/generator/tests/test_contracts.py apps/api/tests/test_settings.py apps/api/tests/test_ai_question_generation_api.py -q` 结果为 `48 passed`；完整变更范围的 `ruff check`、`ruff format --check` 与 `git diff --check` 均通过。
+- Task 1–3 的最终组合验证已完成：`python -m pytest services/generator/tests/test_contracts.py apps/api/tests/test_settings.py apps/api/tests/test_ai_question_generation_api.py -q` 结果为 `48 passed`；完整变更范围的 `ruff check`、`ruff format --check` 与 `git diff --check` 均通过。
+- Task 4 已完成：不可变 ID 契约扩展为 ISO 快照、旧式有效月日快照和固定四段 fine-tuned ID，仍拒绝可漂移别名和格式不完整值。
+- Task 5 已完成：生产跨字段控制改由最后字段的 validator 统一执行；直接构造、`model_validate`、JSON、字符串和 `TypeAdapter` 五个入口均拒绝非法配置，且错误的字符串、表示、`errors()` 与 JSON 均不包含 API key。阈值字段自身解析失败时，跨字段控制不提前叠加错误，保持原字段解析优先序。
+- 最终组合验证已重新完成：`python -m pytest services/generator/tests/test_contracts.py apps/api/tests/test_settings.py apps/api/tests/test_ai_question_generation_api.py -q` 结果为 `84 passed`；完整变更范围的 `ruff check`、`ruff format --check` 与 `git diff --check` 均通过。
 
 ## 非目标与后续边界
 
@@ -68,3 +98,5 @@ git diff --check
 - [x] 任务 1：快照契约与适配器边界
 - [x] 任务 2：设置边界
 - [x] 任务 3：范围与验证记录
+- [x] 任务 4：兼容旧式快照与 fine-tuned ID
+- [x] 任务 5：消除结构化设置错误中的密钥泄露
