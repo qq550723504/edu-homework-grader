@@ -56,6 +56,8 @@ TEACHER_TOKEN = "e2e-teacher-token"
 E2E_ISSUER = "http://localhost:8080/realms/edu-grader"
 AI_REVIEW_JOB_KEY = "e2e-ai-review-batch-v1"
 AI_REVIEW_OBJECTIVE_REVISION_ID = UUID("00000000-0000-0000-0000-000000000037")
+AI_GENERATION_PROFILE_CODE = "e2e-ai-generation-mathematics-g7-2026"
+AI_GENERATION_OBJECTIVE_CODE = "E2E-AI-G7-M1"
 
 M2_RULE = {
     "expected": ["Add", "x", 1],
@@ -312,6 +314,7 @@ def seed_demo_assignment(session: Session) -> None:
             if teacher is None:
                 raise RuntimeError("E2E teacher is missing")
             _seed_ai_review_batch(session, tenant=tenant, teacher=teacher)
+            _seed_ai_generation_request_curriculum(session)
             session.commit()
             return
 
@@ -450,6 +453,7 @@ def seed_demo_assignment(session: Session) -> None:
     )
     session.commit()
     _seed_ai_review_batch(session, tenant=tenant, teacher=teacher)
+    _seed_ai_generation_request_curriculum(session)
     session.commit()
 
 
@@ -558,3 +562,93 @@ def _seed_ai_review_batch(session: Session, *, tenant: Tenant, teacher: User) ->
         revision=second_revision,
         grader_client=DeterministicE2EGraderClient("unused"),
     )
+
+
+def _seed_ai_generation_request_curriculum(session: Session) -> None:
+    source = session.scalar(
+        select(CurriculumSourceRecord).where(
+            CurriculumSourceRecord.canonical_url
+            == "https://example.test/e2e-ai-generation-request-curriculum"
+        )
+    )
+    if source is None:
+        source = CurriculumSourceRecord(
+            issuer="E2E Curriculum Board",
+            title="E2E AI generation request curriculum",
+            canonical_url="https://example.test/e2e-ai-generation-request-curriculum",
+            version_label="2026",
+        )
+        session.add(source)
+        session.flush()
+
+    profile = session.scalar(
+        select(CurriculumProfile).where(CurriculumProfile.code == AI_GENERATION_PROFILE_CODE)
+    )
+    if profile is None:
+        profile = CurriculumProfile(
+            code=AI_GENERATION_PROFILE_CODE,
+            name="E2E AI Generation Mathematics",
+            jurisdiction="e2e",
+            version_label="2026",
+            status=CurriculumProfileStatus.ACTIVE,
+            source_record=source,
+        )
+        session.add(profile)
+        session.flush()
+
+    grade = session.scalar(
+        select(CurriculumGradeMapping).where(
+            CurriculumGradeMapping.profile_id == profile.id,
+            CurriculumGradeMapping.internal_level == "G7",
+            CurriculumGradeMapping.external_label == "G7",
+        )
+    )
+    if grade is None:
+        grade = CurriculumGradeMapping(
+            profile=profile,
+            internal_level="G7",
+            external_label="G7",
+            position=7,
+        )
+        session.add(grade)
+        session.flush()
+
+    objective = session.scalar(
+        select(CurriculumObjective).where(
+            CurriculumObjective.profile_id == profile.id,
+            CurriculumObjective.code == AI_GENERATION_OBJECTIVE_CODE,
+        )
+    )
+    if objective is None:
+        objective = CurriculumObjective(
+            profile=profile,
+            grade_mapping=grade,
+            code=AI_GENERATION_OBJECTIVE_CODE,
+            subject="Mathematics",
+            domain="number",
+            knowledge_point="whole-number arithmetic",
+            status=CurriculumProfileStatus.ACTIVE,
+        )
+        session.add(objective)
+        session.flush()
+
+    revision = session.scalar(
+        select(CurriculumObjectiveRevision).where(
+            CurriculumObjectiveRevision.objective_id == objective.id,
+            CurriculumObjectiveRevision.revision_number == 1,
+        )
+    )
+    if revision is None:
+        session.add(
+            CurriculumObjectiveRevision(
+                objective=objective,
+                revision_number=1,
+                text="Solve Grade 7 whole-number arithmetic questions.",
+                source_locator="e2e generation request fixture",
+                allowed_question_types=["M1"],
+                difficulty_min=0,
+                difficulty_max=1,
+                activity_type=CurriculumActivityType.SCORED_QUESTION,
+                status=CurriculumRevisionStatus.ACTIVE,
+            )
+        )
