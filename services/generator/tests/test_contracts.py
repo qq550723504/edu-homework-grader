@@ -320,6 +320,8 @@ def test_openai_provider_requires_an_explicit_model_and_allowlisted_endpoint() -
         "gpt-5",
         "latest",
         "gpt-5-latest",
+        "gpt-5.6-sol-latest",
+        "gpt-5.6-terra-preview",
         "gpt-5-2025-02-30",
         "gpt-4-0230",
         "gpt-4-1332",
@@ -352,6 +354,9 @@ def test_openai_provider_rejects_non_snapshot_models_without_echoing_configurati
     "model",
     [
         "gpt-5.1-mini-2025-08-07",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
         "gpt-4-0613",
         "gpt-3.5-turbo-0125",
         "ft:gpt-4o-mini:acemeco:suffix:abc123",
