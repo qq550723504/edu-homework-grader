@@ -1,0 +1,73 @@
+# 教师 AI 候选题审核基础设计
+
+**日期：** 2026-07-22
+
+**范围：** GitHub #41 的第一个端到端基础切片：可审计的候选题修订、验证和受控入库 API。Nuxt 审核界面在该契约稳定后单独交付。
+
+## 根因
+
+当前生成服务已经保存候选题，验证服务也能产生不可变的验证运行；但候选题本身没有审核状态转换、教师编辑快照、拒绝原因或题库来源关联。教师端因而无法在不绕开 `QuestionVersion` 测试与发布门禁的前提下接受候选题。现有按租户读取任务的实现还会让同租户教师读取彼此任务，不满足 #41 的最小授权边界。
+
+## 已评估的方案
+
+1. **只做前端页面。** 能调用生成与验证接口，但不能安全地编辑、拒绝或接受入库；拒绝。
+2. **一次交付完整表单、审核和批量入库。** 覆盖面最大，但会把课程选择、Provider 错误体验、持久化审核和 Nuxt 交互混入一个不可审查的大改动；拒绝。
+3. **审核领域 API 先行，再接入教师工作台（采用）。** 先建立服务器端状态机、不可变修订和既有题库的受控桥接；下一切片只消费该契约。这样每一步都有独立测试、审核记录和回滚边界。
+
+前端不引入独立状态机库：审核状态必须由后端持久化、并发检查和鉴权决定，Vue 仅投影服务端状态；新增客户端状态机不能提供所需的审计或授权保证。
+
+## 数据边界
+
+`GeneratedQuestionDraft.candidate_json` 保留 Provider 产生的原始候选内容，之后不再覆盖。新增 `GeneratedQuestionDraftRevision`：
+
+- 每份候选在写入时建立第 1 个修订，内容与原稿相同；
+- 教师编辑只追加修订，递增 `revision_number`，写入编辑人、内容摘要哈希和时间；
+- 修订使用 `GeneratedCandidate` 的严格 schema，禁止额外字段；`objective_revision_id`、`question_type` 和 `policy_version` 必须与原始候选一致，避免借由编辑跨课程、跨题型或跨政策；
+- `GeneratedQuestionDraft.current_revision_id` 指向当前修订；`teacher_state` 只取 `pending_review`、`rejected`、`accepted`。
+
+已有 `GenerationValidationRun` 增加 `draft_revision_id`，验证始终读取该不可变修订，而不是可变工作副本。迁移为历史候选补建第 1 修订，并把历史验证运行关联到它；不会删除或重写历史验证证据。
+
+新增 `GeneratedQuestionReviewDecision` 作为 append-only 审核记录，保存修订、操作者、动作、拒绝原因、warning 确认、受接受后创建的 `QuestionVersion` 和时间。它不保存系统 Prompt、教师约束或 Provider 密钥。
+
+## 状态与并发规则
+
+```text
+pending_review --编辑--> pending_review (新 revision，旧验证失效)
+pending_review --拒绝--> rejected
+pending_review --接受--> accepted (创建 Question + draft QuestionVersion)
+```
+
+- 编辑、拒绝、接受均要求请求携带当前 `revision_number`；不匹配时返回稳定的 `409 review_revision_conflict`，不覆盖他人的操作。
+- 编辑成功后立即以新修订调用现有验证器；API 返回新修订和该验证运行。所有旧运行仍可读取，但不再可作为接受依据。
+- `blocked` 的当前修订不能接受；`warning` 只能在 `confirm_warnings=true` 时接受；`passed` 不需要确认。
+- 只允许 `pending_review` 转换。重复接受或拒绝返回冲突，绝不创建第二个题库草稿。
+- 拒绝原因固定为 `incorrect_answer`、`out_of_scope`、`unclear_wording`、`duplicate`、`unsuitable_for_students`、`other`，其中 `other` 必须提供 1–500 字说明。
+- 接受操作在一个事务内锁定草稿、修订和最新验证运行，创建现有 `Question` / draft `QuestionVersion`，写入审核决策和审计事件。它不自动发布，也不绕过测试运行。
+
+## API 与授权
+
+基础切片提供以下 JSON API：
+
+- `GET /v1/ai-question-generation/jobs`：分页返回当前教师自己的任务；管理员可返回本租户任务。
+- `GET /v1/ai-question-generation/jobs/{id}`、候选列表、重生、验证运行和审核写操作：教师只能访问自己创建任务的候选；管理员仅限同租户。
+- `POST /v1/ai-generated-questions/{id}/revisions`：提交完整、严格的候选修订和 `expected_revision_number`，同步创建验证运行。
+- `POST /v1/ai-generated-questions/{id}/reject`：提交版本和规范化原因。
+- `POST /v1/ai-generated-questions/{id}/accept`：提交版本与 `confirm_warnings`，返回新建 draft `QuestionVersion` 标识。
+
+响应只返回候选、修订号、审核状态、可展示的验证发现与题库草稿标识；不返回 Provider 请求摘要、模型密钥、系统 Prompt 或教师私有约束。所有读取以 404 隐藏跨租户或跨教师资源。
+
+## 与既有题库的桥接
+
+接受后使用既有 `create_question` 服务，以候选的 `prompt`、`question_type`、`policy_version` 与 `rule_json` 创建草稿。标题由安全截断的题干派生，保证不引入另一套题库创建逻辑。首次切片不自动建测试用例：现有教师题库界面已经能为草稿创建测试、运行测试和发布；下一 UI 切片会将其串联。题库版本不会直接成为 `published`。
+
+## 验收与测试
+
+- 原始候选不可变；编辑得到新的、可追溯修订，编辑后验证绑定新修订。
+- 锁定字段、schema、版本冲突、跨教师/跨租户访问均被拒绝且无信息泄漏。
+- blocked 拒绝接受；warning 缺少显式确认拒绝；已通过或确认 warning 的接受恰好创建一个 `QuestionVersion(status=draft)`。
+- 拒绝记录标准化原因和审核人；接受记录来源修订、审核人和新版本。
+- 现有生成、验证、题库发布测试继续通过；新 API 测试覆盖以上状态机与事务幂等边界。
+
+## 后续切片（不在本 PR）
+
+Nuxt “AI 出题”模块将基于这些 API 添加生成表单、任务/候选卡、验证证据、编辑、拒绝、接受和批量操作。课程 profile 级联选择、成本预估、批量接受与 Playwright 全链路会在该 API 可用且数据契约稳定后实现，避免 UI 先行固化错误协议。
