@@ -135,6 +135,9 @@ def test_openai_provider_default_uses_the_versioned_api_endpoint() -> None:
     "model",
     [
         "gpt-5-2025-08-07",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
         "gpt-4-0613",
         "gpt-3.5-turbo-0125",
         "ft:gpt-4o-mini:acemeco:suffix:abc123",
