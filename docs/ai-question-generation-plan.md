@@ -265,6 +265,10 @@ POST /v1/ai-question-generation/jobs/{job_id}/bulk-accept
 
 模型输出必须匹配平台维护的 JSON Schema。正式处理路径不接受自由格式 Markdown。
 
+OpenAI Responses 的严格结构化输出要求对象关闭额外字段；因此模型边界把候选题的可变
+`rule_json` 传为 JSON 字符串，适配器在 Schema 校验后立即解析为对象，再进入平台的策略验证。
+这不改变 API、审计记录或持久化候选题中的 `rule_json` 对象契约。
+
 每道评分题至少包含：
 
 ```json

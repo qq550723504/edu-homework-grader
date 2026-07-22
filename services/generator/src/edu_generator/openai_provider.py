@@ -82,6 +82,10 @@ class OpenAIResponsesProvider:
                 base_url=self.base_url,
                 timeout=self.timeout_seconds,
             )
+            schema = to_strict_json_schema(ProviderCandidatePayload)
+            schema["$defs"]["GeneratedCandidate"]["properties"]["rule_json"] = {
+                "type": "string"
+            }
             response = client.responses.create(
                 model=self.model_version,
                 instructions=template.system_instructions,
@@ -93,7 +97,7 @@ class OpenAIResponsesProvider:
                         "strict": True,
                         # Responses accepts a schema document, not a schema-version
                         # parameter; this strict schema is cataloged as template.schema_version.
-                        "schema": to_strict_json_schema(ProviderCandidatePayload),
+                        "schema": schema,
                     }
                 },
             )
@@ -102,7 +106,9 @@ class OpenAIResponsesProvider:
                 raise ProviderFailure(
                     "invalid_structured_output", "OpenAI returned no structured output"
                 )
-            payload = ProviderCandidatePayload.model_validate_json(output_text)
+            payload = ProviderCandidatePayload.model_validate(
+                _decode_rule_json_strings(output_text)
+            )
         except ProviderFailure:
             raise
         except ValidationError as exc:
@@ -134,3 +140,42 @@ def _classify_openai_error(error: Exception) -> ProviderFailure:
             retryable=True,
         )
     return ProviderFailure("provider_request_failed", "OpenAI request failed")
+
+
+def _decode_rule_json_strings(output_text: str) -> object:
+    """Restore arbitrary rule objects from a strict-schema-safe string boundary."""
+
+    try:
+        payload = json.loads(output_text)
+    except json.JSONDecodeError as exc:
+        raise ProviderFailure(
+            "invalid_structured_output", "OpenAI output failed structured validation"
+        ) from exc
+
+    if not isinstance(payload, dict):
+        return payload
+    candidates = payload.get("candidates")
+    if not isinstance(candidates, list):
+        return payload
+
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        rule_json = candidate.get("rule_json")
+        if not isinstance(rule_json, str):
+            continue
+        try:
+            decoded_rule_json = json.loads(rule_json)
+        except json.JSONDecodeError as exc:
+            raise ProviderFailure(
+                "invalid_structured_output",
+                "OpenAI output failed structured validation",
+            ) from exc
+        if not isinstance(decoded_rule_json, dict):
+            raise ProviderFailure(
+                "invalid_structured_output",
+                "OpenAI output failed structured validation",
+            )
+        candidate["rule_json"] = decoded_rule_json
+
+    return payload
