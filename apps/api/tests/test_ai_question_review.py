@@ -21,6 +21,7 @@ from edu_grader_api.models import (
     CurriculumSourceRecord,
     GeneratedQuestionDraft,
     GeneratedQuestionDraftRevision,
+    GenerationBatchAcceptance,
     GeneratedQuestionReviewDecision,
     GenerationAttempt,
     GenerationJob,
@@ -39,6 +40,8 @@ from edu_grader_api.services.ai_question_review import (
     ReviewAccessError,
     ReviewConflictError,
     ReviewStateError,
+    BatchAcceptanceItemInput,
+    accept_review_batch,
     accept_review_draft,
     create_review_revision,
     reject_review_draft,
@@ -256,6 +259,33 @@ def _add_validation_run(
     return run
 
 
+def _add_second_review_draft(
+    session: Session, first: GeneratedQuestionDraft
+) -> GeneratedQuestionDraft:
+    candidate = {**deepcopy(first.candidate_json), "prompt": "What is 3 + 3?"}
+    draft = GeneratedQuestionDraft(
+        job_id=first.job_id,
+        generation_attempt_id=first.generation_attempt_id,
+        ordinal=first.ordinal + 1,
+        content_hash="2" * 64,
+        candidate_json=candidate,
+        teacher_state="pending_review",
+    )
+    session.add(draft)
+    session.flush()
+    session.add(
+        GeneratedQuestionDraftRevision(
+            id=draft.current_revision_id,
+            generated_question_draft_id=draft.id,
+            revision_number=1,
+            candidate_json=candidate,
+            content_hash=draft.content_hash,
+        )
+    )
+    session.flush()
+    return draft
+
+
 def test_create_revision_is_append_only_and_validates_the_new_revision(
     session: Session, review_draft: tuple[GeneratedQuestionDraft, User]
 ) -> None:
@@ -384,6 +414,140 @@ def test_warning_confirmation_creates_exactly_one_draft(
     with pytest.raises(ReviewConflictError, match="review_state_conflict"):
         accept_review_draft(session, draft, actor, 1, confirm_warnings=True)
     assert session.scalar(select(func.count(QuestionVersion.id))) == 1
+
+
+def test_batch_accepts_verified_candidates_in_request_order_and_replays(
+    session: Session, review_draft: tuple[GeneratedQuestionDraft, User]
+) -> None:
+    first, actor = review_draft
+    second = _add_second_review_draft(session, first)
+    _add_validation_run(session, first, ValidationRunStatus.PASSED)
+    _add_validation_run(session, second, ValidationRunStatus.WARNING)
+    items = [
+        BatchAcceptanceItemInput(first, expected_revision_number=1, confirm_warnings=False),
+        BatchAcceptanceItemInput(second, expected_revision_number=1, confirm_warnings=True),
+    ]
+
+    result = accept_review_batch(
+        session,
+        job=first.job,
+        actor=actor,
+        items=items,
+        idempotency_key="batch-accept-1",
+        request_digest="a" * 64,
+    )
+    replay = accept_review_batch(
+        session,
+        job=first.job,
+        actor=actor,
+        items=items,
+        idempotency_key="batch-accept-1",
+        request_digest="a" * 64,
+    )
+
+    assert [item.decision.generated_question_draft_id for item in result.accepted] == [
+        first.id,
+        second.id,
+    ]
+    assert [item.question_version.status for item in result.accepted] == [
+        VersionStatus.DRAFT,
+        VersionStatus.DRAFT,
+    ]
+    assert [item.decision.warning_confirmed for item in result.accepted] == [False, True]
+    assert [item.question_version.id for item in replay.accepted] == [
+        item.question_version.id for item in result.accepted
+    ]
+    assert session.scalar(select(func.count(GenerationBatchAcceptance.id))) == 1
+    assert session.scalar(select(func.count(QuestionVersion.id))) == 2
+
+
+def test_batch_preflight_blocks_every_acceptance_when_one_candidate_is_blocked(
+    session: Session, review_draft: tuple[GeneratedQuestionDraft, User]
+) -> None:
+    first, actor = review_draft
+    second = _add_second_review_draft(session, first)
+    _add_validation_run(session, first, ValidationRunStatus.PASSED)
+    _add_validation_run(session, second, ValidationRunStatus.BLOCKED)
+
+    with pytest.raises(ReviewStateError, match="validation_blocked"):
+        accept_review_batch(
+            session,
+            job=first.job,
+            actor=actor,
+            items=[
+                BatchAcceptanceItemInput(first, expected_revision_number=1, confirm_warnings=False),
+                BatchAcceptanceItemInput(
+                    second, expected_revision_number=1, confirm_warnings=False
+                ),
+            ],
+            idempotency_key="batch-accept-blocked",
+            request_digest="b" * 64,
+        )
+
+    assert session.scalar(select(func.count(QuestionVersion.id))) == 0
+    assert session.scalar(select(func.count(GenerationBatchAcceptance.id))) == 0
+
+
+def test_batch_preflight_rolls_back_every_acceptance_without_warning_confirmation(
+    session: Session, review_draft: tuple[GeneratedQuestionDraft, User]
+) -> None:
+    first, actor = review_draft
+    second = _add_second_review_draft(session, first)
+    _add_validation_run(session, first, ValidationRunStatus.PASSED)
+    _add_validation_run(session, second, ValidationRunStatus.WARNING)
+
+    with pytest.raises(ReviewStateError, match="warning_confirmation_required"):
+        accept_review_batch(
+            session,
+            job=first.job,
+            actor=actor,
+            items=[
+                BatchAcceptanceItemInput(first, expected_revision_number=1, confirm_warnings=False),
+                BatchAcceptanceItemInput(
+                    second, expected_revision_number=1, confirm_warnings=False
+                ),
+            ],
+            idempotency_key="batch-accept-warning",
+            request_digest="c" * 64,
+        )
+
+    assert session.scalar(select(func.count(QuestionVersion.id))) == 0
+    assert session.scalar(select(func.count(GenerationBatchAcceptance.id))) == 0
+
+
+def test_batch_preflight_rolls_back_every_acceptance_for_a_stale_revision(
+    session: Session, review_draft: tuple[GeneratedQuestionDraft, User]
+) -> None:
+    first, actor = review_draft
+    second = _add_second_review_draft(session, first)
+    _add_validation_run(session, first, ValidationRunStatus.PASSED)
+    _add_validation_run(session, second, ValidationRunStatus.PASSED)
+    create_review_revision(
+        session,
+        second,
+        actor,
+        expected_revision_number=1,
+        candidate={**second.candidate_json, "prompt": "What is 4 + 4?"},
+        grader_client=PassingGrader(),
+    )
+
+    with pytest.raises(ReviewConflictError, match="review_revision_conflict"):
+        accept_review_batch(
+            session,
+            job=first.job,
+            actor=actor,
+            items=[
+                BatchAcceptanceItemInput(first, expected_revision_number=1, confirm_warnings=False),
+                BatchAcceptanceItemInput(
+                    second, expected_revision_number=1, confirm_warnings=False
+                ),
+            ],
+            idempotency_key="batch-accept-stale",
+            request_digest="d" * 64,
+        )
+
+    assert session.scalar(select(func.count(QuestionVersion.id))) == 0
+    assert session.scalar(select(func.count(GenerationBatchAcceptance.id))) == 0
 
 
 def test_accept_derives_a_normalized_question_title_from_the_prompt(session: Session) -> None:

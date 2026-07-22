@@ -160,7 +160,7 @@ def test_latest_alembic_revision_is_the_head() -> None:
     config = Config("apps/api/alembic.ini")
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "0022_generation_quota_usages"
+    assert script.get_current_head() == "0023_generation_batch_acceptances"
 
 
 def test_import_batch_keeps_row_location_and_lifecycle(session: Session) -> None:

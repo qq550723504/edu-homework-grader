@@ -34,10 +34,13 @@ from ..models import (
 )
 from ..services.ai_question_review import (
     ReviewAccessError,
+    BatchAcceptanceItemInput,
     ReviewConflictError,
     ReviewStateError,
+    accept_review_batch,
     accept_review_draft,
     create_review_revision,
+    recover_review_batch,
     reject_review_draft,
 )
 from ..services.generation import (
@@ -92,6 +95,20 @@ class RejectReviewDraftRequest(BaseModel):
 class AcceptReviewDraftRequest(BaseModel):
     expected_revision_number: int = Field(ge=1)
     confirm_warnings: bool = False
+
+
+class BatchAcceptReviewItemRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    draft_id: UUID
+    expected_revision_number: int = Field(ge=1)
+    confirm_warnings: bool = False
+
+
+class BatchAcceptReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[BatchAcceptReviewItemRequest] = Field(min_length=1, max_length=20)
 
 
 @router.get("/limits")
@@ -230,6 +247,79 @@ def list_generated_questions_route(
     return {
         "items": [_draft_payload(draft) for draft in items],
         "next_after": str(items[-1].id) if len(drafts) > limit else None,
+    }
+
+
+@router.post("/jobs/{job_id}/bulk-accept")
+def bulk_accept_review_drafts_route(
+    job_id: UUID,
+    body: BatchAcceptReviewRequest,
+    principal: Annotated[CurrentPrincipal, Depends(require_any_role(Role.ADMIN, Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict[str, object]:
+    key = _required_idempotency_key(idempotency_key)
+    actor = _actor(session, principal)
+    job = _authorized_job(session, job_id=job_id, actor=actor)
+    digest = _request_digest("bulk_accept", body)
+    items = [
+        BatchAcceptanceItemInput(
+            draft=_authorized_draft(session, draft_id=item.draft_id, actor=actor),
+            expected_revision_number=item.expected_revision_number,
+            confirm_warnings=item.confirm_warnings,
+        )
+        for item in body.items
+    ]
+    try:
+        result = accept_review_batch(
+            session,
+            job=job,
+            actor=actor,
+            items=items,
+            idempotency_key=key,
+            request_digest=digest,
+        )
+        if not result.replayed:
+            append_audit_event(
+                session,
+                tenant_id=actor.tenant_id,
+                actor_user_id=actor.id,
+                event_type="ai_question_review.batch_accepted",
+                target_type="generation_job",
+                target_id=job.id,
+                metadata={
+                    "batch_acceptance_id": result.batch.id,
+                    "item_count": len(result.accepted),
+                    "warning_confirmed_count": sum(
+                        accepted.decision.warning_confirmed for accepted in result.accepted
+                    ),
+                },
+            )
+        session.commit()
+    except (IntegrityError, ReviewConflictError) as exc:
+        session.rollback()
+        try:
+            recovered = recover_review_batch(
+                session,
+                job=job,
+                actor=actor,
+                idempotency_key=key,
+                request_digest=digest,
+            )
+        except ReviewConflictError as recovery_error:
+            raise _review_error(recovery_error) from exc
+        if recovered is not None:
+            return {
+                "items": [_decision_payload(accepted.decision) for accepted in recovered.accepted],
+            }
+        if isinstance(exc, ReviewConflictError):
+            raise _review_error(exc) from exc
+        raise _api_error(status.HTTP_409_CONFLICT, "review_write_conflict") from exc
+    except (ReviewStateError, ReviewAccessError) as exc:
+        session.rollback()
+        raise _review_error(exc) from exc
+    return {
+        "items": [_decision_payload(accepted.decision) for accepted in result.accepted],
     }
 
 

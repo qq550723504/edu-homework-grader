@@ -22,6 +22,7 @@ from edu_grader_api.db import Base, get_session
 from edu_grader_api.e2e_support import DeterministicM2Client
 from edu_grader_api.main import app
 from edu_grader_api.models import (
+    AuditLog,
     CurriculumActivityType,
     CurriculumGradeMapping,
     CurriculumObjective,
@@ -31,6 +32,7 @@ from edu_grader_api.models import (
     CurriculumRevisionStatus,
     CurriculumSourceRecord,
     GenerationJob,
+    GenerationBatchAcceptance,
     GenerationJobStatus,
     GeneratedQuestionDraft,
     GeneratedQuestionDraftRevision,
@@ -296,6 +298,39 @@ def fetch_only_draft(
     items = response.json()["items"]
     assert len(items) == 1
     return items[0]
+
+
+def create_generation_draft_with_passed_validation(
+    client: TestClient,
+    session: Session,
+    teacher: User,
+    revision: CurriculumObjectiveRevision,
+    *,
+    idempotency_key: str,
+) -> tuple[dict[str, str], dict[str, object], GeneratedQuestionDraft]:
+    headers, created = create_generation_job(
+        client,
+        teacher,
+        revision,
+        idempotency_key=idempotency_key,
+    )
+    draft_payload = fetch_only_draft(client, headers, created["id"])
+    draft = session.get(GeneratedQuestionDraft, UUID(str(draft_payload["id"])))
+    assert draft is not None
+    session.add(
+        GenerationValidationRun(
+            generated_question_draft_id=draft.id,
+            draft_revision_id=draft.current_revision_id,
+            generation_job_id=draft.job_id,
+            run_number=1,
+            validator_version="api-test",
+            ruleset_version="api-test",
+            status=ValidationRunStatus.PASSED,
+            feature_summary_json={},
+        )
+    )
+    session.commit()
+    return headers, created, draft
 
 
 def test_generation_create_derives_course_and_versions_from_active_objective(
@@ -1357,6 +1392,371 @@ def test_accept_api_requires_current_validation_and_replays_accepted_version(
     assert conflict.status_code == 409
     assert conflict.json()["detail"]["code"] == "idempotency_key_conflict"
     assert session.scalar(select(func.count(QuestionVersion.id))) == 1
+
+
+def test_bulk_accept_api_replays_exact_request_and_rejects_changed_body(
+    client: TestClient, session: Session
+) -> None:
+    teacher, objective_revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client,
+        teacher,
+        objective_revision,
+        idempotency_key="bulk-accept-source-job",
+    )
+    draft_payload = fetch_only_draft(client, headers, created["id"])
+    draft = session.get(GeneratedQuestionDraft, UUID(str(draft_payload["id"])))
+    assert draft is not None
+    session.add(
+        GenerationValidationRun(
+            generated_question_draft_id=draft.id,
+            draft_revision_id=draft.current_revision_id,
+            generation_job_id=draft.job_id,
+            run_number=1,
+            validator_version="api-test",
+            ruleset_version="api-test",
+            status=ValidationRunStatus.PASSED,
+            feature_summary_json={},
+        )
+    )
+    session.commit()
+    body = {
+        "items": [
+            {
+                "draft_id": str(draft.id),
+                "expected_revision_number": 1,
+                "confirm_warnings": False,
+            }
+        ]
+    }
+    write_headers = headers | {"Idempotency-Key": "bulk-accept-key"}
+
+    first = client.post(
+        f"/v1/ai-question-generation/jobs/{created['id']}/bulk-accept",
+        headers=write_headers,
+        json=body,
+    )
+    replay = client.post(
+        f"/v1/ai-question-generation/jobs/{created['id']}/bulk-accept",
+        headers=write_headers,
+        json=body,
+    )
+    conflict = client.post(
+        f"/v1/ai-question-generation/jobs/{created['id']}/bulk-accept",
+        headers=write_headers,
+        json={"items": [{**body["items"][0], "confirm_warnings": True}]},
+    )
+
+    assert first.status_code == 200
+    assert first.json()["items"][0]["accepted_question_version_id"]
+    assert replay.status_code == 200
+    assert replay.json() == first.json()
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "idempotency_key_conflict"
+    assert session.scalar(select(func.count(QuestionVersion.id))) == 1
+    batch_events = list(
+        session.scalars(
+            select(AuditLog).where(AuditLog.event_type == "ai_question_review.batch_accepted")
+        )
+    )
+    assert len(batch_events) == 1
+    assert batch_events[0].target_id == draft.job_id
+    assert set(batch_events[0].metadata_json) == {
+        "batch_acceptance_id",
+        "item_count",
+        "warning_confirmed_count",
+    }
+    assert batch_events[0].metadata_json["item_count"] == 1
+    assert batch_events[0].metadata_json["warning_confirmed_count"] == 0
+    assert draft.candidate_json["prompt"] not in str(batch_events[0].metadata_json)
+
+
+def test_bulk_accept_api_recovers_a_committed_idempotency_collision(
+    client: TestClient, session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    teacher, objective_revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client,
+        teacher,
+        objective_revision,
+        idempotency_key="bulk-accept-collision-source-job",
+    )
+    draft_payload = fetch_only_draft(client, headers, created["id"])
+    draft = session.get(GeneratedQuestionDraft, UUID(str(draft_payload["id"])))
+    assert draft is not None
+    session.add(
+        GenerationValidationRun(
+            generated_question_draft_id=draft.id,
+            draft_revision_id=draft.current_revision_id,
+            generation_job_id=draft.job_id,
+            run_number=1,
+            validator_version="api-test",
+            ruleset_version="api-test",
+            status=ValidationRunStatus.PASSED,
+            feature_summary_json={},
+        )
+    )
+    session.commit()
+    body = {
+        "items": [
+            {
+                "draft_id": str(draft.id),
+                "expected_revision_number": 1,
+                "confirm_warnings": False,
+            }
+        ]
+    }
+    write_headers = headers | {"Idempotency-Key": "bulk-accept-collision-key"}
+    original_accept = generation_router.accept_review_batch
+
+    def commit_then_raise_integrity_error(*args: object, **kwargs: object) -> object:
+        original_accept(*args, **kwargs)
+        session.commit()
+        raise IntegrityError("INSERT", {}, Exception("unique conflict"))
+
+    monkeypatch.setattr(
+        generation_router,
+        "accept_review_batch",
+        commit_then_raise_integrity_error,
+    )
+
+    response = client.post(
+        f"/v1/ai-question-generation/jobs/{created['id']}/bulk-accept",
+        headers=write_headers,
+        json=body,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["accepted_question_version_id"]
+    assert session.scalar(select(func.count(QuestionVersion.id))) == 1
+
+
+def test_bulk_accept_api_recovers_a_completed_batch_after_review_conflict(
+    client: TestClient, session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    teacher, objective_revision = teacher_and_objective(session)
+    headers, created, draft = create_generation_draft_with_passed_validation(
+        client,
+        session,
+        teacher,
+        objective_revision,
+        idempotency_key="bulk-accept-review-conflict-source-job",
+    )
+    body = {
+        "items": [
+            {
+                "draft_id": str(draft.id),
+                "expected_revision_number": 1,
+                "confirm_warnings": False,
+            }
+        ]
+    }
+    write_headers = headers | {"Idempotency-Key": "bulk-accept-review-conflict-key"}
+    first = client.post(
+        f"/v1/ai-question-generation/jobs/{created['id']}/bulk-accept",
+        headers=write_headers,
+        json=body,
+    )
+    assert first.status_code == 200
+
+    def raise_review_conflict(*args: object, **kwargs: object) -> object:
+        raise generation_router.ReviewConflictError("review_state_conflict")
+
+    monkeypatch.setattr(generation_router, "accept_review_batch", raise_review_conflict)
+    replay = client.post(
+        f"/v1/ai-question-generation/jobs/{created['id']}/bulk-accept",
+        headers=write_headers,
+        json=body,
+    )
+
+    assert replay.status_code == 200
+    assert replay.json() == first.json()
+
+
+def test_bulk_accept_api_returns_stable_conflict_when_recovery_finds_changed_body(
+    client: TestClient, session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    teacher, objective_revision = teacher_and_objective(session)
+    headers, created, draft = create_generation_draft_with_passed_validation(
+        client,
+        session,
+        teacher,
+        objective_revision,
+        idempotency_key="bulk-accept-changed-recovery-source-job",
+    )
+    original_body = {
+        "items": [
+            {
+                "draft_id": str(draft.id),
+                "expected_revision_number": 1,
+                "confirm_warnings": False,
+            }
+        ]
+    }
+    write_headers = headers | {"Idempotency-Key": "bulk-accept-changed-recovery-key"}
+    first = client.post(
+        f"/v1/ai-question-generation/jobs/{created['id']}/bulk-accept",
+        headers=write_headers,
+        json=original_body,
+    )
+    assert first.status_code == 200
+
+    def raise_integrity_error(*args: object, **kwargs: object) -> object:
+        raise IntegrityError("INSERT", {}, Exception("unique conflict"))
+
+    monkeypatch.setattr(generation_router, "accept_review_batch", raise_integrity_error)
+    with TestClient(app, raise_server_exceptions=False) as recovery_client:
+        changed = recovery_client.post(
+            f"/v1/ai-question-generation/jobs/{created['id']}/bulk-accept",
+            headers=write_headers,
+            json={"items": [{**original_body["items"][0], "confirm_warnings": True}]},
+        )
+
+    assert changed.status_code == 409
+    assert changed.json()["detail"]["code"] == "idempotency_key_conflict"
+
+
+def test_bulk_accept_api_rolls_back_all_items_when_one_validation_is_blocked(
+    client: TestClient, session: Session
+) -> None:
+    teacher, objective_revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client,
+        teacher,
+        objective_revision,
+        idempotency_key="bulk-accept-rollback-source-job",
+    )
+    first_payload = fetch_only_draft(client, headers, created["id"])
+    first = session.get(GeneratedQuestionDraft, UUID(str(first_payload["id"])))
+    assert first is not None
+    second_candidate = {**first.candidate_json, "prompt": "What is 3 + 3?"}
+    second = GeneratedQuestionDraft(
+        job_id=first.job_id,
+        generation_attempt_id=first.generation_attempt_id,
+        ordinal=first.ordinal + 1,
+        content_hash="e" * 64,
+        candidate_json=second_candidate,
+        teacher_state="pending_review",
+    )
+    session.add(second)
+    session.flush()
+    session.add(
+        GeneratedQuestionDraftRevision(
+            id=second.current_revision_id,
+            generated_question_draft_id=second.id,
+            revision_number=1,
+            candidate_json=second_candidate,
+            content_hash=second.content_hash,
+        )
+    )
+    session.add_all(
+        [
+            GenerationValidationRun(
+                generated_question_draft_id=first.id,
+                draft_revision_id=first.current_revision_id,
+                generation_job_id=first.job_id,
+                run_number=1,
+                validator_version="api-test",
+                ruleset_version="api-test",
+                status=ValidationRunStatus.PASSED,
+                feature_summary_json={},
+            ),
+            GenerationValidationRun(
+                generated_question_draft_id=second.id,
+                draft_revision_id=second.current_revision_id,
+                generation_job_id=second.job_id,
+                run_number=1,
+                validator_version="api-test",
+                ruleset_version="api-test",
+                status=ValidationRunStatus.BLOCKED,
+                feature_summary_json={},
+            ),
+        ]
+    )
+    session.commit()
+
+    response = client.post(
+        f"/v1/ai-question-generation/jobs/{created['id']}/bulk-accept",
+        headers=headers | {"Idempotency-Key": "bulk-accept-rollback-key"},
+        json={
+            "items": [
+                {
+                    "draft_id": str(first.id),
+                    "expected_revision_number": 1,
+                    "confirm_warnings": False,
+                },
+                {
+                    "draft_id": str(second.id),
+                    "expected_revision_number": 1,
+                    "confirm_warnings": False,
+                },
+            ]
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "validation_blocked"
+    assert session.scalar(select(func.count(QuestionVersion.id))) == 0
+    assert session.scalar(select(func.count(GenerationBatchAcceptance.id))) == 0
+
+
+def test_bulk_accept_api_rejects_a_draft_from_another_job(
+    client: TestClient, session: Session
+) -> None:
+    teacher, objective_revision = teacher_and_objective(session)
+    headers, first_job = create_generation_job(
+        client,
+        teacher,
+        objective_revision,
+        idempotency_key="bulk-accept-first-job",
+    )
+    _, second_job = create_generation_job(
+        client,
+        teacher,
+        objective_revision,
+        idempotency_key="bulk-accept-second-job",
+    )
+    first_draft_payload = fetch_only_draft(client, headers, first_job["id"])
+    second_draft_payload = fetch_only_draft(client, headers, second_job["id"])
+    first = session.get(GeneratedQuestionDraft, UUID(str(first_draft_payload["id"])))
+    assert first is not None
+    session.add(
+        GenerationValidationRun(
+            generated_question_draft_id=first.id,
+            draft_revision_id=first.current_revision_id,
+            generation_job_id=first.job_id,
+            run_number=1,
+            validator_version="api-test",
+            ruleset_version="api-test",
+            status=ValidationRunStatus.PASSED,
+            feature_summary_json={},
+        )
+    )
+    session.commit()
+
+    response = client.post(
+        f"/v1/ai-question-generation/jobs/{first_job['id']}/bulk-accept",
+        headers=headers | {"Idempotency-Key": "bulk-accept-cross-job-key"},
+        json={
+            "items": [
+                {
+                    "draft_id": str(first.id),
+                    "expected_revision_number": 1,
+                    "confirm_warnings": False,
+                },
+                {
+                    "draft_id": str(second_draft_payload["id"]),
+                    "expected_revision_number": 1,
+                    "confirm_warnings": False,
+                },
+            ]
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "generation_draft_not_found"
+    assert session.scalar(select(func.count(QuestionVersion.id))) == 0
+    assert session.scalar(select(func.count(GenerationBatchAcceptance.id))) == 0
 
 
 def test_accept_api_requires_warning_confirmation_then_persists_confirmed_decision(

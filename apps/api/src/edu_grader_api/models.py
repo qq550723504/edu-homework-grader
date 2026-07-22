@@ -884,6 +884,75 @@ class GeneratedQuestionReviewDecision(Base):
     )
 
 
+class GenerationBatchAcceptance(Base):
+    __tablename__ = "generation_batch_acceptances"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "actor_user_id",
+            "idempotency_key",
+            name="uq_generation_batch_acceptance_idempotency",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    generation_job_id: Mapped[UUID] = mapped_column(
+        ForeignKey("generation_jobs.id"), nullable=False
+    )
+    tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    actor_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    job: Mapped[GenerationJob] = relationship(foreign_keys=[generation_job_id])
+    tenant: Mapped[Tenant] = relationship(foreign_keys=[tenant_id])
+    actor: Mapped[User] = relationship(foreign_keys=[actor_user_id])
+    items: Mapped[list[GenerationBatchAcceptanceItem]] = relationship(
+        back_populates="batch", order_by="GenerationBatchAcceptanceItem.position"
+    )
+
+
+class GenerationBatchAcceptanceItem(Base):
+    __tablename__ = "generation_batch_acceptance_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "generation_batch_acceptance_id",
+            "position",
+            name="uq_generation_batch_acceptance_item_position",
+        ),
+        UniqueConstraint(
+            "generation_batch_acceptance_id",
+            "generated_question_draft_id",
+            name="uq_generation_batch_acceptance_item_draft",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    generation_batch_acceptance_id: Mapped[UUID] = mapped_column(
+        ForeignKey("generation_batch_acceptances.id"), nullable=False
+    )
+    generated_question_draft_id: Mapped[UUID] = mapped_column(
+        ForeignKey("generated_question_drafts.id"), nullable=False
+    )
+    generated_question_review_decision_id: Mapped[UUID] = mapped_column(
+        ForeignKey("generated_question_review_decisions.id"), nullable=False
+    )
+    accepted_question_version_id: Mapped[UUID] = mapped_column(
+        ForeignKey("question_versions.id"), nullable=False
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    batch: Mapped[GenerationBatchAcceptance] = relationship(back_populates="items")
+    draft: Mapped[GeneratedQuestionDraft] = relationship(foreign_keys=[generated_question_draft_id])
+    review_decision: Mapped[GeneratedQuestionReviewDecision] = relationship(
+        foreign_keys=[generated_question_review_decision_id]
+    )
+    accepted_question_version: Mapped[QuestionVersion] = relationship(
+        foreign_keys=[accepted_question_version_id]
+    )
+
+
 class GenerationValidationRun(Base):
     __tablename__ = "generation_validation_runs"
     __table_args__ = (

@@ -224,6 +224,17 @@ POST /v1/ai-generated-questions/{question_id}/reject
 POST /v1/ai-question-generation/jobs/{job_id}/bulk-accept
 ```
 
+### 批量候选采纳
+
+`POST /v1/ai-question-generation/jobs/{job_id}/bulk-accept` 接受同一已授权生成任务中的
+1--20 个候选；每项必须提供当前 revision 和 warning 确认。服务会以稳定顺序锁定并预检全部
+候选，再复用单题采纳路径在同一事务中转换为题目草稿。因此 blocked、过期、缺少 warning
+确认或跨任务候选会使整批回滚，且不会发布任何 `QuestionVersion`。
+
+请求必须包含 `Idempotency-Key`。同键同请求会按原请求顺序回放首次采纳的结果；同键但任务或
+请求内容变化会稳定返回冲突。审计只记录批次标识、条数和已确认 warning 条数，不记录候选内容。
+该 API 为服务端门禁；教师工作台的多选操作仍在 #41 范围内。
+
 示例生成请求：
 
 ```json
