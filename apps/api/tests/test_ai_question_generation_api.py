@@ -789,6 +789,7 @@ def test_revision_api_replays_exact_request_and_rejects_changed_body(
         headers=write_headers,
         json={**body, "candidate": {**body["candidate"], "prompt": "Changed retry body"}},
     )
+    current_draft = fetch_only_draft(client, headers, created["id"])
 
     assert first.status_code == 201
     assert later_validation.status_code == 201
@@ -799,6 +800,8 @@ def test_revision_api_replays_exact_request_and_rejects_changed_body(
     assert first.json()["validation_run"]["revision_number"] == 2
     assert conflict.status_code == 409
     assert conflict.json()["detail"]["code"] == "idempotency_key_conflict"
+    assert current_draft["candidate"]["prompt"] == "What is 8 + 4?"
+    assert current_draft["revision_number"] == 2
     assert session.scalar(select(func.count(GeneratedQuestionDraftRevision.id))) == 2
     assert "hash" not in str(first.json()).casefold()
     assert "request_summary" not in str(first.json()).casefold()

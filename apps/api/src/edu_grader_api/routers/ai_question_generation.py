@@ -676,11 +676,13 @@ def _job_payload(job: GenerationJob) -> dict[str, object]:
 
 
 def _draft_payload(draft: GeneratedQuestionDraft) -> dict[str, object]:
+    revision = draft.current_revision
     return {
         "id": str(draft.id),
         "ordinal": draft.ordinal,
         "teacher_state": draft.teacher_state,
-        "candidate": draft.candidate_json,
+        "candidate": revision.candidate_json,
+        "revision_number": revision.revision_number,
         "validation_errors": draft.validation_errors_json or [],
     }
 

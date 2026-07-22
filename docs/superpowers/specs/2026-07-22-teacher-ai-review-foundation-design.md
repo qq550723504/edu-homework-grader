@@ -77,7 +77,7 @@ Nuxt “AI 出题”模块将基于这些 API 添加生成表单、任务/候选
 
 ## 交付验证记录（2026-07-22）
 
-- API 回归命令使用实际存在的 `apps/api/tests/test_questions.py`（计划中的 `test_questions_api.py` 不存在），连同生成模型、候选验证、审核 API、审核状态机和验证模型共运行 259 项测试，全部通过（47.34 秒）。
-- `ruff check` 覆盖 `apps/api/src/edu_grader_api` 和上述测试文件，结果为 `All checks passed!`；`ruff format --check` 报告 53 个文件均已格式化；`git diff --check origin/main...HEAD` 无输出且退出成功。
-- 迁移脚本链的当前 head 是 `0020_question_version_reading_material`。本地未取得 `alembic upgrade head` 的应用结果：工作树没有 `.env`，`docker compose ps` 因缺少必填的 PostgreSQL 密码变量不能启动数据库，默认本地 PostgreSQL 连接在 64 秒后超时。因此合并前仍需在已配置 PostgreSQL 环境运行升级验证；不要把该迁移标记为已在本地数据库应用。
+- 最终评审修复后的 API 回归命令使用实际存在的 `apps/api/tests/test_questions.py`（计划中的 `test_questions_api.py` 不存在），连同生成模型、候选验证、审核 API、审核状态机和验证模型共运行 263 项测试，全部通过（39.80 秒）。公共候选列表已覆盖编辑后返回当前修订候选与 `revision_number`；接受入库标题已覆盖题干规范化、控制字符清理、200 字符上限和空/不安全输入回退。
+- `ruff check` 覆盖 `apps/api/src/edu_grader_api`、0021 迁移和上述测试文件，结果为 `All checks passed!`；`ruff format --check` 报告 54 个文件均已格式化；`git diff --check` 无输出且退出成功。
+- 迁移脚本链的静态 head 已由 `python -m alembic heads` 确认为 `0021_protect_ai_review_evidence`。0021 的隔离测试验证了 PostgreSQL 触发器只阻止 Provider 原稿 `candidate_json` 的实质变更、不会阻止生命周期状态或当前修订指针更新，并阻止 `validation_findings` 的 UPDATE/DELETE。本地仍未在真实 PostgreSQL 执行 `alembic upgrade head`：工作树没有可用数据库配置，先前默认连接已超时。因此合并前必须在已配置 PostgreSQL 环境完成升级，或等待 CI migration job 通过；在此之前不得合并，也不得把迁移标记为已在本地数据库应用。
 - 授权回归包含教师仅可列出和变更自己生成任务的检查，跨教师草稿变更返回 `404`；管理员仍保持租户范围。Nuxt 审核界面、课程 profile 级联选择、成本预估、批量接受及 Playwright 端到端流程仍明确留在后续切片，Issue #41 不在本 PR 关闭。

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import unicodedata
 from uuid import uuid4
 
 import pytest
@@ -374,7 +375,7 @@ def test_warning_confirmation_creates_exactly_one_draft(
     result = accept_review_draft(session, draft, actor, 1, confirm_warnings=True)
 
     assert result.question_version.status is VersionStatus.DRAFT
-    assert result.question_version.question.title == "AI M1 candidate 1"
+    assert result.question_version.question.title == "What is 2 + 2?"
     assert result.decision.accepted_question_version_id == result.question_version.id
     assert result.decision.generation_validation_run_id == run.id
     assert draft.teacher_state == "accepted"
@@ -383,6 +384,38 @@ def test_warning_confirmation_creates_exactly_one_draft(
     with pytest.raises(ReviewConflictError, match="review_state_conflict"):
         accept_review_draft(session, draft, actor, 1, confirm_warnings=True)
     assert session.scalar(select(func.count(QuestionVersion.id))) == 1
+
+
+def test_accept_derives_a_normalized_question_title_from_the_prompt(session: Session) -> None:
+    draft, actor = _make_review_draft(session, prompt="\u3000What\t is\n2 + 2?\x00")
+    _add_validation_run(session, draft, ValidationRunStatus.PASSED)
+
+    result = accept_review_draft(session, draft, actor, 1, confirm_warnings=False)
+
+    assert result.question_version.question.title == "What is 2 + 2?"
+
+
+def test_accept_bounds_the_safe_prompt_title_to_200_characters(session: Session) -> None:
+    draft, actor = _make_review_draft(session, prompt="Ａ" * 250 + "\u202e")
+    _add_validation_run(session, draft, ValidationRunStatus.PASSED)
+
+    result = accept_review_draft(session, draft, actor, 1, confirm_warnings=False)
+    title = result.question_version.question.title
+
+    assert title == "A" * 200
+    assert len(title) == 200
+    assert all(not unicodedata.category(character).startswith("C") for character in title)
+
+
+def test_accept_uses_a_deterministic_title_fallback_for_an_unsafe_prompt(
+    session: Session,
+) -> None:
+    draft, actor = _make_review_draft(session, prompt="\x00\u202e\n")
+    _add_validation_run(session, draft, ValidationRunStatus.PASSED)
+
+    result = accept_review_draft(session, draft, actor, 1, confirm_warnings=False)
+
+    assert result.question_version.question.title == "AI M1 candidate 1"
 
 
 def test_accept_preserves_non_e4_prompt_byte_for_byte(

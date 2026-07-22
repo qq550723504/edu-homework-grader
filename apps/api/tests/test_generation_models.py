@@ -295,6 +295,35 @@ def test_ai_review_migration_installs_append_only_postgresql_triggers(
         assert f"BEFORE UPDATE OR DELETE ON {table_name}" in statements[0]
 
 
+def test_review_evidence_protection_migration_scopes_postgresql_triggers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration_path = (
+        Path(__file__).parents[1] / "alembic" / "versions" / "0021_protect_ai_review_evidence.py"
+    )
+    spec = spec_from_file_location("migration_0021_review_protection", migration_path)
+    assert spec is not None and spec.loader is not None
+    migration = module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    statements: list[str] = []
+    monkeypatch.setattr(
+        migration.op,
+        "get_bind",
+        lambda: SimpleNamespace(dialect=SimpleNamespace(name="postgresql")),
+    )
+    monkeypatch.setattr(migration.op, "execute", statements.append)
+
+    migration._install_review_evidence_protection_triggers()
+
+    assert migration.down_revision == "0020_question_version_reading_material"
+    assert len(statements) == 1
+    sql = statements[0]
+    assert "BEFORE UPDATE OF candidate_json ON generated_question_drafts" in sql
+    assert "WHEN (OLD.candidate_json::jsonb IS DISTINCT FROM NEW.candidate_json::jsonb)" in sql
+    assert "BEFORE UPDATE OR DELETE ON generated_question_drafts" not in sql
+    assert "BEFORE UPDATE OR DELETE ON validation_findings" in sql
+
+
 def test_generation_job_is_unique_per_tenant_idempotency_key(session: Session) -> None:
     tenant = Tenant(slug="pilot", name="Pilot")
     teacher = User(
@@ -381,7 +410,7 @@ def test_generation_drafts_are_scoped_to_a_job_and_attempt(session: Session) -> 
     assert not hasattr(draft, "question_version_id")
 
 
-def test_generated_draft_candidate_prompt_assignment_refreshes_persisted_fingerprints(
+def test_generated_draft_initial_candidate_prompt_sets_persisted_fingerprints(
     session: Session,
 ) -> None:
     tenant = Tenant(slug="pilot", name="Pilot")
@@ -416,15 +445,13 @@ def test_generated_draft_candidate_prompt_assignment_refreshes_persisted_fingerp
         generation_attempt=attempt,
         ordinal=1,
         content_hash="b" * 64,
-        candidate_json={"question_type": "M1", "prompt": "What is 2 + 2?"},
+        candidate_json={"question_type": "M1", "prompt": "  WHAT\tIS 2 + 2?  "},
         teacher_state="pending_review",
     )
     session.add(draft)
     append_initial_revision(session, draft)
     session.commit()
 
-    draft.candidate_json = {"question_type": "M1", "prompt": "  WHAT\tIS 2 + 2?  "}
-    session.commit()
     session.expire_all()
 
     stored = session.get(GeneratedQuestionDraft, draft.id)
@@ -442,7 +469,7 @@ def test_generated_draft_candidate_prompt_assignment_refreshes_persisted_fingerp
         {"question_type": "M1", "prompt": 2},
     ],
 )
-def test_generated_draft_malformed_candidate_assignment_replaces_old_fingerprints(
+def test_generated_draft_malformed_initial_candidate_uses_empty_prompt_fingerprints(
     session: Session, malformed_candidate_json: dict[str, object]
 ) -> None:
     tenant = Tenant(slug="pilot", name="Pilot")
@@ -477,22 +504,18 @@ def test_generated_draft_malformed_candidate_assignment_replaces_old_fingerprint
         generation_attempt=attempt,
         ordinal=1,
         content_hash="c" * 64,
-        candidate_json={"question_type": "M1", "prompt": "What is 2 + 2?"},
+        candidate_json=malformed_candidate_json,
         teacher_state="pending_review",
     )
     session.add(draft)
     append_initial_revision(session, draft)
     session.commit()
 
-    old_exact_hash = draft.exact_prompt_hash
-    draft.candidate_json = malformed_candidate_json
-    session.commit()
     session.expire_all()
 
     stored = session.get(GeneratedQuestionDraft, draft.id)
     assert stored is not None
     expected = fingerprint_prompt("")
-    assert stored.exact_prompt_hash != old_exact_hash
     assert stored.fingerprint_version == expected.version
     assert stored.exact_prompt_hash == expected.exact_hash
     assert stored.normalized_prompt_hash == expected.normalized_hash

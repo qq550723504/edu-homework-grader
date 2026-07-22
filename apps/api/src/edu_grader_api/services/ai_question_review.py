@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+import re
 from typing import Mapping
+import unicodedata
 from uuid import uuid4
 
 from edu_generator.contracts import GeneratedCandidate
@@ -40,6 +42,8 @@ _REJECTION_REASONS = frozenset(
         "other",
     }
 )
+_TITLE_WHITESPACE = re.compile(r"\s+")
+_MAX_QUESTION_TITLE_LENGTH = 200
 
 
 class ReviewConflictError(RuntimeError):
@@ -229,7 +233,7 @@ def accept_review_draft(
         session,
         tenant_id=locked_draft.job.tenant_id,
         actor_user_id=actor.id,
-        title=f"AI {candidate.question_type} candidate {locked_draft.ordinal}",
+        title=_question_title(candidate, ordinal=locked_draft.ordinal),
         prompt=candidate.prompt,
         question_type=candidate.question_type,
         policy_version=candidate.policy_version,
@@ -273,6 +277,18 @@ def accept_review_draft(
     )
     session.flush()
     return AcceptedReviewResult(decision=decision, question_version=question_version)
+
+
+def _question_title(candidate: GeneratedCandidate, *, ordinal: int) -> str:
+    normalized = unicodedata.normalize("NFKC", candidate.prompt)
+    printable = "".join(
+        " " if unicodedata.category(character).startswith("C") else character
+        for character in normalized
+    )
+    title = _TITLE_WHITESPACE.sub(" ", printable).strip()
+    if not title:
+        return f"AI {candidate.question_type} candidate {ordinal}"
+    return title[:_MAX_QUESTION_TITLE_LENGTH].rstrip()
 
 
 def _lock_pending_review(

@@ -242,7 +242,7 @@ git commit -m "feat: expose AI candidate review APIs"
 
 Record the exact tests, migration result, authorization checks and the intentionally remaining Nuxt/bulk work. Do not close #41 yet.
 
-记录：最终 API 回归使用仓库实际存在的 `apps/api/tests/test_questions.py`，而非不存在的 `test_questions_api.py`；259 项测试于 2026-07-22 通过（47.34 秒）。Ruff 检查与格式检查通过，`git diff --check origin/main...HEAD` 通过。迁移脚本 head 为 `0020_question_version_reading_material`，但本地 PostgreSQL 未配置，`alembic upgrade head` 在 64 秒后超时；该升级需要在具备数据库配置的环境补验。教师仅访问自己的生成任务、跨教师变更返回 `404` 的授权测试已覆盖。Nuxt 审核界面及批量工作仍不在本切片，#41 保持开放。
+记录：最终评审修复后的 API 回归使用仓库实际存在的 `apps/api/tests/test_questions.py`，而非不存在的 `test_questions_api.py`；263 项测试于 2026-07-22 通过（39.80 秒）。Ruff 检查与格式检查通过；公共列表已覆盖当前修订候选与 `revision_number`，题干派生标题已覆盖规范化、控制字符清理、200 字符上限和安全回退。迁移链的静态 head 为 `0021_protect_ai_review_evidence`，隔离测试覆盖触发器 SQL 边界；本地 PostgreSQL 仍未配置，也没有取得 `alembic upgrade head` 的真实数据库成功结果。合并前必须在已配置 PostgreSQL 环境完成升级，或等待 CI migration job 通过。教师仅访问自己的生成任务、跨教师变更返回 `404` 的授权测试已覆盖。Nuxt 审核界面及批量工作仍不在本切片，#41 保持开放。
 
 - [x] **Step 2: Run final verification**
 
