@@ -55,7 +55,7 @@ test('teacher edits, validates, rejects and accepts AI candidates through the br
     reason: 'duplicate',
     accepted_question_version_id: null,
   })
-  await expect(page.getByText('候选题已拒绝。')).toBeVisible()
+  await expect(page.getByTestId('rejected-notice')).toBeVisible()
 
   const rejectedDrafts = await responseJson<{ items: Array<{ ordinal: number, teacher_state: string }> }>(
     await page.request.get(
