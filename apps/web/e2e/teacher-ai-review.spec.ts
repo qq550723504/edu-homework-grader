@@ -28,11 +28,13 @@ test('teacher edits, validates, rejects and accepts AI candidates through the br
   await reviewBatch.click()
 
   await expect(page).toHaveURL(/\?job=[^&]+&draft=[^&]+/)
-  const selectedJobId = new URL(page.url()).searchParams.get('job')
-  expect(selectedJobId).toBeTruthy()
-
   await expect(page.getByLabel('题目提示')).toHaveValue('E2E AI review batch M1 practice item 6.')
   await expect(page.getByText('policy_schema_invalid')).toBeVisible()
+  const selectedReviewUrl = new URL(page.url())
+  const selectedJobId = selectedReviewUrl.searchParams.get('job')
+  const selectedDraftId = selectedReviewUrl.searchParams.get('draft')
+  expect(selectedJobId).toBeTruthy()
+  expect(selectedDraftId).toBeTruthy()
   await page.getByLabel('评分规则 JSON').fill('{"expected":6}')
   await page.getByRole('button', { name: '保存修订' }).click()
   await expect(page.getByText('候选修订已保存。')).toBeVisible()
@@ -46,6 +48,7 @@ test('teacher edits, validates, rejects and accepts AI candidates through the br
   )
   await page.getByRole('button', { name: '拒绝候选题' }).click()
   const rejectedDecision = await responseJson<{
+    draft_id: string
     action: string
     reason: string | null
     accepted_question_version_id: string | null
@@ -55,7 +58,13 @@ test('teacher edits, validates, rejects and accepts AI candidates through the br
     reason: 'duplicate',
     accepted_question_version_id: null,
   })
+  expect(rejectedDecision.draft_id).toBe(selectedDraftId)
   await expect(page.getByTestId('rejected-notice')).toBeVisible()
+
+  const rejectedDraftsResponse = await page.request.get(
+    `${webBaseUrl}/api/core/v1/ai-question-generation/jobs/${selectedJobId}/questions`,
+  )
+  expect(rejectedDraftsResponse.headers()['cache-control']).toBe('no-store')
 
   await expect.poll(async () => {
     const rejectedDrafts = await responseJson<{ items: Array<{ ordinal: number, teacher_state: string }> }>(
