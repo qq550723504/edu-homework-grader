@@ -100,6 +100,12 @@ export async function fetchAiGenerationDrafts(request: Request, jobId: string): 
   )).items
 }
 
+export async function fetchAiValidationRuns(request: Request, draftId: string): Promise<TeacherAiValidationRun[]> {
+  return (await request<{ items: TeacherAiValidationRun[] }>(
+    `/api/core/v1/ai-generated-questions/${draftId}/validation-runs`,
+  )).items
+}
+
 export function candidateEditInput(
   current: TeacherAiCandidate,
   edits: TeacherAiCandidateEdits,
@@ -182,6 +188,7 @@ export function canAcceptCandidate(input: {
   warningConfirmed: boolean
 }): boolean {
   return input.teacher_state === 'pending_review'
+    && input.validation !== null
     && input.validation?.status !== 'blocked'
     && (input.validation?.status !== 'warning' || input.warningConfirmed)
 }

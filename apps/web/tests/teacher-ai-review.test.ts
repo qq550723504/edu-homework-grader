@@ -6,6 +6,7 @@ import {
   candidateEditInput,
   fetchAiGenerationDrafts,
   fetchAiGenerationJobs,
+  fetchAiValidationRuns,
   rejectAiCandidate,
   saveAiCandidateRevision,
   type TeacherAiCandidate,
@@ -50,6 +51,13 @@ describe('teacher AI review API', () => {
     await expect(fetchAiGenerationDrafts(request, 'job-1')).resolves.toMatchObject([{ id: 'draft-1', candidate }])
     expect(request).toHaveBeenNthCalledWith(1, '/api/core/v1/ai-question-generation/jobs')
     expect(request).toHaveBeenNthCalledWith(2, '/api/core/v1/ai-question-generation/jobs/job-1/questions')
+  })
+
+  it('loads public validation history for a selected draft', async () => {
+    const request = vi.fn().mockResolvedValue({ items: [warningRun, passedRun] })
+
+    await expect(fetchAiValidationRuns(request, 'draft-1')).resolves.toEqual([warningRun, passedRun])
+    expect(request).toHaveBeenCalledWith('/api/core/v1/ai-generated-questions/draft-1/validation-runs')
   })
 
   it('sends a revision with CSRF, idempotency key and the immutable candidate fields', async () => {
@@ -104,6 +112,7 @@ describe('teacher AI review API', () => {
   })
 
   it('requires warning confirmation and rejects blocked candidates', () => {
+    expect(canAcceptCandidate({ teacher_state: 'pending_review', validation: null, warningConfirmed: true })).toBe(false)
     expect(canAcceptCandidate({ teacher_state: 'pending_review', validation: blockedRun, warningConfirmed: true })).toBe(false)
     expect(canAcceptCandidate({ teacher_state: 'pending_review', validation: warningRun, warningConfirmed: false })).toBe(false)
     expect(canAcceptCandidate({ teacher_state: 'pending_review', validation: warningRun, warningConfirmed: true })).toBe(true)

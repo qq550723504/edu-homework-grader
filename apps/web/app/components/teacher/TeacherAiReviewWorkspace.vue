@@ -5,6 +5,7 @@ import {
   acceptAiCandidate,
   fetchAiGenerationDrafts,
   fetchAiGenerationJobs,
+  fetchAiValidationRuns,
   rejectAiCandidate,
   saveAiCandidateRevision,
   type TeacherAiCandidate,
@@ -20,60 +21,107 @@ import TeacherAiJobList from './TeacherAiJobList.vue'
 const route = useRoute()
 const jobs = ref<TeacherAiGenerationJob[]>([])
 const drafts = ref<TeacherAiDraft[]>([])
-const validations = ref<Record<string, TeacherAiValidationRun>>({})
+const currentValidation = ref<TeacherAiValidationRun | null>(null)
+const currentValidationKey = ref('')
 const loading = ref(false)
 const busyOperation = ref<'save' | 'reject' | 'accept' | null>(null)
 const notice = ref('')
 const errorMessage = ref('')
-let loadSequence = 0
+const syncWarning = ref('')
+const pendingRefresh = ref<{
+  jobId: string
+  draftId: string
+  idempotencyKey: string
+} | null>(null)
+let requestGeneration = 0
 
 const selectedJobId = computed(() => queryValue(route.query.job))
 const selectedDraftId = computed(() => queryValue(route.query.draft))
 const selectedDraft = computed(() => drafts.value.find((draft) => draft.id === selectedDraftId.value) ?? null)
-const selectedValidation = computed(() => selectedDraft.value ? validations.value[selectedDraft.value.id] ?? null : null)
+const selectedValidation = computed(() => {
+  const draft = selectedDraft.value
+  return draft && currentValidationKey.value === validationKey(draft)
+    ? currentValidation.value
+    : null
+})
 
 function queryValue(value: unknown): string | null {
   return typeof value === 'string' && value ? value : null
 }
 
 async function loadWorkspace() {
-  const sequence = ++loadSequence
+  const generation = ++requestGeneration
+  const requestedJobId = queryValue(route.query.job)
+  const requestedDraftId = queryValue(route.query.draft)
   loading.value = true
   errorMessage.value = ''
   try {
     const nextJobs = await fetchAiGenerationJobs($fetch)
-    const requestedJobId = queryValue(route.query.job)
     const jobId = nextJobs.some((job) => job.id === requestedJobId) ? requestedJobId : nextJobs[0]?.id ?? null
     const nextDrafts = jobId ? await fetchAiGenerationDrafts($fetch, jobId) : []
-    if (sequence !== loadSequence) return
+    if (!requestIsCurrent(generation, requestedJobId, requestedDraftId)) return
 
-    jobs.value = nextJobs
-    drafts.value = nextDrafts
-    const requestedDraftId = queryValue(route.query.draft)
     const draftId = nextDrafts.some((draft) => draft.id === requestedDraftId)
       ? requestedDraftId
       : nextDrafts[0]?.id ?? null
     if (jobId !== requestedJobId || draftId !== requestedDraftId) {
+      jobs.value = nextJobs
+      drafts.value = nextDrafts
+      currentValidation.value = null
+      currentValidationKey.value = ''
       await navigateTo({ query: routeQuery(jobId, draftId) })
+      return
     }
+
+    const draft = nextDrafts.find((item) => item.id === draftId) ?? null
+    const validation = draft ? await fetchCurrentValidation(draft) : null
+    if (!requestIsCurrent(generation, requestedJobId, requestedDraftId)) return
+
+    jobs.value = nextJobs
+    drafts.value = nextDrafts
+    setCurrentValidation(draft, validation)
+    syncWarning.value = ''
+    pendingRefresh.value = null
   } catch (error: unknown) {
-    if (sequence === loadSequence) errorMessage.value = publicErrorMessage(error)
+    if (requestIsCurrent(generation, requestedJobId, requestedDraftId)) {
+      errorMessage.value = publicErrorMessage(error, '暂时无法读取 AI 出题审核数据，请稍后重试。')
+    }
   } finally {
-    if (sequence === loadSequence) loading.value = false
+    if (generation === requestGeneration) loading.value = false
   }
 }
 
-async function reloadDrafts() {
-  const jobId = selectedJobId.value
-  if (!jobId) return
+async function refreshSelection(jobId: string, draftId: string): Promise<'updated' | 'stale'> {
+  const generation = ++requestGeneration
   const nextDrafts = await fetchAiGenerationDrafts($fetch, jobId)
+  if (!requestIsCurrent(generation, jobId, draftId)) return 'stale'
+  const draft = nextDrafts.find((item) => item.id === draftId) ?? null
+  const validation = draft ? await fetchCurrentValidation(draft) : null
+  if (!requestIsCurrent(generation, jobId, draftId)) return 'stale'
+
   drafts.value = nextDrafts
-  const draftId = nextDrafts.some((draft) => draft.id === selectedDraftId.value)
-    ? selectedDraftId.value
-    : nextDrafts[0]?.id ?? null
-  if (draftId !== selectedDraftId.value) {
-    await navigateTo({ query: routeQuery(jobId, draftId) })
-  }
+  setCurrentValidation(draft, validation)
+  return 'updated'
+}
+
+async function fetchCurrentValidation(draft: TeacherAiDraft): Promise<TeacherAiValidationRun | null> {
+  const runs = await fetchAiValidationRuns($fetch, draft.id)
+  return runs.find((run) => run.revision_number === draft.revision_number) ?? null
+}
+
+function setCurrentValidation(draft: TeacherAiDraft | null, validation: TeacherAiValidationRun | null) {
+  currentValidation.value = validation
+  currentValidationKey.value = draft ? validationKey(draft) : ''
+}
+
+function validationKey(draft: TeacherAiDraft): string {
+  return `${draft.id}:${draft.revision_number}`
+}
+
+function requestIsCurrent(generation: number, jobId: string | null, draftId: string | null): boolean {
+  return generation === requestGeneration
+    && queryValue(route.query.job) === jobId
+    && queryValue(route.query.draft) === draftId
 }
 
 function routeQuery(jobId: string | null, draftId: string | null): Record<string, string> {
@@ -95,72 +143,113 @@ function selectDraft(draftId: string) {
 
 async function csrfToken(): Promise<string> {
   const principal = await fetchCurrentPrincipal($fetch)
-  if (!principal.csrf_token) throw new Error('登录会话已过期，请重新登录。')
+  if (!principal.csrf_token) throw new MissingCsrfTokenError()
   return principal.csrf_token
 }
 
 async function saveRevision(candidate: TeacherAiCandidate) {
   const draft = selectedDraft.value
-  if (!draft || busyOperation.value) return
-  await runWrite('save', async (csrf, key) => {
+  const jobId = selectedJobId.value
+  if (!jobId || !draft || busyOperation.value) return
+  await runWrite('save', jobId, draft, async (csrf, key) => {
     const result = await saveAiCandidateRevision(
       $fetch, csrf, draft.id, key, draft.revision_number, candidate,
     )
-    validations.value = { ...validations.value, [draft.id]: result.validation_run }
-    return '候选修订已保存。'
+    return { message: '候选修订已保存。', validation: result.validation_run }
   })
 }
 
 async function rejectCandidate(reason: TeacherAiRejectReason, detail: string) {
   const draft = selectedDraft.value
-  if (!draft || busyOperation.value) return
-  await runWrite('reject', async (csrf, key) => {
+  const jobId = selectedJobId.value
+  if (!jobId || !draft || busyOperation.value) return
+  await runWrite('reject', jobId, draft, async (csrf, key) => {
     const result = await rejectAiCandidate(
       $fetch, csrf, draft.id, key, draft.revision_number, reason, detail,
     )
-    validations.value = { ...validations.value, [draft.id]: result.validation_run }
-    return '候选题已拒绝。'
+    return { message: '候选题已拒绝。', validation: result.validation_run }
   })
 }
 
 async function acceptCandidate(input: { confirmWarnings: boolean }) {
   const draft = selectedDraft.value
-  if (!draft || busyOperation.value) return
-  await runWrite('accept', async (csrf, key) => {
+  const jobId = selectedJobId.value
+  if (!jobId || !draft || busyOperation.value) return
+  await runWrite('accept', jobId, draft, async (csrf, key) => {
     const result = await acceptAiCandidate(
       $fetch, csrf, draft.id, key, draft.revision_number, input.confirmWarnings,
     )
-    validations.value = { ...validations.value, [draft.id]: result.validation_run }
-    return '候选题已接受并创建草稿。'
+    return { message: '候选题已接受并创建草稿。', validation: result.validation_run }
   })
 }
 
 async function runWrite(
   operation: 'save' | 'reject' | 'accept',
-  write: (csrf: string, key: string) => Promise<string>,
+  jobId: string,
+  draft: TeacherAiDraft,
+  write: (csrf: string, key: string) => Promise<{ message: string; validation: TeacherAiValidationRun }>,
 ) {
   busyOperation.value = operation
   notice.value = ''
   errorMessage.value = ''
+  syncWarning.value = ''
+  const idempotencyKey = crypto.randomUUID()
   try {
     const csrf = await csrfToken()
-    const successMessage = await write(csrf, crypto.randomUUID())
-    await reloadDrafts()
-    notice.value = successMessage
+    const result = await write(csrf, idempotencyKey)
+    notice.value = result.message
+    if (requestMatches(jobId, draft.id)) {
+      currentValidation.value = result.validation
+      currentValidationKey.value = `${draft.id}:${result.validation.revision_number}`
+    }
+    try {
+      const refresh = await refreshSelection(jobId, draft.id)
+      if (refresh === 'updated') pendingRefresh.value = null
+    } catch {
+      if (requestMatches(jobId, draft.id)) {
+        pendingRefresh.value = { jobId, draftId: draft.id, idempotencyKey }
+        syncWarning.value = '操作已成功，但最新审核状态暂时无法刷新。请重试刷新。'
+      }
+    }
   } catch (error: unknown) {
     if (isRevisionConflict(error)) {
       try {
-        await reloadDrafts()
-        notice.value = '候选已被更新，已加载最新修订。'
+        const refresh = await refreshSelection(jobId, draft.id)
+        if (refresh === 'updated') notice.value = '候选已被更新，已加载最新修订。'
       } catch (reloadError: unknown) {
-        errorMessage.value = publicErrorMessage(reloadError)
+        errorMessage.value = publicErrorMessage(
+          reloadError, '暂时无法读取最新候选修订，请稍后重试。',
+        )
       }
     } else {
-      errorMessage.value = publicErrorMessage(error)
+      errorMessage.value = publicErrorMessage(
+        error, '暂时无法完成 AI 出题审核操作，请稍后重试。',
+      )
     }
   } finally {
     busyOperation.value = null
   }
+}
+
+async function retryRefresh() {
+  const pending = pendingRefresh.value
+  if (!pending || !requestMatches(pending.jobId, pending.draftId)) return
+  loading.value = true
+  try {
+    const refresh = await refreshSelection(pending.jobId, pending.draftId)
+    if (refresh === 'updated') {
+      pendingRefresh.value = null
+      syncWarning.value = ''
+    }
+  } catch {
+    syncWarning.value = '操作已成功，但最新审核状态暂时无法刷新。请重试刷新。'
+  } finally {
+    loading.value = false
+  }
+}
+
+function requestMatches(jobId: string, draftId: string): boolean {
+  return selectedJobId.value === jobId && selectedDraftId.value === draftId
 }
 
 function isRevisionConflict(error: unknown): boolean {
@@ -168,14 +257,17 @@ function isRevisionConflict(error: unknown): boolean {
   return error.data.detail.code === 'review_revision_conflict'
 }
 
-function publicErrorMessage(error: unknown): string {
+function publicErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof MissingCsrfTokenError) return '登录会话已过期，请重新登录。'
   const status = errorStatus(error)
+  if (status === 401 || status === 403) return '登录会话已过期，请重新登录。'
   if (status === 404) return '未找到所选的 AI 出题批次或候选题。'
   if (status === 429) return '请求过于频繁，请稍后重试。'
   if (status === 503) return 'AI 出题审核服务暂时不可用，请稍后重试。'
+  if (status === 409) return '候选题状态已变更，请刷新后重试。'
+  if (status === 422) return '提交内容不符合要求，请检查后重试。'
   if (error instanceof TypeError) return '网络连接异常，请检查网络后重试。'
-  if (error instanceof Error && error.message) return error.message
-  return '暂时无法读取 AI 出题审核数据，请稍后重试。'
+  return fallback
 }
 
 function errorStatus(error: unknown): number | null {
@@ -189,6 +281,8 @@ function errorStatus(error: unknown): number | null {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
+
+class MissingCsrfTokenError extends Error {}
 
 onMounted(loadWorkspace)
 watch(() => route.query, loadWorkspace)
@@ -206,6 +300,10 @@ watch(() => route.query, loadWorkspace)
 
     <p v-if="notice" class="notice" role="status">{{ notice }}</p>
     <p v-if="errorMessage" class="notice" role="alert">{{ errorMessage }}</p>
+    <p v-if="syncWarning" class="notice" role="alert">
+      {{ syncWarning }}
+      <button data-testid="retry-refresh" type="button" @click="retryRefresh">重试刷新</button>
+    </p>
     <p v-if="loading" class="notice" role="status">正在加载 AI 出题审核数据…</p>
 
     <div class="ai-review-workspace__grid">
@@ -238,7 +336,7 @@ watch(() => route.query, loadWorkspace)
           v-if="selectedDraft"
           :draft="selectedDraft"
           :validation="selectedValidation"
-          :busy="busyOperation !== null"
+          :busy="busyOperation !== null || loading"
           @save-revision="saveRevision"
           @reject="rejectCandidate"
           @accept="acceptCandidate"

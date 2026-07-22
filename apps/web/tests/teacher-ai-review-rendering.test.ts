@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   acceptAiCandidate: vi.fn(),
   fetchAiGenerationDrafts: vi.fn(),
   fetchAiGenerationJobs: vi.fn(),
+  fetchAiValidationRuns: vi.fn(),
   fetchCurrentPrincipal: vi.fn(),
   rejectAiCandidate: vi.fn(),
   saveAiCandidateRevision: vi.fn(),
@@ -24,6 +25,7 @@ vi.mock('../app/lib/teacher-ai-review', async (importOriginal) => ({
   acceptAiCandidate: mocks.acceptAiCandidate,
   fetchAiGenerationDrafts: mocks.fetchAiGenerationDrafts,
   fetchAiGenerationJobs: mocks.fetchAiGenerationJobs,
+  fetchAiValidationRuns: mocks.fetchAiValidationRuns,
   rejectAiCandidate: mocks.rejectAiCandidate,
   saveAiCandidateRevision: mocks.saveAiCandidateRevision,
 }))
@@ -70,6 +72,20 @@ const warningE4Draft: TeacherAiDraft = {
   },
 }
 
+const blockedValidation: TeacherAiValidationRun = {
+  ...warningValidation,
+  id: 'validation-blocked',
+  revision_number: 2,
+  run_number: 2,
+  status: 'blocked',
+  findings: [{
+    code: 'UNSAFE_CONTENT',
+    severity: 'blocked',
+    evidence: {},
+    remediation: 'Resolve this validation finding and run validation again.',
+  }],
+}
+
 let route: { query: Record<string, string> }
 let navigateTo: ReturnType<typeof vi.fn>
 
@@ -96,6 +112,7 @@ describe('teacher AI review rendering', () => {
       { id: 'job-1', status: 'completed', succeeded_count: 1, failed_count: 0 },
     ])
     mocks.fetchAiGenerationDrafts.mockResolvedValue([warningE4Draft])
+    mocks.fetchAiValidationRuns.mockResolvedValue([warningValidation])
     mocks.fetchCurrentPrincipal.mockResolvedValue({ id: 'teacher-1', tenant_id: 'tenant-1', csrf_token: 'csrf-token' })
     mocks.saveAiCandidateRevision.mockResolvedValue({
       draft_id: 'draft-1', revision_number: 2, validation_run: warningValidation,
@@ -223,11 +240,34 @@ describe('teacher AI review rendering', () => {
     expect(navigateTo).toHaveBeenCalledWith({ query: { job: 'job-1', draft: 'draft-2' } })
   })
 
+  it('loads an initial warning validation before enabling acceptance', async () => {
+    const wrapper = await mountWorkspace()
+
+    expect(mocks.fetchAiValidationRuns).toHaveBeenCalledWith(expect.any(Function), 'draft-1')
+    expect(wrapper.get('[data-testid="validation-finding"]').text()).toContain('LOW_EVIDENCE')
+    expect(wrapper.get('[data-testid="accept-candidate"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.get('input[aria-label="确认 warning 后接受"]').setValue(true)
+    expect(wrapper.get('[data-testid="accept-candidate"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('loads an initial blocked validation and keeps acceptance disabled', async () => {
+    mocks.fetchAiValidationRuns.mockResolvedValue([{ ...blockedValidation, revision_number: 1 }])
+
+    const wrapper = await mountWorkspace()
+
+    expect(wrapper.get('[data-testid="validation-finding"]').text()).toContain('UNSAFE_CONTENT')
+    expect(wrapper.get('[data-testid="accept-candidate"]').attributes('disabled')).toBeDefined()
+  })
+
   it('reloads the selected draft after a revision conflict instead of retaining stale edits', async () => {
     mocks.saveAiCandidateRevision.mockRejectedValue({ data: { detail: { code: 'review_revision_conflict' } } })
     mocks.fetchAiGenerationDrafts
       .mockResolvedValueOnce([warningE4Draft])
       .mockResolvedValueOnce([{ ...warningE4Draft, revision_number: 2, candidate: { ...warningE4Draft.candidate, prompt: 'Latest server prompt' } }])
+    mocks.fetchAiValidationRuns
+      .mockResolvedValueOnce([warningValidation])
+      .mockResolvedValueOnce([blockedValidation, warningValidation])
     const wrapper = await mountWorkspace()
 
     await wrapper.get('textarea[aria-label="题目提示"]').setValue('Stale local prompt')
@@ -237,6 +277,8 @@ describe('teacher AI review rendering', () => {
     expect(mocks.fetchAiGenerationDrafts).toHaveBeenCalledTimes(2)
     expect(wrapper.text()).toContain('候选已被更新，已加载最新修订。')
     expect(wrapper.get('textarea[aria-label="题目提示"]').element).toHaveProperty('value', 'Latest server prompt')
+    expect(wrapper.get('[data-testid="validation-finding"]').text()).toContain('UNSAFE_CONTENT')
+    expect(wrapper.text()).not.toContain('LOW_EVIDENCE')
   })
 
   it('locks writes while obtaining CSRF, uses one idempotency key, and refreshes after success', async () => {
@@ -259,6 +301,70 @@ describe('teacher AI review rendering', () => {
     expect(wrapper.get('[data-testid="save-revision"]').attributes('disabled')).toBeUndefined()
   })
 
+  it('lets newer URL navigation win over an older write refresh', async () => {
+    let resolveOldRefresh!: (drafts: TeacherAiDraft[]) => void
+    const jobBDraft = {
+      ...warningE4Draft,
+      id: 'draft-b',
+      candidate: { ...warningE4Draft.candidate, prompt: 'Job B prompt' },
+    }
+    let jobACalls = 0
+    mocks.fetchAiGenerationJobs.mockResolvedValue([
+      { id: 'job-1', status: 'completed' },
+      { id: 'job-2', status: 'completed' },
+    ])
+    mocks.fetchAiGenerationDrafts.mockImplementation((_request, jobId: string) => {
+      if (jobId === 'job-2') return Promise.resolve([jobBDraft])
+      jobACalls += 1
+      return jobACalls === 1
+        ? Promise.resolve([warningE4Draft])
+        : new Promise((resolve) => { resolveOldRefresh = resolve })
+    })
+    mocks.fetchAiValidationRuns.mockImplementation((_request, draftId: string) => Promise.resolve([
+      { ...warningValidation, draft_id: draftId },
+    ]))
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="save-revision"]').trigger('click')
+    await flushPromises()
+    await navigateTo({ query: { job: 'job-2', draft: 'draft-b' } })
+    await flushPromises()
+
+    expect(wrapper.get('textarea[aria-label="题目提示"]').element).toHaveProperty('value', 'Job B prompt')
+    resolveOldRefresh([warningE4Draft])
+    await flushPromises()
+
+    expect(route.query).toEqual({ job: 'job-2', draft: 'draft-b' })
+    expect(wrapper.get('textarea[aria-label="题目提示"]').element).toHaveProperty('value', 'Job B prompt')
+  })
+
+  it('keeps mutation success and retries only refresh after a 503', async () => {
+    mocks.fetchAiGenerationDrafts
+      .mockResolvedValueOnce([warningE4Draft])
+      .mockRejectedValueOnce({ statusCode: 503 })
+      .mockResolvedValueOnce([{ ...warningE4Draft, revision_number: 2 }])
+    mocks.fetchAiValidationRuns
+      .mockResolvedValueOnce([warningValidation])
+      .mockResolvedValueOnce([{ ...warningValidation, revision_number: 2 }])
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="save-revision"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('候选修订已保存。')
+    expect(wrapper.text()).toContain('操作已成功，但最新审核状态暂时无法刷新。')
+    expect(wrapper.get('[data-testid="retry-refresh"]').exists()).toBe(true)
+    expect(mocks.saveAiCandidateRevision).toHaveBeenCalledTimes(1)
+    expect(crypto.randomUUID).toHaveBeenCalledTimes(1)
+
+    await wrapper.get('[data-testid="retry-refresh"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="retry-refresh"]').exists()).toBe(false)
+    expect(mocks.saveAiCandidateRevision).toHaveBeenCalledTimes(1)
+    expect(crypto.randomUUID).toHaveBeenCalledTimes(1)
+  })
+
   it.each([
     [{ statusCode: 404 }, '未找到所选的 AI 出题批次或候选题。'],
     [{ status: 429 }, '请求过于频繁，请稍后重试。'],
@@ -275,6 +381,21 @@ describe('teacher AI review rendering', () => {
       'value', warningE4Draft.candidate.prompt,
     )
     expect(wrapper.get('[role="alert"]').text()).toContain(publicMessage)
+  })
+
+  it.each([
+    [{ statusCode: 401, message: 'GET /private/session bearer-secret' }, '登录会话已过期，请重新登录。'],
+    [{ statusCode: 409, message: 'database revision internals' }, '候选题状态已变更，请刷新后重试。'],
+    [{ statusCode: 500, message: 'postgres password=secret' }, '暂时无法读取 AI 出题审核数据，请稍后重试。'],
+    [new Error('internal signing key: secret'), '暂时无法读取 AI 出题审核数据，请稍后重试。'],
+  ])('maps unexpected failures to owned localized messages', async (error, publicMessage) => {
+    mocks.fetchAiGenerationJobs.mockRejectedValue(error)
+
+    const wrapper = await mountWorkspace()
+
+    expect(wrapper.get('[role="alert"]').text()).toBe(publicMessage)
+    expect(wrapper.text()).not.toContain('secret')
+    expect(wrapper.text()).not.toContain('database revision internals')
   })
 
   it('renders the dedicated teacher route shell and page title', () => {
