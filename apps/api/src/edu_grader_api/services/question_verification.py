@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 import math
 import re
 from typing import Callable, Literal, Protocol
 import unicodedata
+from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from ..models import (
     CurriculumProfileStatus,
     CurriculumRevisionStatus,
     GeneratedQuestionDraft,
+    GeneratedQuestionDraftRevision,
     GenerationJob,
     GenerationValidationRun,
     Question,
@@ -113,7 +116,6 @@ class VerificationFinding:
 class _CandidateEvaluation:
     findings: list[VerificationFinding]
     duplicate_feature_summary: dict[str, object]
-    evaluated_candidate_fingerprints: PromptFingerprints
     difficulty_signal: dict[str, object]
 
 
@@ -136,12 +138,18 @@ def run_candidate_verification(
     session: Session,
     *,
     draft: GeneratedQuestionDraft,
+    revision: GeneratedQuestionDraftRevision,
     grader_client: VerificationGraderClient,
 ) -> GenerationValidationRun:
     """Evaluate a candidate and append a new, immutable verification result."""
 
+    if revision.generated_question_draft_id != draft.id:
+        raise ValueError("candidate revision does not belong to the draft")
+    evaluated_revision_id = revision.id
+    evaluated_revision_hash = revision.content_hash
+    candidate = deepcopy(revision.candidate_json)
     duplicate_threshold = _validated_duplicate_threshold()
-    prompt = draft.candidate_json.get("prompt")
+    prompt = candidate.get("prompt")
     duplicate_snapshot = _empty_duplicate_snapshot(
         duplicate_threshold,
         prompt if isinstance(prompt, str) else "",
@@ -159,6 +167,7 @@ def run_candidate_verification(
         evaluation = _evaluate_candidate(
             session,
             draft=draft,
+            candidate=candidate,
             grader_client=grader_client,
             duplicate_snapshot=duplicate_snapshot,
         )
@@ -175,15 +184,15 @@ def run_candidate_verification(
                 )
             ],
             duplicate_feature_summary=_duplicate_feature_summary(duplicate_snapshot),
-            evaluated_candidate_fingerprints=duplicate_snapshot.candidate_fingerprints,
             difficulty_signal=_unavailable_difficulty_signal(),
         )
     return _persist_run(
         session,
         draft=draft,
+        evaluated_revision_id=evaluated_revision_id,
+        evaluated_revision_hash=evaluated_revision_hash,
         findings=evaluation.findings,
         duplicate_feature_summary=evaluation.duplicate_feature_summary,
-        evaluated_candidate_fingerprints=evaluation.evaluated_candidate_fingerprints,
         difficulty_signal=evaluation.difficulty_signal,
     )
 
@@ -192,6 +201,7 @@ def _evaluate_candidate(
     session: Session,
     *,
     draft: GeneratedQuestionDraft,
+    candidate: dict[str, object],
     grader_client: VerificationGraderClient,
     duplicate_snapshot: _DuplicateSnapshot,
 ) -> _CandidateEvaluation:
@@ -199,7 +209,6 @@ def _evaluate_candidate(
     if job is None:
         raise ValueError("candidate generation job was not found")
     revision = job.curriculum_objective_revision
-    candidate = draft.candidate_json
     findings: list[VerificationFinding] = []
 
     if (
@@ -360,7 +369,6 @@ def _evaluate_candidate(
     return _CandidateEvaluation(
         findings=findings,
         duplicate_feature_summary=_duplicate_feature_summary(duplicate_snapshot),
-        evaluated_candidate_fingerprints=duplicate_snapshot.candidate_fingerprints,
         difficulty_signal=_rule_based_difficulty_signal(
             target_difficulty=difficulty,
             curriculum_range=(revision.difficulty_min, revision.difficulty_max),
@@ -1301,35 +1309,34 @@ def _persist_run(
     session: Session,
     *,
     draft: GeneratedQuestionDraft,
+    evaluated_revision_id: UUID,
+    evaluated_revision_hash: str,
     findings: list[VerificationFinding],
     duplicate_feature_summary: dict[str, object],
-    evaluated_candidate_fingerprints: PromptFingerprints,
     difficulty_signal: dict[str, object],
 ) -> GenerationValidationRun:
-    evaluated_fingerprints = (
-        evaluated_candidate_fingerprints.version,
-        evaluated_candidate_fingerprints.exact_hash,
-        evaluated_candidate_fingerprints.normalized_hash,
-    )
-    in_memory_fingerprints = (
-        draft.fingerprint_version,
-        draft.exact_prompt_hash,
-        draft.normalized_prompt_hash,
-    )
-    snapshot_changed_before_lock = in_memory_fingerprints != evaluated_fingerprints
+    snapshot_changed_before_lock = draft.current_revision_id != evaluated_revision_id
 
     session.flush()
-    locked_fingerprints = session.execute(
+    locked_revision = session.execute(
         select(
-            GeneratedQuestionDraft.fingerprint_version,
-            GeneratedQuestionDraft.exact_prompt_hash,
-            GeneratedQuestionDraft.normalized_prompt_hash,
+            GeneratedQuestionDraft.current_revision_id,
+            GeneratedQuestionDraftRevision.content_hash,
+        )
+        .join(
+            GeneratedQuestionDraftRevision,
+            and_(
+                GeneratedQuestionDraftRevision.id == GeneratedQuestionDraft.current_revision_id,
+                GeneratedQuestionDraftRevision.generated_question_draft_id
+                == GeneratedQuestionDraft.id,
+            ),
         )
         .where(GeneratedQuestionDraft.id == draft.id)
         .with_for_update()
     ).one_or_none()
-    current_fingerprints = tuple(locked_fingerprints) if locked_fingerprints is not None else None
-    if snapshot_changed_before_lock or current_fingerprints != evaluated_fingerprints:
+    current_revision = tuple(locked_revision) if locked_revision is not None else None
+    evaluated_revision = (evaluated_revision_id, evaluated_revision_hash)
+    if snapshot_changed_before_lock or current_revision != evaluated_revision:
         findings = [_duplicate_unavailable_finding()]
     latest_run_number = session.scalar(
         select(func.max(GenerationValidationRun.run_number)).where(
@@ -1340,6 +1347,7 @@ def _persist_run(
     run = GenerationValidationRun(
         generated_question_draft_id=draft.id,
         generation_job_id=draft.job_id,
+        draft_revision_id=evaluated_revision_id,
         run_number=(latest_run_number or 0) + 1,
         validator_version=VALIDATOR_VERSION,
         ruleset_version=RULESET_VERSION,
@@ -1606,22 +1614,42 @@ def _fingerprint_match_category(
     if published_match is not None:
         return "published_question"
 
-    batch_column = (
-        GeneratedQuestionDraft.exact_prompt_hash
-        if column == "exact"
-        else GeneratedQuestionDraft.normalized_prompt_hash
-    )
-    batch_match = session.execute(
-        select(batch_column)
-        .where(
-            GeneratedQuestionDraft.job_id == draft.job_id,
-            GeneratedQuestionDraft.id != draft.id,
-            GeneratedQuestionDraft.fingerprint_version == FINGERPRINT_VERSION,
-            batch_column == fingerprint,
+    for candidate in _batch_current_revision_candidates(session, draft=draft):
+        prompt = candidate.get("prompt")
+        if not isinstance(prompt, str):
+            raise ValueError("batch candidate prompt is invalid")
+        fingerprints = fingerprint_prompt(prompt)
+        peer_fingerprint = (
+            fingerprints.exact_hash if column == "exact" else fingerprints.normalized_hash
         )
-        .limit(1)
-    ).first()
-    return "batch_candidate" if batch_match is not None else None
+        if peer_fingerprint == fingerprint:
+            return "batch_candidate"
+    return None
+
+
+def _batch_current_revision_candidates(
+    session: Session,
+    *,
+    draft: GeneratedQuestionDraft,
+) -> list[dict[str, object]]:
+    return list(
+        session.scalars(
+            select(GeneratedQuestionDraftRevision.candidate_json)
+            .join(
+                GeneratedQuestionDraft,
+                and_(
+                    GeneratedQuestionDraft.current_revision_id == GeneratedQuestionDraftRevision.id,
+                    GeneratedQuestionDraft.id
+                    == GeneratedQuestionDraftRevision.generated_question_draft_id,
+                ),
+            )
+            .where(
+                GeneratedQuestionDraft.job_id == draft.job_id,
+                GeneratedQuestionDraft.id != draft.id,
+            )
+            .order_by(GeneratedQuestionDraft.ordinal)
+        )
+    )
 
 
 def _semantic_comparators(
@@ -1643,18 +1671,10 @@ def _semantic_comparators(
         )
         .order_by(QuestionVersion.created_at)
     ).all()
-    batch_rows = session.execute(
-        select(
-            GeneratedQuestionDraft.candidate_json,
-            GeneratedQuestionDraft.fingerprint_version,
-            GeneratedQuestionDraft.normalized_prompt_hash,
-        )
-        .where(
-            GeneratedQuestionDraft.job_id == draft.job_id,
-            GeneratedQuestionDraft.id != draft.id,
-        )
-        .order_by(GeneratedQuestionDraft.ordinal)
-    ).all()
+    batch_rows = [
+        (candidate, None, None)
+        for candidate in _batch_current_revision_candidates(session, draft=draft)
+    ]
 
     comparators: list[_PromptComparator] = []
     seen_hashes: set[str] = set()

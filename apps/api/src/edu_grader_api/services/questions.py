@@ -77,6 +77,7 @@ def create_question(
     question_type: str,
     policy_version: str,
     rule_json: dict[str, object],
+    reading_material: str | None = None,
 ) -> QuestionVersion:
     """Create a tenant question and its first mutable version."""
 
@@ -110,6 +111,7 @@ def create_question(
         version_number=1,
         status=VersionStatus.DRAFT,
         prompt=prompt,
+        reading_material=reading_material,
         question_type=question_type,
         grading_policy_id=policy.id,
         rule_json=rule_json,
@@ -150,6 +152,7 @@ def create_successor_draft(
         version_number=(latest_version_number or 0) + 1,
         status=VersionStatus.DRAFT,
         prompt=published_version.prompt,
+        reading_material=published_version.reading_material,
         question_type=published_version.question_type,
         grading_policy_id=published_version.grading_policy_id,
         rule_json=published_version.rule_json.copy(),

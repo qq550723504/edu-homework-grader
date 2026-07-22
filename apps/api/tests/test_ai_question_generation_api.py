@@ -1,13 +1,19 @@
 from dataclasses import dataclass
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from edu_grader_api.auth import VerifiedIdentity, get_token_verifier
+from edu_grader_api.auth import (
+    CurrentPrincipal,
+    VerifiedIdentity,
+    get_current_principal,
+    get_token_verifier,
+)
 from edu_grader_api.db import Base, get_session
 from edu_grader_api.e2e_support import DeterministicM2Client
 from edu_grader_api.main import app
@@ -21,13 +27,21 @@ from edu_grader_api.models import (
     CurriculumRevisionStatus,
     CurriculumSourceRecord,
     GenerationJob,
+    GeneratedQuestionDraft,
+    GeneratedQuestionDraftRevision,
+    GeneratedQuestionReviewDecision,
+    GenerationValidationRun,
     QuestionVersion,
     Role,
     Tenant,
     User,
+    ValidationFinding,
+    ValidationFindingSeverity,
+    ValidationRunStatus,
 )
 from edu_grader_api.settings import settings
 import edu_grader_api.routers.ai_question_validation as validation_router
+import edu_grader_api.routers.ai_question_generation as generation_router
 import edu_grader_api.services.question_verification as question_verification
 from edu_generator.prompt_templates import resolve_prompt_template
 
@@ -71,6 +85,100 @@ def authorize(client: TestClient, user: User) -> dict[str, str]:
         VerifiedIdentity(issuer=ISSUER, subject=user.oidc_subject or "", school_id=user.school_id)
     )
     return {"Authorization": "Bearer test-token"}
+
+
+def assert_public_validation_payload_is_sanitized(
+    payload: object,
+    *,
+    forbidden_values: tuple[str, ...],
+) -> None:
+    string_values: list[str] = []
+
+    def visit(value: object) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                normalized_key = str(key).casefold()
+                assert "hash" not in normalized_key
+                assert "fingerprint" not in normalized_key
+                assert "digest" not in normalized_key
+                assert not normalized_key.endswith("revision_id")
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+        elif isinstance(value, str):
+            string_values.append(value)
+
+    visit(payload)
+    for forbidden in forbidden_values:
+        assert all(forbidden not in value for value in string_values)
+
+
+def test_public_validation_feature_summary_uses_recursive_allowlist() -> None:
+    summary = validation_router._public_feature_summary(
+        {
+            "finding_count": 1,
+            "content_policy_version": "minor-content-policy-v1",
+            "similarity_threshold": 0.9,
+            "comparison_counts": {
+                "published_question": 2,
+                "batch_candidate": 3,
+                "future_count": 999,
+            },
+            "embedding_dependency": {
+                "id": "public-model",
+                "revision": "public-revision",
+                "digest": "private-digest",
+                "future_provider_field": "private-by-default",
+            },
+            "difficulty_signal": {
+                "version": "rule-based-difficulty-v1",
+                "availability": "available",
+                "reason": None,
+                "target": 0.6,
+                "estimated": 0.5,
+                "deviation": 0.1,
+                "curriculum_range": {
+                    "min": 0.2,
+                    "max": 0.8,
+                    "future_range_field": "private-by-default",
+                },
+                "features": [
+                    {
+                        "type": "prompt_units",
+                        "value": 5,
+                        "contribution": 0.01,
+                        "future_feature_field": "private-by-default",
+                        "content_hash": "private-content-hash",
+                    }
+                ],
+                "future_signal_field": "private-by-default",
+            },
+            "candidate_prompt_fingerprint": {"exact_hash": "private-prompt-hash"},
+            "future_unreviewed_field": "private-by-default",
+        }
+    )
+
+    assert summary == {
+        "finding_count": 1,
+        "content_policy_version": "minor-content-policy-v1",
+        "similarity_threshold": 0.9,
+        "comparison_counts": {"published_question": 2, "batch_candidate": 3},
+        "embedding_dependency": {
+            "id": "public-model",
+            "revision": "public-revision",
+        },
+        "difficulty_signal": {
+            "version": "rule-based-difficulty-v1",
+            "availability": "available",
+            "reason": None,
+            "target": 0.6,
+            "estimated": 0.5,
+            "deviation": 0.1,
+            "curriculum_range": {"min": 0.2, "max": 0.8},
+            "features": [{"type": "prompt_units", "value": 5, "contribution": 0.01}],
+        },
+    }
 
 
 def teacher_and_objective(session: Session) -> tuple[User, CurriculumObjectiveRevision]:
@@ -153,6 +261,44 @@ def create_and_fetch_e4_draft(client: TestClient, session: Session) -> object:
     return client.get(
         f"/v1/ai-question-generation/jobs/{created.json()['id']}/questions", headers=headers
     )
+
+
+def create_generation_job(
+    client: TestClient,
+    teacher: User,
+    revision: CurriculumObjectiveRevision,
+    *,
+    idempotency_key: str,
+) -> tuple[dict[str, str], dict[str, object]]:
+    headers = authorize(client, teacher) | {"Idempotency-Key": idempotency_key}
+    response = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=headers,
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "grade": "Grade 5",
+            "subject": "mathematics",
+            "question_types": ["M1"],
+            "requested_count": 1,
+            "policy_catalog_version": "2026.07",
+            "prompt_version": "generator-v1",
+        },
+    )
+    assert response.status_code == 201
+    return headers, response.json()
+
+
+def fetch_only_draft(
+    client: TestClient, headers: dict[str, str], job_id: object
+) -> dict[str, object]:
+    response = client.get(
+        f"/v1/ai-question-generation/jobs/{job_id}/questions",
+        headers=headers,
+    )
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert len(items) == 1
+    return items[0]
 
 
 def test_teacher_job_request_is_idempotent_and_never_publishes(
@@ -259,11 +405,12 @@ def test_generation_job_rejects_a_batch_over_the_configured_limit(
     assert response.json()["detail"]["code"] == "generation_batch_limit_exceeded"
 
 
-def test_teacher_can_create_and_read_immutable_validation_runs(
+def test_old_validation_run_is_not_current_after_edit(
     client: TestClient, session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     teacher, revision = teacher_and_objective(session)
     headers = authorize(client, teacher) | {"Idempotency-Key": "validation-run"}
+    teacher_constraint = "private teacher validation constraint"
     created = client.post(
         "/v1/ai-question-generation/jobs",
         headers=headers,
@@ -275,6 +422,7 @@ def test_teacher_can_create_and_read_immutable_validation_runs(
             "requested_count": 1,
             "policy_catalog_version": "2026.07",
             "prompt_version": "generator-v1",
+            "teacher_constraint": teacher_constraint,
         },
     )
     draft_id = client.get(
@@ -285,12 +433,32 @@ def test_teacher_can_create_and_read_immutable_validation_runs(
     created_run = client.post(
         f"/v1/ai-generated-questions/{draft_id}/validation-runs", headers=headers
     )
+
+    draft = session.get(GeneratedQuestionDraft, UUID(draft_id))
+    assert draft is not None
+    initial_revision_id = draft.current_revision_id
+    edited_revision = GeneratedQuestionDraftRevision(
+        generated_question_draft_id=draft.id,
+        revision_number=2,
+        candidate_json={**draft.candidate_json, "prompt": "What is 9 + 9?"},
+        content_hash="2" * 64,
+    )
+    session.add(edited_revision)
+    session.flush()
+    draft.current_revision_id = edited_revision.id
+    session.flush()
+
+    current_run = client.post(
+        f"/v1/ai-generated-questions/{draft_id}/validation-runs", headers=headers
+    )
     history = client.get(f"/v1/ai-generated-questions/{draft_id}/validation-runs", headers=headers)
     fetched = client.get(
         f"/v1/ai-question-validation-runs/{created_run.json()['id']}", headers=headers
     )
 
     assert created_run.status_code == 201
+    assert created_run.json()["revision_number"] == 1
+    assert "draft_revision_id" not in created_run.json()
     assert created_run.json()["status"] == "passed"
     difficulty_signal = created_run.json()["feature_summary"]["difficulty_signal"]
     assert difficulty_signal["version"] == "rule-based-difficulty-v1"
@@ -305,8 +473,43 @@ def test_teacher_can_create_and_read_immutable_validation_runs(
     }
     assert "What is 2 + 2?" not in str(difficulty_signal)
     assert "teacher-only" not in str(difficulty_signal)
-    assert history.json()["items"][0]["id"] == created_run.json()["id"]
+    assert current_run.status_code == 201
+    assert current_run.json()["revision_number"] == 2
+    assert [item["revision_number"] for item in history.json()["items"]] == [2, 1]
+    assert fetched.json()["revision_number"] == 1
     assert fetched.json()["findings"] == []
+
+    persisted_runs = [
+        session.get(GenerationValidationRun, UUID(response.json()["id"]))
+        for response in (created_run, current_run)
+    ]
+    assert all(run is not None for run in persisted_runs)
+    internal_hashes = tuple(
+        hash_value
+        for run in persisted_runs
+        if run is not None
+        for hash_value in run.feature_summary_json["candidate_prompt_fingerprint"].values()
+        if isinstance(hash_value, str)
+    )
+    assert internal_hashes
+    system_prompt = resolve_prompt_template("generator-v1", ["M1"]).system_instructions
+    forbidden_values = (
+        str(initial_revision_id),
+        str(edited_revision.id),
+        "What is 2 + 2?",
+        "What is 9 + 9?",
+        teacher_constraint,
+        system_prompt,
+        *internal_hashes,
+    )
+    assert_public_validation_payload_is_sanitized(
+        created_run.json(), forbidden_values=forbidden_values
+    )
+    assert_public_validation_payload_is_sanitized(
+        current_run.json(), forbidden_values=forbidden_values
+    )
+    assert_public_validation_payload_is_sanitized(history.json(), forbidden_values=forbidden_values)
+    assert_public_validation_payload_is_sanitized(fetched.json(), forbidden_values=forbidden_values)
 
 
 def test_validation_run_route_exposes_unavailable_difficulty_signal_without_diagnostics(
@@ -353,3 +556,493 @@ def test_validation_run_route_exposes_unavailable_difficulty_signal_without_diag
     }
     assert "secret" not in str(response.json())
     assert "diagnostic" not in str(response.json())
+
+
+def test_teacher_lists_and_reads_only_own_generation_jobs_while_tenant_admin_can_read_all(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    owner_headers, created = create_generation_job(
+        client,
+        teacher,
+        revision,
+        idempotency_key="authorization-owner-job",
+    )
+    draft = fetch_only_draft(client, owner_headers, created["id"])
+    other_teacher = User(
+        tenant_id=teacher.tenant_id,
+        role=Role.TEACHER,
+        oidc_issuer=ISSUER,
+        oidc_subject="other-teacher-subject",
+        display_name="Other teacher",
+        work_email="other-teacher@example.test",
+    )
+    admin = User(
+        tenant_id=teacher.tenant_id,
+        role=Role.ADMIN,
+        oidc_issuer=ISSUER,
+        oidc_subject="tenant-admin-subject",
+        display_name="Tenant admin",
+        work_email="admin@example.test",
+    )
+    session.add_all([other_teacher, admin])
+    session.commit()
+
+    other_teacher_headers = authorize(client, other_teacher)
+    assert client.get("/v1/ai-question-generation/jobs", headers=other_teacher_headers).json() == {
+        "items": [],
+        "next_after": None,
+    }
+    assert (
+        client.get(
+            f"/v1/ai-question-generation/jobs/{created['id']}", headers=other_teacher_headers
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            f"/v1/ai-question-generation/jobs/{created['id']}/questions",
+            headers=other_teacher_headers,
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            f"/v1/ai-generated-questions/{draft['id']}/validation-runs",
+            headers=other_teacher_headers,
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            f"/v1/ai-generated-questions/{draft['id']}/reject",
+            headers=other_teacher_headers | {"Idempotency-Key": "unauthorized-reject"},
+            json={"expected_revision_number": 1, "reason": "duplicate"},
+        ).status_code
+        == 404
+    )
+
+    owner_list = client.get("/v1/ai-question-generation/jobs", headers=authorize(client, teacher))
+    assert [item["id"] for item in owner_list.json()["items"]] == [created["id"]]
+    admin_list = client.get("/v1/ai-question-generation/jobs", headers=authorize(client, admin))
+    assert [item["id"] for item in admin_list.json()["items"]] == [created["id"]]
+
+
+def test_cross_tenant_actor_cannot_discover_jobs_drafts_or_validation_runs(
+    client: TestClient, session: Session
+) -> None:
+    teacher, objective_revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client,
+        teacher,
+        objective_revision,
+        idempotency_key="cross-tenant-source-job",
+    )
+    draft_payload = fetch_only_draft(client, headers, created["id"])
+    draft = session.get(GeneratedQuestionDraft, UUID(str(draft_payload["id"])))
+    assert draft is not None
+    run = GenerationValidationRun(
+        generated_question_draft_id=draft.id,
+        draft_revision_id=draft.current_revision_id,
+        generation_job_id=draft.job_id,
+        run_number=1,
+        validator_version="api-test",
+        ruleset_version="api-test",
+        status=ValidationRunStatus.PASSED,
+        feature_summary_json={},
+    )
+    other_tenant = Tenant(slug="other-school", name="Other school")
+    other_teacher = User(
+        tenant=other_tenant,
+        role=Role.TEACHER,
+        oidc_issuer=ISSUER,
+        oidc_subject="cross-tenant-teacher",
+        display_name="Cross-tenant teacher",
+        work_email="cross-tenant@example.test",
+    )
+    session.add_all([run, other_teacher])
+    session.commit()
+    client.app.dependency_overrides[get_current_principal] = lambda: CurrentPrincipal(
+        user_id=str(other_teacher.id),
+        tenant_id=str(other_teacher.tenant_id),
+        role=other_teacher.role,
+        school_id=None,
+        display_name=other_teacher.display_name,
+        oidc_subject=other_teacher.oidc_subject or "",
+    )
+
+    assert client.get("/v1/ai-question-generation/jobs").json() == {
+        "items": [],
+        "next_after": None,
+    }
+    job_response = client.get(f"/v1/ai-question-generation/jobs/{created['id']}")
+    draft_response = client.post(
+        f"/v1/ai-generated-questions/{draft.id}/reject",
+        headers={"Idempotency-Key": "cross-tenant-reject"},
+        json={"expected_revision_number": 1, "reason": "duplicate"},
+    )
+    run_response = client.get(f"/v1/ai-question-validation-runs/{run.id}")
+    missing_run_response = client.get(f"/v1/ai-question-validation-runs/{uuid4()}")
+
+    assert job_response.status_code == 404
+    assert job_response.json()["detail"]["code"] == "generation_job_not_found"
+    assert draft_response.status_code == 404
+    assert draft_response.json()["detail"]["code"] == "generation_draft_not_found"
+    assert run_response.status_code == 404
+    assert run_response.json()["detail"]["code"] == "validation_run_not_found"
+    assert missing_run_response.status_code == 404
+    assert missing_run_response.json()["detail"]["code"] == "validation_run_not_found"
+
+
+def test_validation_finding_response_uses_explicit_safe_projection(
+    client: TestClient, session: Session
+) -> None:
+    teacher, objective_revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client,
+        teacher,
+        objective_revision,
+        idempotency_key="safe-finding-source-job",
+    )
+    draft_payload = fetch_only_draft(client, headers, created["id"])
+    draft = session.get(GeneratedQuestionDraft, UUID(str(draft_payload["id"])))
+    assert draft is not None
+    run = GenerationValidationRun(
+        generated_question_draft_id=draft.id,
+        draft_revision_id=draft.current_revision_id,
+        generation_job_id=draft.job_id,
+        run_number=1,
+        validator_version="api-test",
+        ruleset_version="api-test",
+        status=ValidationRunStatus.WARNING,
+        feature_summary_json={},
+    )
+    finding = ValidationFinding(
+        validation_run=run,
+        code="grade_complexity_warning",
+        severity=ValidationFindingSeverity.WARNING,
+        evidence_json={
+            "grade_level": "G5",
+            "metric": "prompt_units",
+            "observed": 12,
+            "limit": 10,
+            "content_hash": "private-content-hash",
+            "request_metadata": {"provider": "private-provider"},
+            "exception": "private exception text",
+            "candidate": {"prompt": "private candidate body"},
+        },
+        remediation="private exception text with private candidate body",
+    )
+    session.add(finding)
+    session.commit()
+
+    response = client.get(f"/v1/ai-question-validation-runs/{run.id}", headers=headers)
+
+    assert response.status_code == 200
+    public_finding = response.json()["findings"][0]
+    assert public_finding["evidence"] == {
+        "grade_level": "G5",
+        "metric": "prompt_units",
+        "observed": 12,
+        "limit": 10,
+    }
+    assert "private" not in str(public_finding).casefold()
+    assert "hash" not in str(public_finding).casefold()
+    assert "exception" not in str(public_finding).casefold()
+
+
+def test_revision_api_replays_exact_request_and_rejects_changed_body(
+    client: TestClient, session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    teacher, objective_revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client,
+        teacher,
+        objective_revision,
+        idempotency_key="revision-source-job",
+    )
+    draft = fetch_only_draft(client, headers, created["id"])
+    body = {
+        "expected_revision_number": 1,
+        "candidate": {**draft["candidate"], "prompt": "What is 8 + 4?"},
+    }
+    monkeypatch.setattr(generation_router, "HttpGraderClient", DeterministicM2Client)
+    write_headers = headers | {"Idempotency-Key": "review-revision-key"}
+
+    first = client.post(
+        f"/v1/ai-generated-questions/{draft['id']}/revisions",
+        headers=write_headers,
+        json=body,
+    )
+    monkeypatch.setattr(validation_router, "HttpGraderClient", DeterministicM2Client)
+    later_validation = client.post(
+        f"/v1/ai-generated-questions/{draft['id']}/validation-runs",
+        headers=headers,
+    )
+    replay = client.post(
+        f"/v1/ai-generated-questions/{draft['id']}/revisions",
+        headers=write_headers,
+        json=body,
+    )
+    conflict = client.post(
+        f"/v1/ai-generated-questions/{draft['id']}/revisions",
+        headers=write_headers,
+        json={**body, "candidate": {**body["candidate"], "prompt": "Changed retry body"}},
+    )
+    current_draft = fetch_only_draft(client, headers, created["id"])
+
+    assert first.status_code == 201
+    assert later_validation.status_code == 201
+    assert later_validation.json()["id"] != first.json()["validation_run"]["id"]
+    assert replay.status_code == 201
+    assert replay.json() == first.json()
+    assert first.json()["revision_number"] == 2
+    assert first.json()["validation_run"]["revision_number"] == 2
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "idempotency_key_conflict"
+    assert current_draft["candidate"]["prompt"] == "What is 8 + 4?"
+    assert current_draft["revision_number"] == 2
+    assert session.scalar(select(func.count(GeneratedQuestionDraftRevision.id))) == 2
+    assert "hash" not in str(first.json()).casefold()
+    assert "request_summary" not in str(first.json()).casefold()
+
+
+def test_revision_api_recovers_exact_replay_after_post_lock_unique_conflict(
+    client: TestClient,
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    teacher, objective_revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client,
+        teacher,
+        objective_revision,
+        idempotency_key="unique-conflict-source-job",
+    )
+    draft = fetch_only_draft(client, headers, created["id"])
+    body = {
+        "expected_revision_number": 1,
+        "candidate": {**draft["candidate"], "prompt": "What is 7 + 5?"},
+    }
+    original_create_revision = generation_router.create_review_revision
+
+    def persist_competing_request_then_raise(*args: object, **kwargs: object) -> object:
+        original_create_revision(*args, **kwargs)
+        session.commit()
+        raise IntegrityError("forced unique conflict", {}, RuntimeError("duplicate key"))
+
+    monkeypatch.setattr(generation_router, "HttpGraderClient", DeterministicM2Client)
+    monkeypatch.setattr(
+        generation_router,
+        "create_review_revision",
+        persist_competing_request_then_raise,
+    )
+
+    response = client.post(
+        f"/v1/ai-generated-questions/{draft['id']}/revisions",
+        headers=headers | {"Idempotency-Key": "post-lock-unique-key"},
+        json=body,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["revision_number"] == 2
+    assert response.json()["validation_run"]["revision_number"] == 2
+    assert session.scalar(select(func.count(GeneratedQuestionDraftRevision.id))) == 2
+
+
+def test_reject_api_replays_exact_action_and_conflicts_with_different_action_or_body(
+    client: TestClient, session: Session
+) -> None:
+    teacher, objective_revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client,
+        teacher,
+        objective_revision,
+        idempotency_key="reject-source-job",
+    )
+    draft = fetch_only_draft(client, headers, created["id"])
+    persisted_draft = session.get(GeneratedQuestionDraft, UUID(str(draft["id"])))
+    assert persisted_draft is not None
+    session.add(
+        GenerationValidationRun(
+            generated_question_draft_id=persisted_draft.id,
+            draft_revision_id=persisted_draft.current_revision_id,
+            generation_job_id=persisted_draft.job_id,
+            run_number=1,
+            validator_version="api-test",
+            ruleset_version="api-test",
+            status=ValidationRunStatus.PASSED,
+            feature_summary_json={},
+        )
+    )
+    session.commit()
+    write_headers = headers | {"Idempotency-Key": "review-decision-key"}
+    body = {"expected_revision_number": 1, "reason": "duplicate", "detail": None}
+
+    first = client.post(
+        f"/v1/ai-generated-questions/{draft['id']}/reject",
+        headers=write_headers,
+        json=body,
+    )
+    replay = client.post(
+        f"/v1/ai-generated-questions/{draft['id']}/reject",
+        headers=write_headers,
+        json=body,
+    )
+    changed_body = client.post(
+        f"/v1/ai-generated-questions/{draft['id']}/reject",
+        headers=write_headers,
+        json={**body, "reason": "unclear_wording"},
+    )
+    changed_action = client.post(
+        f"/v1/ai-generated-questions/{draft['id']}/accept",
+        headers=write_headers,
+        json={"expected_revision_number": 1, "confirm_warnings": False},
+    )
+
+    assert first.status_code == 200
+    assert replay.status_code == 200
+    assert replay.json() == first.json()
+    assert first.json()["action"] == "reject"
+    assert first.json()["revision_number"] == 1
+    assert first.json()["validation_run"]["revision_number"] == 1
+    assert changed_body.status_code == 409
+    assert changed_body.json()["detail"]["code"] == "idempotency_key_conflict"
+    assert changed_action.status_code == 409
+    assert changed_action.json()["detail"]["code"] == "idempotency_key_conflict"
+    assert session.scalar(select(func.count(GeneratedQuestionReviewDecision.id))) == 1
+
+
+def test_accept_api_requires_current_validation_and_replays_accepted_version(
+    client: TestClient, session: Session
+) -> None:
+    teacher, objective_revision = teacher_and_objective(session)
+    headers, blocked_job = create_generation_job(
+        client,
+        teacher,
+        objective_revision,
+        idempotency_key="blocked-accept-source-job",
+    )
+    blocked_draft_payload = fetch_only_draft(client, headers, blocked_job["id"])
+    blocked_draft = session.get(GeneratedQuestionDraft, UUID(str(blocked_draft_payload["id"])))
+    assert blocked_draft is not None
+    blocked_run = GenerationValidationRun(
+        generated_question_draft_id=blocked_draft.id,
+        draft_revision_id=blocked_draft.current_revision_id,
+        generation_job_id=blocked_draft.job_id,
+        run_number=1,
+        validator_version="api-test",
+        ruleset_version="api-test",
+        status=ValidationRunStatus.BLOCKED,
+        feature_summary_json={"private_exception_detail": "must-not-leak"},
+    )
+    session.add(blocked_run)
+    session.commit()
+    blocked = client.post(
+        f"/v1/ai-generated-questions/{blocked_draft.id}/accept",
+        headers=headers | {"Idempotency-Key": "blocked-accept-key"},
+        json={"expected_revision_number": 1, "confirm_warnings": False},
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "validation_blocked"
+
+    headers, accepted_job = create_generation_job(
+        client,
+        teacher,
+        objective_revision,
+        idempotency_key="accepted-source-job",
+    )
+    accepted_draft_payload = fetch_only_draft(client, headers, accepted_job["id"])
+    accepted_draft = session.get(GeneratedQuestionDraft, UUID(str(accepted_draft_payload["id"])))
+    assert accepted_draft is not None
+    passed_run = GenerationValidationRun(
+        generated_question_draft_id=accepted_draft.id,
+        draft_revision_id=accepted_draft.current_revision_id,
+        generation_job_id=accepted_draft.job_id,
+        run_number=1,
+        validator_version="api-test",
+        ruleset_version="api-test",
+        status=ValidationRunStatus.PASSED,
+        feature_summary_json={},
+    )
+    session.add(passed_run)
+    session.commit()
+    write_headers = headers | {"Idempotency-Key": "accepted-review-key"}
+    body = {"expected_revision_number": 1, "confirm_warnings": False}
+
+    first = client.post(
+        f"/v1/ai-generated-questions/{accepted_draft.id}/accept",
+        headers=write_headers,
+        json=body,
+    )
+    replay = client.post(
+        f"/v1/ai-generated-questions/{accepted_draft.id}/accept",
+        headers=write_headers,
+        json=body,
+    )
+    conflict = client.post(
+        f"/v1/ai-generated-questions/{accepted_draft.id}/accept",
+        headers=write_headers,
+        json={**body, "confirm_warnings": True},
+    )
+
+    assert first.status_code == 200
+    assert replay.status_code == 200
+    assert replay.json() == first.json()
+    assert first.json()["action"] == "accept"
+    assert first.json()["accepted_question_version_id"]
+    assert first.json()["validation_run"]["status"] == "passed"
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "idempotency_key_conflict"
+    assert session.scalar(select(func.count(QuestionVersion.id))) == 1
+
+
+def test_accept_api_requires_warning_confirmation_then_persists_confirmed_decision(
+    client: TestClient, session: Session
+) -> None:
+    teacher, objective_revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client,
+        teacher,
+        objective_revision,
+        idempotency_key="warning-accept-source-job",
+    )
+    draft_payload = fetch_only_draft(client, headers, created["id"])
+    draft = session.get(GeneratedQuestionDraft, UUID(str(draft_payload["id"])))
+    assert draft is not None
+    session.add(
+        GenerationValidationRun(
+            generated_question_draft_id=draft.id,
+            draft_revision_id=draft.current_revision_id,
+            generation_job_id=draft.job_id,
+            run_number=1,
+            validator_version="api-test",
+            ruleset_version="api-test",
+            status=ValidationRunStatus.WARNING,
+            feature_summary_json={},
+        )
+    )
+    session.commit()
+
+    without_confirmation = client.post(
+        f"/v1/ai-generated-questions/{draft.id}/accept",
+        headers=headers | {"Idempotency-Key": "warning-not-confirmed"},
+        json={"expected_revision_number": 1, "confirm_warnings": False},
+    )
+    with_confirmation = client.post(
+        f"/v1/ai-generated-questions/{draft.id}/accept",
+        headers=headers | {"Idempotency-Key": "warning-confirmed"},
+        json={"expected_revision_number": 1, "confirm_warnings": True},
+    )
+
+    assert without_confirmation.status_code == 409
+    assert without_confirmation.json()["detail"]["code"] == "warning_confirmation_required"
+    assert with_confirmation.status_code == 200
+    assert with_confirmation.json()["accepted_question_version_id"]
+    decision = session.scalar(
+        select(GeneratedQuestionReviewDecision).where(
+            GeneratedQuestionReviewDecision.generated_question_draft_id == draft.id
+        )
+    )
+    assert decision is not None
+    assert decision.warning_confirmed is True

@@ -33,6 +33,7 @@ def test_published_version_is_preserved_when_creating_a_successor_draft() -> Non
             version_number=1,
             status=VersionStatus.PUBLISHED,
             prompt="What is 2 + 3?",
+            reading_material="Read the worked example before answering.",
             question_type="M1",
             grading_policy=policy,
             rule_json={"expected": 5},
@@ -48,4 +49,5 @@ def test_published_version_is_preserved_when_creating_a_successor_draft() -> Non
         assert successor.version_number == 2
         assert successor.status is VersionStatus.DRAFT
         assert successor.prompt == "What is 3 + 3?"
+        assert successor.reading_material == "Read the worked example before answering."
         assert published.prompt == "What is 2 + 3?"

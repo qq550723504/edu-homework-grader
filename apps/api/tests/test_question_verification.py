@@ -1,4 +1,5 @@
 import importlib.util
+from copy import deepcopy
 from decimal import Decimal
 from uuid import uuid4
 
@@ -21,7 +22,9 @@ from edu_grader_api.models import (
     GenerationAttempt,
     GenerationJob,
     GenerationJobStatus,
+    GenerationValidationRun,
     GeneratedQuestionDraft,
+    GeneratedQuestionDraftRevision,
     GradingPolicy,
     Question,
     QuestionVersion,
@@ -689,7 +692,59 @@ def generation_draft(
     )
     session.add(draft)
     session.flush()
+    session.add(
+        GeneratedQuestionDraftRevision(
+            id=draft.current_revision_id,
+            generated_question_draft_id=draft.id,
+            revision_number=1,
+            candidate_json=candidate_content,
+            content_hash=draft.content_hash,
+        )
+    )
+    session.flush()
     return draft
+
+
+def current_review_revision(
+    session: Session, draft: GeneratedQuestionDraft
+) -> GeneratedQuestionDraftRevision:
+    revision = session.get(GeneratedQuestionDraftRevision, draft.current_revision_id)
+    assert revision is not None
+    return revision
+
+
+def verify_current_revision(
+    session: Session,
+    *,
+    draft: GeneratedQuestionDraft,
+    grader_client: object,
+) -> GenerationValidationRun:
+    return verification.run_candidate_verification(
+        session,
+        draft=draft,
+        revision=current_review_revision(session, draft),
+        grader_client=grader_client,
+    )
+
+
+def create_edited_revision(
+    session: Session,
+    *,
+    draft: GeneratedQuestionDraft | None = None,
+    prompt: str,
+) -> tuple[GeneratedQuestionDraft, GeneratedQuestionDraftRevision]:
+    target_draft = draft or generation_draft(session)
+    revision = GeneratedQuestionDraftRevision(
+        generated_question_draft_id=target_draft.id,
+        revision_number=2,
+        candidate_json={**target_draft.candidate_json, "prompt": prompt},
+        content_hash="2" * 64,
+    )
+    session.add(revision)
+    session.flush()
+    target_draft.current_revision_id = revision.id
+    session.flush()
+    return target_draft, revision
 
 
 def configure_grade_complexity_rules(
@@ -717,6 +772,16 @@ def add_batch_draft(
         teacher_state="pending_review",
     )
     session.add(comparison)
+    session.flush()
+    session.add(
+        GeneratedQuestionDraftRevision(
+            id=comparison.current_revision_id,
+            generated_question_draft_id=comparison.id,
+            revision_number=1,
+            candidate_json=comparison.candidate_json,
+            content_hash=comparison.content_hash,
+        )
+    )
     session.flush()
     return comparison
 
@@ -782,12 +847,90 @@ def valid_m1_candidate(prompt: str) -> dict[str, object]:
     }
 
 
+def test_validation_uses_selected_revision_not_provider_original(session: Session) -> None:
+    draft, revision = create_edited_revision(session, prompt="What is 9 + 9?")
+    add_published_question(session, draft=draft, prompt="Name the capital of France.")
+    grader = SemanticGrader([[0.1]])
+
+    run = verification.run_candidate_verification(
+        session,
+        draft=draft,
+        revision=revision,
+        grader_client=grader,
+    )
+
+    expected = fingerprint_prompt("What is 9 + 9?")
+    assert run.draft_revision_id == revision.id
+    assert grader.semantic_requests[0][0] == "What is 9 + 9?"
+    assert run.feature_summary_json["candidate_prompt_fingerprint"] == {
+        "version": expected.version,
+        "exact_hash": expected.exact_hash,
+        "normalized_hash": expected.normalized_hash,
+    }
+
+
+def test_nested_grader_mutation_does_not_change_revision_or_provider_original(
+    session: Session,
+) -> None:
+    draft = generation_draft(
+        session,
+        allowed_question_types=["M2"],
+        candidate_json=valid_m2_candidate(),
+    )
+    revision = current_review_revision(session, draft)
+    revision_before = deepcopy(revision.candidate_json)
+    provider_original_before = deepcopy(draft.candidate_json)
+
+    class NestedRuleMutatingGrader(PassingM2Grader):
+        mutated = False
+
+        def grade(
+            self,
+            question_type: str,
+            rule_json: dict[str, object],
+            answer_json: dict[str, object],
+            *,
+            policy_version: str | None = None,
+        ) -> GradeResult:
+            expected = rule_json.get("expected")
+            assert isinstance(expected, list)
+            if not self.mutated:
+                expected.append(["Number", 99])
+                self.mutated = True
+            return super().grade(
+                question_type,
+                rule_json,
+                answer_json,
+                policy_version=policy_version,
+            )
+
+    grader = NestedRuleMutatingGrader()
+    verify_current_revision(session, draft=draft, grader_client=grader)
+
+    assert grader.mutated is True
+    assert revision.candidate_json == revision_before
+    assert draft.candidate_json == provider_original_before
+
+
+def test_batch_duplicate_uses_peer_current_revision_not_provider_original(
+    session: Session,
+) -> None:
+    draft = generation_draft(session)
+    peer = add_batch_draft(session, draft=draft, prompt="What is 3 + 3?", ordinal=2)
+    create_edited_revision(session, draft=peer, prompt="What is 2 + 2?")
+
+    run = verify_current_revision(session, draft=draft, grader_client=SemanticGrader([]))
+
+    finding = finding_by_code(run, "duplicate_exact_prompt")
+    assert finding.evidence_json == {"comparison": "batch_candidate", "method": "exact_hash"}
+
+
 def test_exact_batch_duplicate_is_blocked_without_source_text(session: Session) -> None:
     draft = generation_draft(session)
     add_batch_draft(session, draft=draft, prompt="What is 2 + 2?", ordinal=2)
     grader = SemanticGrader([])
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     finding = finding_by_code(run, "duplicate_exact_prompt")
     assert run.status is ValidationRunStatus.BLOCKED
@@ -801,7 +944,7 @@ def test_normalized_batch_duplicate_is_blocked_without_source_text(session: Sess
     add_batch_draft(session, draft=draft, prompt="  ＷＨＡＴ   IS 2 + 2?  ", ordinal=2)
     grader = SemanticGrader([])
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     finding = finding_by_code(run, "duplicate_normalized_prompt")
     assert finding.evidence_json == {
@@ -818,7 +961,7 @@ def test_semantic_published_question_is_blocked_without_raw_comparator(
     add_published_question(session, draft=draft, prompt="What is 2 + 2?")
     grader = SemanticGrader([[0.96]])
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     finding = finding_by_code(run, "duplicate_semantic_near_match")
     assert finding.evidence_json == {
@@ -867,9 +1010,7 @@ def test_semantic_same_batch_candidate_is_blocked(session: Session) -> None:
         ordinal=2,
     )
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=SemanticGrader([[0.92]])
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=SemanticGrader([[0.92]]))
 
     finding = finding_by_code(run, "duplicate_semantic_near_match")
     assert finding.evidence_json == {
@@ -893,7 +1034,7 @@ def test_cross_tenant_published_questions_are_never_queried(session: Session) ->
     )
     grader = SemanticGrader([[0.1]])
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     assert not finding_codes(run) & {
         "duplicate_exact_prompt",
@@ -930,9 +1071,7 @@ def test_duplicate_feature_summary_uses_the_gate_snapshot(
             )
             return semantic_result([0.1])
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=MutatingSemanticGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=MutatingSemanticGrader())
 
     assert run.status is ValidationRunStatus.PASSED
     assert {
@@ -979,7 +1118,7 @@ def test_normalized_comparators_are_deduplicated_across_sources_with_published_p
     )
     grader = SemanticGrader([[0.96]])
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     finding = finding_by_code(run, "duplicate_semantic_near_match")
     assert grader.semantic_requests == [
@@ -1013,7 +1152,7 @@ def test_semantic_comparators_are_deduplicated_before_chunking(session: Session)
     )
     grader = SemanticGrader([[0.1] * 128, [0.1]])
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     assert run.status is ValidationRunStatus.PASSED
     assert [len(comparisons) for _, comparisons in grader.semantic_requests] == [128, 1]
@@ -1027,9 +1166,7 @@ def test_distinct_candidate_passes_duplicate_gate(session: Session) -> None:
     draft = generation_draft(session, candidate_json=valid_m1_candidate("Calculate two plus two."))
     add_published_question(session, draft=draft, prompt="Name the capital of France.")
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=SemanticGrader([[0.14]])
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=SemanticGrader([[0.14]]))
 
     assert run.status is ValidationRunStatus.PASSED
     assert not finding_codes(run) & {
@@ -1044,9 +1181,7 @@ def test_missing_semantic_client_blocks_without_diagnostics(session: Session) ->
     draft = generation_draft(session, candidate_json=valid_m1_candidate("Calculate two plus two."))
     add_published_question(session, draft=draft, prompt="What is 2 + 2?")
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=MissingSemanticGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=MissingSemanticGrader())
 
     finding = finding_by_code(run, "duplicate_semantic_check_unavailable")
     assert finding.evidence_json == {"category": "similarity_unavailable"}
@@ -1068,9 +1203,7 @@ def test_malformed_semantic_scores_fail_closed(session: Session, scores: list[ob
     draft = generation_draft(session, candidate_json=valid_m1_candidate("Calculate two plus two."))
     add_published_question(session, draft=draft, prompt="What is 2 + 2?")
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=SemanticGrader([scores])
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=SemanticGrader([scores]))
 
     finding = finding_by_code(run, "duplicate_semantic_check_unavailable")
     assert finding.evidence_json == {"category": "similarity_unavailable"}
@@ -1087,7 +1220,7 @@ def test_multi_chunk_semantic_failure_fails_closed(session: Session) -> None:
         )
     grader = SemanticGrader([[0.1] * 128, RuntimeError("private dependency diagnostic")])
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     finding = finding_by_code(run, "duplicate_semantic_check_unavailable")
     assert finding.evidence_json == {"category": "similarity_unavailable"}
@@ -1108,7 +1241,7 @@ def test_later_chunk_failure_overrides_an_earlier_above_threshold_match(
         )
     grader = SemanticGrader([[0.99, *([0.1] * 127)], RuntimeError("private dependency diagnostic")])
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     finding = finding_by_code(run, "duplicate_semantic_check_unavailable")
     assert finding.evidence_json == {"category": "similarity_unavailable"}
@@ -1141,7 +1274,7 @@ def test_semantic_embedding_metadata_mismatch_across_chunks_fails_closed(
         ]
     )
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     finding = finding_by_code(run, "duplicate_semantic_check_unavailable")
     assert run.status is ValidationRunStatus.BLOCKED
@@ -1149,28 +1282,27 @@ def test_semantic_embedding_metadata_mismatch_across_chunks_fails_closed(
     assert run.feature_summary_json["embedding_dependency"] is None
 
 
-def test_candidate_mutation_during_semantic_scoring_blocks_stale_validation_run(
+def test_current_revision_change_during_semantic_scoring_blocks_stale_validation_run(
     session: Session,
 ) -> None:
     original_prompt = "Calculate two plus two."
     draft = generation_draft(session, candidate_json=valid_m1_candidate(original_prompt))
+    evaluated_revision = current_review_revision(session, draft)
     add_published_question(session, draft=draft, prompt="Name the capital of France.")
 
-    class CandidateMutatingGrader(PassingGrader):
+    class RevisionMutatingGrader(PassingGrader):
         def semantic_similarity(
             self, query: str, comparisons: list[str]
         ) -> SemanticSimilarityResult:
-            draft.candidate_json = {**draft.candidate_json, "prompt": "What is 9 + 9?"}
-            session.flush()
+            create_edited_revision(session, draft=draft, prompt="What is 9 + 9?")
             return semantic_result([0.1])
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=CandidateMutatingGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=RevisionMutatingGrader())
 
     finding = finding_by_code(run, "duplicate_semantic_check_unavailable")
     expected = fingerprint_prompt(original_prompt)
     assert run.status is ValidationRunStatus.BLOCKED
+    assert run.draft_revision_id == evaluated_revision.id
     assert finding.evidence_json == {"category": "similarity_unavailable"}
     assert run.feature_summary_json["candidate_prompt_fingerprint"] == {
         "version": expected.version,
@@ -1180,36 +1312,43 @@ def test_candidate_mutation_during_semantic_scoring_blocks_stale_validation_run(
     assert "What is 9 + 9?" not in str(run.feature_summary_json)
 
 
-def test_unflushed_candidate_mutation_during_semantic_scoring_blocks_stale_validation_run() -> None:
+def test_unflushed_current_revision_change_blocks_stale_validation_run() -> None:
     engine = create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)
 
     with Session(engine, autoflush=False) as session:
         original_prompt = "Calculate two plus two."
         draft = generation_draft(session, candidate_json=valid_m1_candidate(original_prompt))
+        evaluated_revision = current_review_revision(session, draft)
         add_published_question(session, draft=draft, prompt="Name the capital of France.")
+        replacement = GeneratedQuestionDraftRevision(
+            id=uuid4(),
+            generated_question_draft_id=draft.id,
+            revision_number=2,
+            candidate_json={**draft.candidate_json, "prompt": "What is 9 + 9?"},
+            content_hash="2" * 64,
+        )
 
-        class CandidateMutatingGrader(PassingGrader):
+        class RevisionMutatingGrader(PassingGrader):
             def semantic_similarity(
                 self, query: str, comparisons: list[str]
             ) -> SemanticSimilarityResult:
-                draft.candidate_json = {**draft.candidate_json, "prompt": "What is 9 + 9?"}
+                session.add(replacement)
+                draft.current_revision_id = replacement.id
                 return semantic_result([0.1])
 
-        run = verification.run_candidate_verification(
-            session, draft=draft, grader_client=CandidateMutatingGrader()
-        )
+        run = verify_current_revision(session, draft=draft, grader_client=RevisionMutatingGrader())
 
         finding = finding_by_code(run, "duplicate_semantic_check_unavailable")
         expected = fingerprint_prompt(original_prompt)
         assert run.status is ValidationRunStatus.BLOCKED
+        assert run.draft_revision_id == evaluated_revision.id
         assert finding.evidence_json == {"category": "similarity_unavailable"}
         assert run.feature_summary_json["candidate_prompt_fingerprint"] == {
             "version": expected.version,
             "exact_hash": expected.exact_hash,
             "normalized_hash": expected.normalized_hash,
         }
-        assert draft.candidate_json["prompt"] == "What is 9 + 9?"
         assert "What is 9 + 9?" not in str(run.feature_summary_json)
 
 
@@ -1217,12 +1356,8 @@ def test_valid_m1_candidate_persists_a_passing_run_and_rerun(session: Session) -
     assert hasattr(verification, "run_candidate_verification")
     draft = generation_draft(session)
 
-    first = verification.run_candidate_verification(
-        session, draft=draft, grader_client=PassingGrader()
-    )
-    second = verification.run_candidate_verification(
-        session, draft=draft, grader_client=PassingGrader()
-    )
+    first = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
+    second = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
 
     assert first.status is ValidationRunStatus.PASSED
     assert first.run_number == 1
@@ -1238,7 +1373,7 @@ def test_m1_verification_runs_expected_empty_boundary_and_outside_probes_in_orde
     candidate["rule_json"] = {"expected": 2.5, "tolerance": 0.25}
     grader = RecordingM1Grader()
 
-    run = verification.run_candidate_verification(
+    run = verify_current_revision(
         session,
         draft=generation_draft(session, candidate_json=candidate),
         grader_client=grader,
@@ -1261,7 +1396,7 @@ def test_m1_zero_tolerance_retains_duplicate_boundary_probes(session: Session) -
     candidate["rule_json"] = {"expected": 4, "tolerance": 0}
     grader = RecordingM1Grader()
 
-    verification.run_candidate_verification(
+    verify_current_revision(
         session,
         draft=generation_draft(session, candidate_json=candidate),
         grader_client=grader,
@@ -1282,7 +1417,7 @@ def test_m1_negative_numbers_use_safe_decimal_probe_text(session: Session) -> No
     candidate["rule_json"] = {"expected": -3, "tolerance": 0.5}
     grader = RecordingM1Grader()
 
-    verification.run_candidate_verification(
+    verify_current_revision(
         session,
         draft=generation_draft(session, candidate_json=candidate),
         grader_client=grader,
@@ -1327,7 +1462,7 @@ def test_m1_large_expected_preserves_exact_outside_tolerance_probes(session: Ses
         "auto_rejected",
     ]
 
-    run = verification.run_candidate_verification(
+    run = verify_current_revision(
         session,
         draft=generation_draft(
             session,
@@ -1548,7 +1683,7 @@ def test_m1_invalid_probe_results_are_safely_blocked(
     candidate["rule_json"] = {"expected": 2.5, "tolerance": 0.25}
     grader = RecordingM1Grader({probe_texts[probe_id]: response})
 
-    run = verification.run_candidate_verification(
+    run = verify_current_revision(
         session,
         draft=generation_draft(session, candidate_json=candidate),
         grader_client=grader,
@@ -1596,7 +1731,7 @@ def test_m1_invalid_schema_or_policy_version_skips_type_specific_grader_calls(
     candidate["rule_json"] = rule_json
     grader = RecordingM1Grader()
 
-    run = verification.run_candidate_verification(
+    run = verify_current_revision(
         session,
         draft=generation_draft(session, candidate_json=candidate),
         grader_client=grader,
@@ -1615,7 +1750,7 @@ def test_valid_m2_candidate_normalizes_and_probes(session: Session) -> None:
     )
     grader = PassingM2Grader()
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     assert run.status is ValidationRunStatus.PASSED
     assert grader.normalization_requests == [{"mathjson": ["Add", "x", 1], "variables": ["x"]}]
@@ -1639,7 +1774,7 @@ def test_m2_offset_review_is_valid_at_the_grader_depth_boundary(session: Session
     )
     grader = PassingM2Grader(offset_decision="needs_review")
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     assert run.status is ValidationRunStatus.PASSED
     assert len(grader.grade_requests) == 5
@@ -1677,7 +1812,7 @@ def test_m2_probe_failures_are_sanitized_and_do_not_short_circuit(
         failure_kind=failure_kind,
     )
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     failures = [item for item in run.findings if item.code == "m2_grader_probe_failed"]
     assert run.status is ValidationRunStatus.BLOCKED
@@ -1698,7 +1833,7 @@ def test_valid_e2_candidate_probes_every_accepted_form(session: Session) -> None
         session, allowed_question_types=["E2"], candidate_json=valid_e2_candidate()
     )
     grader = PassingE2Grader()
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     assert run.status is ValidationRunStatus.PASSED
     assert grader.grade_requests == [
@@ -1713,7 +1848,7 @@ def test_e2_normalized_duplicate_forms_are_blocked(session: Session) -> None:
         session, allowed_question_types=["E2"], candidate_json=duplicate
     )
 
-    duplicate_run = verification.run_candidate_verification(
+    duplicate_run = verify_current_revision(
         session, draft=duplicate_draft, grader_client=PassingE2Grader()
     )
 
@@ -1726,9 +1861,7 @@ def test_e2_grader_failure_is_safely_blocked(session: Session, grader: PassingE2
     failed_draft = generation_draft(
         session, allowed_question_types=["E2"], candidate_json=valid_e2_candidate()
     )
-    failed_run = verification.run_candidate_verification(
-        session, draft=failed_draft, grader_client=grader
-    )
+    failed_run = verify_current_revision(session, draft=failed_draft, grader_client=grader)
 
     finding = next(item for item in failed_run.findings if item.code == "e2_grader_probe_failed")
     assert finding.evidence_json == {"probe": "accepted_forms", "accepted_form_count": 1}
@@ -1741,7 +1874,7 @@ def test_e2_schema_invalid_rules_do_not_call_the_grader(session: Session) -> Non
     draft = generation_draft(session, allowed_question_types=["E2"], candidate_json=candidate)
     grader = PassingE2Grader()
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     assert "policy_schema_invalid" in finding_codes(run)
     assert grader.grade_requests == []
@@ -1753,7 +1886,7 @@ def test_valid_e3_candidate_probes_prompt_and_reference_answers(session: Session
     )
     grader = PassingE3Grader()
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     assert run.status is ValidationRunStatus.PASSED
     assert [request[2]["text"] for request in grader.grade_requests] == [
@@ -1773,7 +1906,7 @@ def test_e3_grammar_matches_are_sanitized_warnings(session: Session) -> None:
     }
     draft = generation_draft(session, allowed_question_types=["E3"], candidate_json=candidate)
 
-    run = verification.run_candidate_verification(
+    run = verify_current_revision(
         session,
         draft=draft,
         grader_client=PassingE3Grader(feedback=[{"type": "grammar"}, {"type": "grammar"}]),
@@ -1803,7 +1936,7 @@ def test_e3_grammar_probe_failures_are_safely_blocked(
         session, allowed_question_types=["E3"], candidate_json=valid_e3_candidate()
     )
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     finding = next(item for item in run.findings if item.code == "e3_grammar_probe_failed")
     assert run.status is ValidationRunStatus.BLOCKED
@@ -1818,7 +1951,7 @@ def test_e3_schema_invalid_rules_do_not_call_the_grader(session: Session) -> Non
     draft = generation_draft(session, allowed_question_types=["E3"], candidate_json=candidate)
     grader = PassingE3Grader()
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     assert "policy_schema_invalid" in finding_codes(run)
     assert grader.grade_requests == []
@@ -1830,7 +1963,7 @@ def test_valid_e4_candidate_probes_every_evidence_phrase(session: Session) -> No
     )
     grader = PassingE4Grader()
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     assert run.status is ValidationRunStatus.PASSED
     assert [request[2]["text"] for request in grader.grade_requests] == [
@@ -1861,7 +1994,7 @@ def test_e4_missing_or_oversized_material_blocks_without_grader_calls(
         candidate["reading_material"] = material
     grader = PassingE4Grader()
 
-    run = verification.run_candidate_verification(
+    run = verify_current_revision(
         session,
         draft=generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate),
         grader_client=grader,
@@ -1883,7 +2016,7 @@ def test_legacy_persisted_e4_candidate_without_material_blocks_without_grader_ca
     candidate.pop("reading_material")
     grader = PassingE4Grader()
 
-    run = verification.run_candidate_verification(
+    run = verify_current_revision(
         session,
         draft=generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate),
         grader_client=grader,
@@ -1905,7 +2038,7 @@ def test_e4_material_mismatch_blocks_before_grader_and_never_echoes_text(
     candidate["reading_material"] = "The road was open, and the students arrived early."
     grader = PassingE4Grader()
 
-    run = verification.run_candidate_verification(
+    run = verify_current_revision(
         session,
         draft=generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate),
         grader_client=grader,
@@ -1935,7 +2068,7 @@ def test_e4_punctuation_only_evidence_is_invalid_without_grader_calls(
     candidate["rule_json"]["max_score"] = 2
     grader = PassingE4Grader()
 
-    run = verification.run_candidate_verification(
+    run = verify_current_revision(
         session,
         draft=generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate),
         grader_client=grader,
@@ -1955,7 +2088,7 @@ def test_e4_normalized_material_match_and_material_safety_scan(session: Session)
     candidate = valid_e4_candidate()
     candidate["reading_material"] = "BECAUSE the bridge was closed.  THEY arrived late!"
     assert (
-        verification.run_candidate_verification(
+        verify_current_revision(
             session,
             draft=generation_draft(
                 session, allowed_question_types=["E4"], candidate_json=candidate
@@ -1966,7 +2099,7 @@ def test_e4_normalized_material_match_and_material_safety_scan(session: Session)
     )
 
     candidate["reading_material"] = "self-harm instructions"
-    unsafe = verification.run_candidate_verification(
+    unsafe = verify_current_revision(
         session,
         draft=generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate),
         grader_client=PassingE4Grader(),
@@ -1986,7 +2119,7 @@ def test_e4_normalized_duplicate_point_ids_are_blocked(session: Session) -> None
     draft = generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate)
     grader = PassingE4Grader()
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     finding = next(item for item in run.findings if item.code == "e4_scoring_points_invalid")
     assert finding.evidence_json == {
@@ -2005,7 +2138,7 @@ def test_e4_normalized_duplicate_phrases_are_blocked(session: Session) -> None:
     draft = generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate)
     grader = PassingE4Grader()
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     finding = next(item for item in run.findings if item.code == "e4_scoring_points_invalid")
     assert finding.evidence_json == {
@@ -2023,7 +2156,7 @@ def test_e4_overlapping_phrases_across_points_are_blocked(session: Session) -> N
     draft = generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate)
     grader = PassingE4Grader()
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     finding = next(item for item in run.findings if item.code == "e4_scoring_points_invalid")
     assert finding.evidence_json == {
@@ -2040,7 +2173,7 @@ def test_e4_score_total_mismatch_is_blocked(session: Session) -> None:
     draft = generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate)
     grader = PassingE4Grader()
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     finding = next(item for item in run.findings if item.code == "e4_score_total_invalid")
     assert finding.evidence_json == {
@@ -2058,9 +2191,7 @@ def test_e4_score_total_uses_floating_point_tolerance(session: Session) -> None:
     candidate["rule_json"]["scoring_points"][1]["score"] = 0.2
     draft = generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate)
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=PassingE4Grader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=PassingE4Grader())
 
     assert run.status is ValidationRunStatus.PASSED
 
@@ -2077,7 +2208,7 @@ def test_e4_non_finite_scores_are_blocked_without_grader_calls(
     draft = generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate)
     grader = PassingE4Grader()
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     finding = next(item for item in run.findings if item.code == "e4_score_total_invalid")
     assert run.status is ValidationRunStatus.BLOCKED
@@ -2100,7 +2231,7 @@ def test_e4_invalid_grader_probes_are_safely_blocked(
         session, allowed_question_types=["E4"], candidate_json=valid_e4_candidate()
     )
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     finding = next(item for item in run.findings if item.code == "e4_grader_probe_failed")
     assert run.status is ValidationRunStatus.BLOCKED
@@ -2119,7 +2250,7 @@ def test_e4_schema_invalid_rules_do_not_call_the_grader(session: Session) -> Non
     draft = generation_draft(session, allowed_question_types=["E4"], candidate_json=candidate)
     grader = PassingE4Grader()
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     assert "policy_schema_invalid" in finding_codes(run)
     assert grader.grade_requests == []
@@ -2130,9 +2261,7 @@ def test_m2_normalizer_failure_is_safely_blocked(session: Session) -> None:
         session, allowed_question_types=["M2"], candidate_json=valid_m2_candidate()
     )
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=FailingM2Normalizer()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=FailingM2Normalizer())
 
     finding = next(item for item in run.findings if item.code == "m2_mathjson_invalid")
     assert run.status is ValidationRunStatus.BLOCKED
@@ -2146,7 +2275,7 @@ def test_m2_failed_probe_is_safely_blocked(session: Session, grader: PassingM2Gr
         session, allowed_question_types=["M2"], candidate_json=valid_m2_candidate()
     )
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     finding = next(item for item in run.findings if item.code == "m2_grader_probe_failed")
     assert run.status is ValidationRunStatus.BLOCKED
@@ -2164,9 +2293,7 @@ def test_m2_full_score_tolerates_grader_float_representation(session: Session) -
     }
     draft = generation_draft(session, allowed_question_types=["M2"], candidate_json=candidate)
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=FloatingPointM2Grader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=FloatingPointM2Grader())
 
     assert run.status is ValidationRunStatus.PASSED
 
@@ -2184,9 +2311,7 @@ def test_grade_complexity_warns_only_above_prompt_unit_limit(
     draft = generation_draft(session, candidate_json=valid_m1_candidate(prompt))
     configure_grade_complexity_rules(session, draft, {"max_prompt_units": 4})
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=PassingGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
 
     findings = [item for item in run.findings if item.code == "grade_complexity_warning"]
     if expected_observed is None:
@@ -2212,9 +2337,7 @@ def test_grade_complexity_uses_cjk_units_and_largest_sentence(session: Session) 
     )
     configure_grade_complexity_rules(session, draft, {"max_sentence_units": 2})
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=PassingGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
 
     finding = next(item for item in run.findings if item.code == "grade_complexity_warning")
     assert finding.evidence_json == {
@@ -2238,9 +2361,7 @@ def test_grade_complexity_measures_m1_numeric_values_without_echoing_rule_fields
     draft = generation_draft(session, allowed_question_types=["M1"], candidate_json=candidate)
     configure_grade_complexity_rules(session, draft, {"max_numeric_absolute_value": 10})
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=PassingGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
 
     finding = next(item for item in run.findings if item.code == "grade_complexity_warning")
     assert finding.evidence_json == {
@@ -2286,7 +2407,7 @@ def test_grade_complexity_reuses_m2_normalization_for_safe_metrics(session: Sess
     )
     grader = ComplexM2Grader()
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     findings = [item for item in run.findings if item.code == "grade_complexity_warning"]
     assert [item.evidence_json["metric"] for item in findings] == ["max_math_operation_nodes"]
@@ -2316,7 +2437,7 @@ def test_grade_complexity_uses_stable_metric_order_and_skips_absent_rules(sessio
         session, candidate_json=valid_m1_candidate("One two three four five.")
     )
     configure_grade_complexity_rules(session, absent_rules_draft, {})
-    absent_rules_run = verification.run_candidate_verification(
+    absent_rules_run = verify_current_revision(
         session, draft=absent_rules_draft, grader_client=PassingGrader()
     )
     assert "grade_complexity_warning" not in finding_codes(absent_rules_run)
@@ -2341,9 +2462,7 @@ def test_grade_complexity_uses_stable_metric_order_and_skips_absent_rules(sessio
         },
     )
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=ComplexM2Grader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=ComplexM2Grader())
 
     findings = [item for item in run.findings if item.code == "grade_complexity_warning"]
     assert [item.evidence_json["metric"] for item in findings] == [
@@ -2361,9 +2480,7 @@ def test_malformed_persisted_grade_complexity_rules_fail_closed(session: Session
     draft = generation_draft(session)
     configure_grade_complexity_rules(session, draft, {"max_prompt_units": True})
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=PassingGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
 
     assert finding_codes(run) == {"grade_complexity_rules_invalid"}
     finding = run.findings[0]
@@ -2376,7 +2493,7 @@ def test_m2_unexpected_safe_ast_is_blocked_before_grader_probe(session: Session)
     )
     grader = InvalidSafeAstM2Grader()
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     finding = next(item for item in run.findings if item.code == "m2_mathjson_invalid")
     assert run.status is ValidationRunStatus.BLOCKED
@@ -2391,7 +2508,7 @@ def test_m2_rational_safe_ast_supports_numeric_complexity(session: Session) -> N
     configure_grade_complexity_rules(session, draft, {"max_numeric_absolute_value": 1})
     grader = SafeAstM2Grader({"type": "number", "value": "3/2"})
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     assert "m2_mathjson_invalid" not in finding_codes(run)
     finding = next(item for item in run.findings if item.code == "grade_complexity_warning")
@@ -2420,7 +2537,7 @@ def test_m2_incomplete_or_unknown_safe_ast_is_blocked_before_grader_probe(
     )
     grader = SafeAstM2Grader(ast)
 
-    run = verification.run_candidate_verification(session, draft=draft, grader_client=grader)
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
 
     assert run.status is ValidationRunStatus.BLOCKED
     assert finding_codes(run) == {"m2_mathjson_invalid"}
@@ -2708,9 +2825,7 @@ def test_invalid_m2_schema_preserves_policy_finding(session: Session) -> None:
     candidate["rule_json"] = {"variables": ["x"], "max_score": 4}
     draft = generation_draft(session, allowed_question_types=["M2"], candidate_json=candidate)
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=PassingM2Grader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=PassingM2Grader())
 
     assert run.status is ValidationRunStatus.BLOCKED
     assert finding_codes(run) == {"policy_schema_invalid"}
@@ -2719,34 +2834,30 @@ def test_invalid_m2_schema_preserves_policy_finding(session: Session) -> None:
 def test_inactive_revision_blocks_the_candidate(session: Session) -> None:
     draft = generation_draft(session, revision_status=CurriculumRevisionStatus.DRAFT)
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=PassingGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
 
     assert run.status is ValidationRunStatus.BLOCKED
     assert "curriculum_revision_inactive" in finding_codes(run)
 
 
 def test_candidate_for_a_different_objective_revision_is_blocked(session: Session) -> None:
-    draft = generation_draft(session)
-    draft.candidate_json["objective_revision_id"] = str(uuid4())
+    candidate = valid_m1_candidate("What is 2 + 2?")
+    candidate["objective_revision_id"] = str(uuid4())
+    draft = generation_draft(session, candidate_json=candidate)
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=PassingGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
 
     assert run.status is ValidationRunStatus.BLOCKED
     assert "curriculum_objective_mismatch" in finding_codes(run)
 
 
 def test_candidate_difficulty_outside_objective_range_is_blocked(session: Session) -> None:
-    draft = generation_draft(session)
+    candidate = valid_m1_candidate("What is 2 + 2?")
+    candidate["difficulty"] = 0.9
+    draft = generation_draft(session, candidate_json=candidate)
     draft.job.curriculum_objective_revision.difficulty_max = 0.2
-    draft.candidate_json["difficulty"] = 0.9
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=PassingGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
 
     assert run.status is ValidationRunStatus.BLOCKED
     assert "difficulty_out_of_range" in finding_codes(run)
@@ -2760,9 +2871,7 @@ def test_validation_run_persists_safe_rule_based_difficulty_signal(session: Sess
     candidate["difficulty"] = 0.6
     draft = generation_draft(session, candidate_json=candidate)
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=PassingGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
 
     assert run.feature_summary_json["difficulty_signal"] == {
         "version": "rule-based-difficulty-v1",
@@ -2788,12 +2897,11 @@ def test_validation_run_persists_safe_rule_based_difficulty_signal(session: Sess
 def test_invalid_difficulty_persists_null_target_without_changing_blocked_result(
     session: Session,
 ) -> None:
-    draft = generation_draft(session)
-    draft.candidate_json["difficulty"] = "not-a-number"
+    candidate = valid_m1_candidate("What is 2 + 2?")
+    candidate["difficulty"] = "not-a-number"
+    draft = generation_draft(session, candidate_json=candidate)
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=PassingGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
 
     assert run.status is ValidationRunStatus.BLOCKED
     assert "difficulty_out_of_range" in finding_codes(run)
@@ -2812,9 +2920,7 @@ def test_validator_exception_persists_safe_fallback_difficulty_signal(
         raise RuntimeError("internal secret diagnostic")
 
     monkeypatch.setattr(verification, "_evaluate_candidate", raise_internal_error)
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=PassingGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
 
     assert run.feature_summary_json["difficulty_signal"] == {
         "version": "rule-based-difficulty-v1",
@@ -2843,9 +2949,7 @@ def test_disallowed_type_and_invalid_policy_are_blocked(session: Session) -> Non
         },
     )
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=PassingGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
 
     assert run.status is ValidationRunStatus.BLOCKED
     assert {
@@ -2857,9 +2961,7 @@ def test_disallowed_type_and_invalid_policy_are_blocked(session: Session) -> Non
 def test_m1_grader_failure_is_blocked_without_exception_text(session: Session) -> None:
     draft = generation_draft(session)
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=FailingGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=FailingGrader())
 
     finding = next(finding for finding in run.findings if finding.code == "m1_grader_probe_failed")
     assert run.status is ValidationRunStatus.BLOCKED
@@ -2882,9 +2984,7 @@ def test_e1_normalized_duplicate_answers_are_blocked_without_grader(session: Ses
         },
     )
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=FailingGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=FailingGrader())
 
     assert run.status is ValidationRunStatus.BLOCKED
     assert finding_codes(run) == {"e1_answers_invalid"}
@@ -2905,9 +3005,7 @@ def test_e1_unsafe_accepted_answer_is_blocked_without_echoing_answer(session: Se
         },
     )
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=FailingGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=FailingGrader())
 
     finding = next(finding for finding in run.findings if finding.code == "unsafe_minor_content")
     assert run.status is ValidationRunStatus.BLOCKED
@@ -2933,9 +3031,7 @@ def test_content_policy_findings_are_sanitized_and_ordered(session: Session) -> 
     }
     draft = generation_draft(session, allowed_question_types=["E1"], candidate_json=candidate)
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=PassingGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
 
     safety_findings = [
         finding for finding in run.findings if finding.code == "unsafe_minor_content"
@@ -2981,9 +3077,7 @@ def test_content_policy_mature_theme_requires_teacher_review(session: Session) -
     }
     draft = generation_draft(session, allowed_question_types=["E1"], candidate_json=candidate)
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=PassingGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
 
     finding = next(
         finding for finding in run.findings if finding.code == "mature_theme_requires_review"
@@ -3009,9 +3103,7 @@ def test_content_policy_blocks_direct_reproduction_requests(session: Session) ->
     }
     draft = generation_draft(session, allowed_question_types=["E1"], candidate_json=candidate)
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=PassingGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
 
     finding = next(
         finding for finding in run.findings if finding.code == "copyright_reproduction_risk"
@@ -3040,10 +3132,18 @@ def test_duplicate_and_unsafe_content_produce_explainable_findings(session: Sess
     )
     session.add(duplicate)
     session.flush()
-
-    run = verification.run_candidate_verification(
-        session, draft=duplicate, grader_client=PassingGrader()
+    session.add(
+        GeneratedQuestionDraftRevision(
+            id=duplicate.current_revision_id,
+            generated_question_draft_id=duplicate.id,
+            revision_number=1,
+            candidate_json=duplicate.candidate_json,
+            content_hash=duplicate.content_hash,
+        )
     )
+    session.flush()
+
+    run = verify_current_revision(session, draft=duplicate, grader_client=PassingGrader())
 
     assert run.status is ValidationRunStatus.BLOCKED
     assert {"duplicate_normalized_prompt", "unsafe_minor_content"} <= finding_codes(run)
@@ -3069,9 +3169,7 @@ def test_missing_prompt_or_explanation_is_blocked(session: Session) -> None:
         },
     )
 
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=PassingGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
 
     assert run.status is ValidationRunStatus.BLOCKED
     assert "prompt_or_explanation_invalid" in finding_codes(run)
@@ -3086,9 +3184,7 @@ def test_unexpected_validator_error_is_persisted_without_raw_exception(
         raise RuntimeError("internal secret diagnostic")
 
     monkeypatch.setattr(verification, "_evaluate_candidate", raise_internal_error)
-    run = verification.run_candidate_verification(
-        session, draft=draft, grader_client=PassingGrader()
-    )
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
 
     finding = next(finding for finding in run.findings if finding.code == "validator_unavailable")
     assert run.status is ValidationRunStatus.BLOCKED

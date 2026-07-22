@@ -19,6 +19,7 @@ from ..models import (
     CurriculumProfileStatus,
     CurriculumRevisionStatus,
     GeneratedQuestionDraft,
+    GeneratedQuestionDraftRevision,
     GenerationAttempt,
     GenerationJob,
     GenerationJobStatus,
@@ -273,6 +274,16 @@ def _persist_valid_candidates(
         )
         job.drafts.append(draft)
         attempt.drafts.append(draft)
+        session.flush()
+        session.add(
+            GeneratedQuestionDraftRevision(
+                id=draft.current_revision_id,
+                generated_question_draft_id=draft.id,
+                revision_number=1,
+                candidate_json=content,
+                content_hash=draft.content_hash,
+            )
+        )
         valid_count += 1
     return valid_count
 
