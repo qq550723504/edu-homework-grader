@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import ROUND_CEILING, Decimal, InvalidOperation, localcontext
+from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 import math
 import re
 from typing import Callable, Literal, Protocol
@@ -64,6 +64,24 @@ _GRADE_COMPLEXITY_METRICS = (
     "max_math_operation_nodes",
 )
 _GRADER_DECISIONS = frozenset({"auto_accepted", "auto_rejected", "partial", "needs_review"})
+_RULE_BASED_DIFFICULTY_VERSION = "rule-based-difficulty-v1"
+_QUESTION_TYPE_DIFFICULTY_BASELINES = {
+    "M1": 0.20,
+    "M2": 0.30,
+    "E1": 0.30,
+    "E2": 0.35,
+    "E3": 0.45,
+    "E4": 0.50,
+}
+_DEFAULT_QUESTION_TYPE_DIFFICULTY_BASELINE = 0.25
+_PROMPT_UNITS_DIFFICULTY_WEIGHT = 0.18
+_SENTENCE_UNITS_DIFFICULTY_WEIGHT = 0.12
+_NUMERIC_MAGNITUDE_DIFFICULTY_WEIGHT = 0.20
+_M2_OPERATION_NODES_DIFFICULTY_WEIGHT = 0.15
+_PROMPT_UNITS_DIFFICULTY_SCALE = 100
+_SENTENCE_UNITS_DIFFICULTY_SCALE = 30
+_NUMERIC_MAGNITUDE_DIFFICULTY_SCALE = 6
+_M2_OPERATION_NODES_DIFFICULTY_SCALE = 12
 
 
 class VerificationGraderClient(Protocol):
@@ -470,23 +488,12 @@ def _grade_complexity_findings(
     """Return stable, non-blocking findings for configured grade-complexity limits."""
 
     findings: list[VerificationFinding] = []
-    observed_metrics: dict[str, Decimal | int] = {
-        "max_prompt_units": _lexical_unit_count(prompt),
-        "max_sentence_units": _max_sentence_units(prompt),
-    }
-    if question_type == "M1":
-        numeric_values = [
-            abs(Decimal(str(value)))
-            for value in (rule_json.get("expected"), rule_json.get("tolerance", 0))
-            if _is_finite_number(value)
-        ]
-        if numeric_values:
-            observed_metrics["max_numeric_absolute_value"] = max(numeric_values)
-    elif question_type == "M2" and normalized_m2_ast is not None:
-        maximum_numeric_value, operation_nodes = _m2_complexity_metrics(normalized_m2_ast)
-        if maximum_numeric_value is not None:
-            observed_metrics["max_numeric_absolute_value"] = maximum_numeric_value
-        observed_metrics["max_math_operation_nodes"] = operation_nodes
+    observed_metrics = _complexity_observations(
+        prompt=prompt,
+        question_type=question_type,
+        rule_json=rule_json,
+        normalized_m2_ast=normalized_m2_ast,
+    )
 
     for metric in _GRADE_COMPLEXITY_METRICS:
         limit = rules.get(metric)
@@ -506,6 +513,185 @@ def _grade_complexity_findings(
                 )
             )
     return findings
+
+
+def _complexity_observations(
+    *,
+    prompt: str,
+    question_type: object,
+    rule_json: dict[str, object],
+    normalized_m2_ast: dict[str, object] | None,
+) -> dict[str, Decimal | int]:
+    """Return only safe, already-validated complexity observations for a candidate."""
+
+    observed_metrics: dict[str, Decimal | int] = {
+        "max_prompt_units": _lexical_unit_count(prompt),
+        "max_sentence_units": _max_sentence_units(prompt),
+    }
+    if question_type == "M1":
+        numeric_values = [
+            abs(Decimal(str(value)))
+            for value in (rule_json.get("expected"), rule_json.get("tolerance", 0))
+            if _is_finite_number(value)
+        ]
+        if numeric_values:
+            observed_metrics["max_numeric_absolute_value"] = max(numeric_values)
+    elif question_type == "M2" and normalized_m2_ast is not None:
+        maximum_numeric_value, operation_nodes = _m2_complexity_metrics(normalized_m2_ast)
+        if maximum_numeric_value is not None:
+            observed_metrics["max_numeric_absolute_value"] = maximum_numeric_value
+        observed_metrics["max_math_operation_nodes"] = operation_nodes
+    return observed_metrics
+
+
+def _rule_based_difficulty_signal(
+    *,
+    target_difficulty: object,
+    curriculum_range: tuple[object, object],
+    prompt: str,
+    question_type: object,
+    rule_json: dict[str, object],
+    normalized_m2_ast: dict[str, object] | None,
+) -> dict[str, object]:
+    """Return a deterministic, JSON-safe difficulty estimate without candidate text or rules."""
+
+    try:
+        observations = _complexity_observations(
+            prompt=prompt,
+            question_type=question_type,
+            rule_json=rule_json,
+            normalized_m2_ast=normalized_m2_ast,
+        )
+    except (InvalidOperation, ValueError):
+        observations = {
+            "max_prompt_units": _lexical_unit_count(prompt),
+            "max_sentence_units": _max_sentence_units(prompt),
+        }
+
+    baseline = _QUESTION_TYPE_DIFFICULTY_BASELINES.get(
+        question_type if isinstance(question_type, str) else "",
+        _DEFAULT_QUESTION_TYPE_DIFFICULTY_BASELINE,
+    )
+    features: list[dict[str, int | float | str]] = [
+        _difficulty_feature("question_type_baseline", baseline, baseline)
+    ]
+    estimate = baseline
+    prompt_units = observations["max_prompt_units"]
+    prompt_contribution = _scaled_difficulty_contribution(
+        prompt_units,
+        scale=_PROMPT_UNITS_DIFFICULTY_SCALE,
+        weight=_PROMPT_UNITS_DIFFICULTY_WEIGHT,
+    )
+    features.append(_difficulty_feature("prompt_units", prompt_units, prompt_contribution))
+    estimate += prompt_contribution
+    sentence_units = observations["max_sentence_units"]
+    sentence_contribution = _scaled_difficulty_contribution(
+        sentence_units,
+        scale=_SENTENCE_UNITS_DIFFICULTY_SCALE,
+        weight=_SENTENCE_UNITS_DIFFICULTY_WEIGHT,
+    )
+    features.append(_difficulty_feature("sentence_units", sentence_units, sentence_contribution))
+    estimate += sentence_contribution
+
+    maximum_numeric_value = observations.get("max_numeric_absolute_value")
+    if maximum_numeric_value is not None:
+        numeric_magnitude = _normalized_numeric_magnitude(maximum_numeric_value)
+        numeric_contribution = numeric_magnitude * _NUMERIC_MAGNITUDE_DIFFICULTY_WEIGHT
+        features.append(
+            _difficulty_feature("numeric_magnitude", numeric_magnitude, numeric_contribution)
+        )
+        estimate += numeric_contribution
+
+    operation_nodes = observations.get("max_math_operation_nodes")
+    if operation_nodes is not None:
+        operation_contribution = _scaled_difficulty_contribution(
+            operation_nodes,
+            scale=_M2_OPERATION_NODES_DIFFICULTY_SCALE,
+            weight=_M2_OPERATION_NODES_DIFFICULTY_WEIGHT,
+        )
+        features.append(
+            _difficulty_feature("m2_operation_nodes", operation_nodes, operation_contribution)
+        )
+        estimate += operation_contribution
+
+    estimated = _quantize_bounded_difficulty(estimate, minimum=0, maximum=1)
+    target = _bounded_target_difficulty(target_difficulty)
+    minimum, maximum = curriculum_range
+    return {
+        "version": _RULE_BASED_DIFFICULTY_VERSION,
+        "target": target,
+        "estimated": estimated,
+        "deviation": (
+            None
+            if target is None
+            else _quantize_bounded_difficulty(target - estimated, minimum=-1, maximum=1)
+        ),
+        "curriculum_range": {
+            "min": _finite_signal_number(minimum),
+            "max": _finite_signal_number(maximum),
+        },
+        "features": features,
+    }
+
+
+def _difficulty_feature(
+    feature_type: str, value: Decimal | int | float, contribution: float
+) -> dict[str, int | float | str]:
+    return {
+        "type": feature_type,
+        "value": _quantize_signal_number(value),
+        "contribution": _quantize_signal_number(contribution),
+    }
+
+
+def _scaled_difficulty_contribution(value: Decimal | int, *, scale: int, weight: float) -> float:
+    return min(max(float(value) / scale, 0), 1) * weight
+
+
+def _normalized_numeric_magnitude(value: Decimal | int) -> float:
+    if value <= 0:
+        return 0.0
+    order_of_magnitude = value.adjusted() + 1 if isinstance(value, Decimal) else len(str(value))
+    return min(max(order_of_magnitude / _NUMERIC_MAGNITUDE_DIFFICULTY_SCALE, 0), 1)
+
+
+def _finite_signal_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float | Decimal):
+        return None
+    try:
+        result = float(value)
+    except (OverflowError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _bounded_target_difficulty(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float | Decimal):
+        return None
+    try:
+        target = value if isinstance(value, Decimal) else Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    if not target.is_finite() or target < 0 or target > 1:
+        return None
+    return _finite_signal_number(target)
+
+
+def _quantize_bounded_difficulty(value: object, *, minimum: float, maximum: float) -> float:
+    numeric_value = _finite_signal_number(value)
+    if numeric_value is None:
+        return minimum
+    return _quantize_signal_number(min(max(numeric_value, minimum), maximum))
+
+
+def _quantize_signal_number(value: object) -> float:
+    numeric_value = _finite_signal_number(value)
+    if numeric_value is None:
+        return 0.0
+    try:
+        return float(Decimal(str(numeric_value)).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP))
+    except InvalidOperation:
+        return 0.0
 
 
 def _lexical_unit_count(text: str) -> int:
@@ -1505,7 +1691,12 @@ def _normalize_e2_form(value: str) -> str:
 
 
 def _is_finite_number(value: object) -> bool:
-    return not isinstance(value, bool) and isinstance(value, int | float) and math.isfinite(value)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _blocked(code: str, evidence: dict[str, object], remediation: str) -> VerificationFinding:
