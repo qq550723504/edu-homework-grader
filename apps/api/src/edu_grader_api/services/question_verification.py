@@ -114,6 +114,7 @@ class _CandidateEvaluation:
     findings: list[VerificationFinding]
     duplicate_feature_summary: dict[str, object]
     evaluated_candidate_fingerprints: PromptFingerprints
+    difficulty_signal: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -175,6 +176,7 @@ def run_candidate_verification(
             ],
             duplicate_feature_summary=_duplicate_feature_summary(duplicate_snapshot),
             evaluated_candidate_fingerprints=duplicate_snapshot.candidate_fingerprints,
+            difficulty_signal=_unavailable_difficulty_signal(),
         )
     return _persist_run(
         session,
@@ -182,6 +184,7 @@ def run_candidate_verification(
         findings=evaluation.findings,
         duplicate_feature_summary=evaluation.duplicate_feature_summary,
         evaluated_candidate_fingerprints=evaluation.evaluated_candidate_fingerprints,
+        difficulty_signal=evaluation.difficulty_signal,
     )
 
 
@@ -358,6 +361,14 @@ def _evaluate_candidate(
         findings=findings,
         duplicate_feature_summary=_duplicate_feature_summary(duplicate_snapshot),
         evaluated_candidate_fingerprints=duplicate_snapshot.candidate_fingerprints,
+        difficulty_signal=_rule_based_difficulty_signal(
+            target_difficulty=difficulty,
+            curriculum_range=(revision.difficulty_min, revision.difficulty_max),
+            prompt=prompt if isinstance(prompt, str) else "",
+            question_type=question_type,
+            rule_json=rule_json if isinstance(rule_json, dict) else {},
+            normalized_m2_ast=normalized_m2_ast,
+        ),
     )
 
 
@@ -619,6 +630,8 @@ def _rule_based_difficulty_signal(
     minimum, maximum = curriculum_range
     return {
         "version": _RULE_BASED_DIFFICULTY_VERSION,
+        "availability": "available",
+        "reason": None,
         "target": target,
         "estimated": estimated,
         "deviation": (
@@ -631,6 +644,21 @@ def _rule_based_difficulty_signal(
             "max": _finite_signal_number(maximum),
         },
         "features": features,
+    }
+
+
+def _unavailable_difficulty_signal() -> dict[str, object]:
+    """Return the versioned audit schema when evaluation cannot safely produce a signal."""
+
+    return {
+        "version": _RULE_BASED_DIFFICULTY_VERSION,
+        "availability": "unavailable",
+        "target": None,
+        "estimated": None,
+        "deviation": None,
+        "curriculum_range": {"min": None, "max": None},
+        "features": [],
+        "reason": "validator_unavailable",
     }
 
 
@@ -1276,6 +1304,7 @@ def _persist_run(
     findings: list[VerificationFinding],
     duplicate_feature_summary: dict[str, object],
     evaluated_candidate_fingerprints: PromptFingerprints,
+    difficulty_signal: dict[str, object],
 ) -> GenerationValidationRun:
     evaluated_fingerprints = (
         evaluated_candidate_fingerprints.version,
@@ -1318,6 +1347,7 @@ def _persist_run(
         feature_summary_json={
             "finding_count": len(findings),
             "content_policy_version": CONTENT_POLICY_VERSION,
+            "difficulty_signal": difficulty_signal,
             **duplicate_feature_summary,
         },
     )

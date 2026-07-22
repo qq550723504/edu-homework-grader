@@ -28,6 +28,7 @@ from edu_grader_api.models import (
 )
 from edu_grader_api.settings import settings
 import edu_grader_api.routers.ai_question_validation as validation_router
+import edu_grader_api.services.question_verification as question_verification
 from edu_generator.prompt_templates import resolve_prompt_template
 
 
@@ -291,5 +292,64 @@ def test_teacher_can_create_and_read_immutable_validation_runs(
 
     assert created_run.status_code == 201
     assert created_run.json()["status"] == "passed"
+    difficulty_signal = created_run.json()["feature_summary"]["difficulty_signal"]
+    assert difficulty_signal["version"] == "rule-based-difficulty-v1"
+    assert difficulty_signal["availability"] == "available"
+    assert difficulty_signal["reason"] is None
+    assert 0 <= difficulty_signal["target"] <= 1
+    assert 0 <= difficulty_signal["estimated"] <= 1
+    assert {feature["type"] for feature in difficulty_signal["features"]} >= {
+        "question_type_baseline",
+        "prompt_units",
+        "sentence_units",
+    }
+    assert "What is 2 + 2?" not in str(difficulty_signal)
+    assert "teacher-only" not in str(difficulty_signal)
     assert history.json()["items"][0]["id"] == created_run.json()["id"]
     assert fetched.json()["findings"] == []
+
+
+def test_validation_run_route_exposes_unavailable_difficulty_signal_without_diagnostics(
+    client: TestClient, session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    headers = authorize(client, teacher) | {"Idempotency-Key": "validation-run-unavailable"}
+    created = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=headers,
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "grade": "Grade 5",
+            "subject": "mathematics",
+            "question_types": ["M1"],
+            "requested_count": 1,
+            "policy_catalog_version": "2026.07",
+            "prompt_version": "generator-v1",
+        },
+    )
+    draft_id = client.get(
+        f"/v1/ai-question-generation/jobs/{created.json()['id']}/questions", headers=headers
+    ).json()["items"][0]["id"]
+
+    def raise_internal_error(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("internal route secret diagnostic")
+
+    monkeypatch.setattr(question_verification, "_evaluate_candidate", raise_internal_error)
+    response = client.post(
+        f"/v1/ai-generated-questions/{draft_id}/validation-runs", headers=headers
+    )
+
+    assert response.status_code == 201
+    difficulty_signal = response.json()["feature_summary"]["difficulty_signal"]
+    assert difficulty_signal == {
+        "version": "rule-based-difficulty-v1",
+        "availability": "unavailable",
+        "target": None,
+        "estimated": None,
+        "deviation": None,
+        "curriculum_range": {"min": None, "max": None},
+        "features": [],
+        "reason": "validator_unavailable",
+    }
+    assert "secret" not in str(response.json())
+    assert "diagnostic" not in str(response.json())
