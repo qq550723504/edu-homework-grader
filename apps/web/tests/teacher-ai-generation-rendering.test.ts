@@ -159,6 +159,29 @@ describe('teacher AI generation request rendering', () => {
     ])
   })
 
+  it('clears the idempotency key after a confirmed HTTP rejection', async () => {
+    mocks.createAiGenerationJob
+      .mockRejectedValueOnce({ statusCode: 409 })
+      .mockResolvedValueOnce({ id: 'job-1' })
+    const randomUUID = vi.mocked(crypto.randomUUID)
+    randomUUID.mockReset()
+    randomUUID.mockReturnValueOnce('request-key-1').mockReturnValueOnce('request-key-2')
+    const wrapper = await mountForm()
+    await selectObjective(wrapper)
+    await wrapper.get('[data-testid="question-type-M1-increment"]').trigger('click')
+
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toBe('生成请求状态已变更，请刷新后重试。')
+
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(mocks.createAiGenerationJob.mock.calls.map((call) => call[2])).toEqual([
+      'request-key-1', 'request-key-2',
+    ])
+  })
+
   it('keeps a stale objective response from overwriting a newer subject selection', async () => {
     let resolveOld!: (value: ReturnType<typeof objective>[]) => void
     mocks.fetchCurriculumObjectives

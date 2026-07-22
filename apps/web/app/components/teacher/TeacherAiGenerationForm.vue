@@ -191,6 +191,7 @@ async function submit() {
     clearPendingGenerationRequest()
     await navigateTo(`/teacher/ai-questions?job=${encodeURIComponent(result.id)}`)
   } catch (error: unknown) {
+    if (errorStatus(error) !== null) clearPendingGenerationRequest()
     errorMessage.value = publicErrorMessage(error, '暂时无法创建 AI 出题批次，请稍后重试。')
   } finally {
     submitting.value = false
