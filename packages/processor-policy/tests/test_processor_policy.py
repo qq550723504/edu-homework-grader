@@ -4,6 +4,7 @@ from edu_grader_processor_policy import (
     ProcessorPolicyError,
     assert_allowed_processor_url,
     assert_deidentified_payload,
+    assert_deidentified_text,
 )
 
 
@@ -30,3 +31,44 @@ def test_allows_a_minimal_grading_payload() -> None:
             "answer": {"answer": "student response"},
         }
     )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Make a question for alex@example.test.",
+        "Call the guardian on +65 8123 4567.",
+        "Student ID: S-1001 must get an easier question.",
+    ],
+)
+def test_rejects_stable_pii_patterns_in_free_text(text: str) -> None:
+    with pytest.raises(ProcessorPolicyError, match="free-text PII"):
+        assert_deidentified_text(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Use 9876 as the divisor.",
+        "Use numbers below 10000.",
+        "Use 12345 as the dividend.",
+        "Use 123456 as the dividend.",
+        "Keep the answer below 3.14.",
+        "Include the fraction 1/2.",
+    ],
+)
+def test_allows_math_constraints_that_are_not_phone_numbers(text: str) -> None:
+    assert_deidentified_text(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Guardian phone: 81234567.",
+        "联系电话：81234567",
+        "Student phone number: 2125551234.",
+    ],
+)
+def test_rejects_phone_digits_when_preceded_by_a_phone_label(text: str) -> None:
+    with pytest.raises(ProcessorPolicyError, match="free-text PII"):
+        assert_deidentified_text(text)

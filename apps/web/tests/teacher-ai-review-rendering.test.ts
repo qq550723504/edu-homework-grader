@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TeacherAiCandidateReview from '../app/components/teacher/TeacherAiCandidateReview.vue'
 import TeacherAiJobList from '../app/components/teacher/TeacherAiJobList.vue'
 import TeacherAiReviewWorkspace from '../app/components/teacher/TeacherAiReviewWorkspace.vue'
-import TeacherAiQuestionsPage from '../app/pages/teacher/ai-questions.vue'
+import TeacherAiQuestionsPage from '../app/pages/teacher/ai-questions/index.vue'
 import type { TeacherAiDraft, TeacherAiGenerationJob, TeacherAiValidationRun } from '../app/lib/teacher-ai-review'
 
 const mocks = vi.hoisted(() => ({
@@ -355,6 +355,34 @@ describe('teacher AI review rendering', () => {
     expect(wrapper.get('textarea[aria-label="题目提示"]').element).toHaveProperty('value', 'Latest server prompt')
     expect(wrapper.get('[data-testid="validation-finding"]').text()).toContain('UNSAFE_CONTENT')
     expect(wrapper.text()).not.toContain('LOW_EVIDENCE')
+  })
+
+  it('keeps a confirmed revision when the immediate refresh still returns the prior revision', async () => {
+    const blockedRevisionOne = { ...blockedValidation, revision_number: 1 }
+    const passedRevisionTwo = {
+      ...warningValidation,
+      id: 'validation-passed',
+      revision_number: 2,
+      run_number: 2,
+      status: 'passed' as const,
+      findings: [],
+    }
+    mocks.fetchAiGenerationDrafts
+      .mockResolvedValueOnce([warningE4Draft])
+      .mockResolvedValueOnce([warningE4Draft])
+    mocks.fetchAiValidationRuns.mockResolvedValue([blockedRevisionOne])
+    mocks.saveAiCandidateRevision.mockResolvedValue({
+      draft_id: 'draft-1', revision_number: 2, validation_run: passedRevisionTwo,
+    })
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('textarea[aria-label="评分规则 JSON"]').setValue('{"expected":6}')
+    await wrapper.get('[data-testid="save-revision"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('校验状态：passed')
+    expect(wrapper.text()).toContain('操作已成功，但最新审核状态暂时无法刷新。请重试刷新。')
+    expect(wrapper.get('textarea[aria-label="评分规则 JSON"]').element).toHaveProperty('value', '{\n  "expected": 6\n}')
   })
 
   it('locks writes while obtaining CSRF, uses one idempotency key, and refreshes after success', async () => {

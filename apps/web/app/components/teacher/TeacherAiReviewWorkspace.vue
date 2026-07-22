@@ -110,13 +110,20 @@ async function loadWorkspace() {
   }
 }
 
-async function refreshSelection(jobId: string, draftId: string): Promise<'updated' | 'stale'> {
+async function refreshSelection(
+  jobId: string,
+  draftId: string,
+  minimumRevisionNumber?: number,
+): Promise<'updated' | 'stale' | 'behind'> {
   if (!requestMatches(jobId, draftId)) return 'stale'
   const generation = ++selectionRefreshGeneration
   const owningRouteGeneration = routeLoadGeneration
   const nextDrafts = await fetchAiGenerationDrafts($fetch, jobId)
   if (!refreshIsCurrent(generation, owningRouteGeneration, jobId, draftId)) return 'stale'
   const draft = nextDrafts.find((item) => item.id === draftId) ?? null
+  if (draft && minimumRevisionNumber !== undefined && draft.revision_number < minimumRevisionNumber) {
+    return 'behind'
+  }
   const validation = draft ? await fetchCurrentValidation(draft) : null
   if (!refreshIsCurrent(generation, owningRouteGeneration, jobId, draftId)) return 'stale'
 
@@ -187,7 +194,11 @@ async function saveRevision(candidate: TeacherAiCandidate) {
     const result = await saveAiCandidateRevision(
       $fetch, csrf, draft.id, key, draft.revision_number, candidate,
     )
-    return { message: '候选修订已保存。', validation: result.validation_run }
+    return {
+      message: '候选修订已保存。',
+      validation: result.validation_run,
+      draftPatch: { candidate, revision_number: result.revision_number },
+    }
   })
 }
 
@@ -199,7 +210,11 @@ async function rejectCandidate(reason: TeacherAiRejectReason, detail: string) {
     const result = await rejectAiCandidate(
       $fetch, csrf, draft.id, key, draft.revision_number, reason, detail,
     )
-    return { message: '候选题已拒绝。', validation: result.validation_run }
+    return {
+      message: '候选题已拒绝。',
+      validation: result.validation_run,
+      draftPatch: { teacher_state: 'rejected' },
+    }
   })
 }
 
@@ -215,6 +230,7 @@ async function acceptCandidate(input: { confirmWarnings: boolean }) {
       message: '候选题已接受并创建草稿。',
       validation: result.validation_run,
       acceptedQuestionVersionId: result.accepted_question_version_id,
+      draftPatch: { teacher_state: 'accepted' },
     }
   })
 }
@@ -231,6 +247,7 @@ async function runWrite(
     message: string
     validation: TeacherAiValidationRun
     acceptedQuestionVersionId?: string | null
+    draftPatch?: Partial<Pick<TeacherAiDraft, 'candidate' | 'revision_number' | 'teacher_state'>>
   }>,
 ) {
   busyOperation.value = operation
@@ -242,23 +259,22 @@ async function runWrite(
     const csrf = await csrfToken()
     const result = await write(csrf, idempotencyKey)
     if (!requestMatches(jobId, draft.id)) return
+    const updatedDraft = applyWritePatch(draft, result.draftPatch)
     notice.value = result.message
     currentValidation.value = result.validation
-    currentValidationKey.value = `${draft.id}:${result.validation.revision_number}`
+    currentValidationKey.value = validationKey(updatedDraft)
     if (result.acceptedQuestionVersionId) {
       acceptedQuestionVersionIds.value = {
         ...acceptedQuestionVersionIds.value,
-        [`${draft.id}:${result.validation.revision_number}`]: result.acceptedQuestionVersionId,
+        [validationKey(updatedDraft)]: result.acceptedQuestionVersionId,
       }
     }
     try {
-      const refresh = await refreshSelection(jobId, draft.id)
+      const refresh = await refreshSelection(jobId, draft.id, result.validation.revision_number)
       if (refresh === 'updated') pendingRefresh.value = null
+      if (refresh === 'behind') deferRefresh(jobId, draft.id, idempotencyKey)
     } catch {
-      if (requestMatches(jobId, draft.id)) {
-        pendingRefresh.value = { jobId, draftId: draft.id, idempotencyKey }
-        syncWarning.value = '操作已成功，但最新审核状态暂时无法刷新。请重试刷新。'
-      }
+      if (requestMatches(jobId, draft.id)) deferRefresh(jobId, draft.id, idempotencyKey)
     }
   } catch (error: unknown) {
     if (!requestMatches(jobId, draft.id)) return
@@ -279,6 +295,21 @@ async function runWrite(
   } finally {
     busyOperation.value = null
   }
+}
+
+function applyWritePatch(
+  draft: TeacherAiDraft,
+  patch: Partial<Pick<TeacherAiDraft, 'candidate' | 'revision_number' | 'teacher_state'>> | undefined,
+): TeacherAiDraft {
+  if (!patch) return draft
+  const updatedDraft = { ...draft, ...patch }
+  drafts.value = drafts.value.map((item) => item.id === draft.id ? updatedDraft : item)
+  return updatedDraft
+}
+
+function deferRefresh(jobId: string, draftId: string, idempotencyKey: string) {
+  pendingRefresh.value = { jobId, draftId, idempotencyKey }
+  syncWarning.value = '操作已成功，但最新审核状态暂时无法刷新。请重试刷新。'
 }
 
 async function retryRefresh() {
@@ -354,6 +385,7 @@ watch(() => route.query, loadWorkspace)
         <h1 id="ai-review-workspace-heading">AI 出题审核</h1>
         <p class="teacher-page-heading__copy">查看生成批次，修订候选题并完成接受或拒绝决策。</p>
       </div>
+      <NuxtLink class="button primary" to="/teacher/ai-questions/new">生成新批次</NuxtLink>
     </header>
 
     <p v-if="notice" class="notice" role="status">{{ notice }}</p>

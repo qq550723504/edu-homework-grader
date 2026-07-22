@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import re
 from urllib.parse import urlparse
 
 
@@ -23,6 +24,38 @@ _FORBIDDEN_FIELDS = frozenset(
     }
 )
 
+_EMAIL_PATTERN = re.compile(
+    r"(?i)(?<![\w.+-])[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+(?![\w-])"
+)
+_PHONE_PATTERN = re.compile(
+    r"""(?x)
+    (?<!\w)
+    (?:
+        (?:\+?86[-.\s]?)?1[3-9]\d{9}
+        | \+[1-9](?:[\s.-]?\d){7,14}
+        | (?:\+\d{1,3}[\s.-]?)?(?:\(\d{2,4}\)|\d{2,4})[\s.-]\d{2,4}[\s.-]\d{3,4}
+    )
+    (?!\w)
+    """
+)
+_PHONE_LABELLED_NUMBER_PATTERN = re.compile(
+    r"""(?ix)
+    (?:
+        \b(?:phone|telephone|contact)\b\s*(?:number|no\.?)?
+        | 联系电话
+        | 联系号码
+        | 电话(?:号码)?
+        | 手机(?:号|号码)
+    )
+    \s*[:：#-]?\s*
+    \d{7,15}
+    (?!\d)
+    """
+)
+_STUDENT_IDENTITY_PATTERN = re.compile(
+    r"(?ix)(?:\b(?:student|pupil)\s*(?:name|id|number|no\.?)\b|(?:学生)?(?:姓名|名字|学号|编号))\s*[:：#]?\s*(?:[a-z0-9][a-z0-9_-]*|[\u4e00-\u9fff]{2,})"
+)
+
 
 def assert_allowed_processor_url(url: str, allowed_hosts: frozenset[str]) -> None:
     parsed = urlparse(url)
@@ -35,6 +68,21 @@ def assert_allowed_processor_url(url: str, allowed_hosts: frozenset[str]) -> Non
 
 def assert_deidentified_payload(payload: Mapping[str, object]) -> None:
     _assert_value(payload)
+
+
+def assert_deidentified_text(text: str) -> None:
+    """Reject stable PII patterns before free text crosses a processor boundary."""
+
+    if any(
+        pattern.search(text) is not None
+        for pattern in (
+            _EMAIL_PATTERN,
+            _PHONE_PATTERN,
+            _PHONE_LABELLED_NUMBER_PATTERN,
+            _STUDENT_IDENTITY_PATTERN,
+        )
+    ):
+        raise ProcessorPolicyError("free-text PII is not allowed in processor payloads")
 
 
 def _assert_value(value: object) -> None:

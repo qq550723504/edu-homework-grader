@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from hashlib import sha256
 import json
 from typing import Annotated, Literal
@@ -10,8 +10,10 @@ from edu_generator.contracts import GeneratedCandidate, ProviderFailure
 from edu_generator.openai_provider import OpenAIResponsesProvider
 from edu_generator.providers import FakeGenerationProvider, GenerationProvider
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-from pydantic import BaseModel, Field
-from sqlalchemy import and_, func, or_, select
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -24,6 +26,8 @@ from ..models import (
     GeneratedQuestionDraftRevision,
     GeneratedQuestionReviewDecision,
     GenerationJob,
+    GenerationQuotaReservation,
+    GenerationQuotaUsage,
     GenerationValidationRun,
     Role,
     User,
@@ -38,6 +42,7 @@ from ..services.ai_question_review import (
 )
 from ..services.generation import (
     GenerationJobRequest,
+    GenerationJobSnapshot,
     GenerationServiceError,
     cancel_generation_job,
     create_or_get_job,
@@ -52,15 +57,13 @@ draft_router = APIRouter(prefix="/v1/ai-generated-questions", tags=["AI question
 
 
 class CreateGenerationJobRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     curriculum_objective_revision_id: UUID
-    grade: str = Field(min_length=1, max_length=100)
-    subject: str = Field(min_length=1, max_length=100)
     question_types: list[Literal["M1", "M2", "E1", "E2", "E3", "E4"]] = Field(
         min_length=1, max_length=20
     )
     requested_count: int = Field(ge=1, le=20)
-    policy_catalog_version: str = Field(min_length=1, max_length=100)
-    prompt_version: str = Field(min_length=1, max_length=100)
     teacher_constraint: str | None = Field(default=None, max_length=1_000)
 
 
@@ -91,6 +94,14 @@ class AcceptReviewDraftRequest(BaseModel):
     confirm_warnings: bool = False
 
 
+@router.get("/limits")
+def generation_limits_route(
+    principal: Annotated[CurrentPrincipal, Depends(require_any_role(Role.ADMIN, Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, int]:
+    return _generation_limits(session, actor=_actor(session, principal))
+
+
 @router.post("/jobs", status_code=status.HTTP_201_CREATED)
 def create_generation_job_route(
     body: CreateGenerationJobRequest,
@@ -98,21 +109,25 @@ def create_generation_job_route(
     session: Annotated[Session, Depends(get_session)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict[str, object]:
-    if not idempotency_key:
-        raise _api_error(status.HTTP_422_UNPROCESSABLE_CONTENT, "idempotency_key_required")
+    key = _required_idempotency_key(idempotency_key)
     actor = _actor(session, principal)
     request = GenerationJobRequest(
         **body.model_dump(),
-        idempotency_key=idempotency_key,
+        idempotency_key=key,
     )
-    existing = _find_job_by_idempotency(session, actor=actor, idempotency_key=idempotency_key)
-    if existing is None:
-        _enforce_generation_quota(session, actor=actor, requested_count=request.requested_count)
+    existing = _find_job_by_idempotency(session, actor=actor, idempotency_key=key)
     try:
+        reserved = False
+        if existing is None:
+            reserved = _enforce_generation_quota(
+                session,
+                actor=actor,
+                idempotency_key=idempotency_key,
+                requested_count=request.requested_count,
+            )
         job = create_or_get_job(session, request=request, actor=actor)
-        created = existing is None
+        created = reserved
         if created:
-            session.commit()
             run_generation_job(
                 session,
                 job=job,
@@ -136,10 +151,15 @@ def create_generation_job_route(
         session.commit()
     except GenerationServiceError as exc:
         session.rollback()
+        if str(exc) in {"generation_distribution_invalid", "teacher_constraint_contains_pii"}:
+            raise _api_error(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
         raise _api_error(status.HTTP_409_CONFLICT, "generation_request_rejected") from exc
     except ProviderFailure as exc:
         session.rollback()
         raise _api_error(status.HTTP_503_SERVICE_UNAVAILABLE, exc.code) from exc
+    except HTTPException:
+        session.rollback()
+        raise
     return _job_payload(job)
 
 
@@ -238,8 +258,7 @@ def regenerate_draft_route(
     session: Annotated[Session, Depends(get_session)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict[str, object]:
-    if not idempotency_key:
-        raise _api_error(status.HTTP_422_UNPROCESSABLE_CONTENT, "idempotency_key_required")
+    key = _required_idempotency_key(idempotency_key)
     actor = _actor(session, principal)
     draft = _authorized_draft(session, draft_id=draft_id, actor=actor)
     original = draft.job
@@ -248,22 +267,24 @@ def regenerate_draft_route(
         raise _api_error(status.HTTP_409_CONFLICT, "generation_draft_invalid")
     request = GenerationJobRequest(
         curriculum_objective_revision_id=original.curriculum_objective_revision_id,
-        grade=original.grade or "unspecified",
-        subject=original.subject or "unspecified",
         question_types=[question_type],
         requested_count=1,
-        idempotency_key=idempotency_key,
-        policy_catalog_version=original.policy_version or "unknown",
-        prompt_version=original.prompt_version or "unknown",
+        idempotency_key=key,
         teacher_constraint=body.teacher_constraint,
     )
-    existing = _find_job_by_idempotency(session, actor=actor, idempotency_key=idempotency_key)
-    if existing is None:
-        _enforce_generation_quota(session, actor=actor, requested_count=1)
+    snapshot = GenerationJobSnapshot.from_job(original)
+    existing = _find_job_by_idempotency(session, actor=actor, idempotency_key=key)
     try:
-        job = create_or_get_job(session, request=request, actor=actor)
+        reserved = False
         if existing is None:
-            session.commit()
+            reserved = _enforce_generation_quota(
+                session,
+                actor=actor,
+                idempotency_key=idempotency_key,
+                requested_count=1,
+            )
+        job = create_or_get_job(session, request=request, actor=actor, snapshot=snapshot)
+        if reserved:
             run_generation_job(
                 session,
                 job=job,
@@ -282,10 +303,15 @@ def regenerate_draft_route(
         session.commit()
     except GenerationServiceError as exc:
         session.rollback()
+        if str(exc) == "teacher_constraint_contains_pii":
+            raise _api_error(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
         raise _api_error(status.HTTP_409_CONFLICT, "generation_request_rejected") from exc
     except ProviderFailure as exc:
         session.rollback()
         raise _api_error(status.HTTP_503_SERVICE_UNAVAILABLE, exc.code) from exc
+    except HTTPException:
+        session.rollback()
+        raise
     return _job_payload(job)
 
 
@@ -647,18 +673,113 @@ def _recover_decision_replay(
     )
 
 
-def _enforce_generation_quota(session: Session, *, actor: User, requested_count: int) -> None:
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    if requested_count > settings.generator_max_batch_size:
-        raise _api_error(status.HTTP_422_UNPROCESSABLE_CONTENT, "generation_batch_limit_exceeded")
+def _generation_limits(session: Session, *, actor: User) -> dict[str, int]:
+    daily_tenant_limit = settings.generator_daily_tenant_limit
+    used = _generation_count_since_utc_midnight(session, tenant_id=actor.tenant_id)
+    return {
+        "max_batch_size": settings.generator_max_batch_size,
+        "daily_tenant_limit": daily_tenant_limit,
+        "daily_used_count": used,
+        "remaining_count": max(daily_tenant_limit - used, 0),
+    }
+
+
+def _generation_count_since_utc_midnight(session: Session, *, tenant_id: UUID) -> int:
+    quota_day = _utc_today()
+    usage = session.get(
+        GenerationQuotaUsage,
+        {"tenant_id": tenant_id, "quota_day": quota_day},
+    )
+    if usage is not None:
+        return usage.used_count
+    today = datetime.combine(quota_day, datetime.min.time(), tzinfo=timezone.utc)
     used = session.scalar(
         select(func.coalesce(func.sum(GenerationJob.requested_count), 0)).where(
-            GenerationJob.tenant_id == actor.tenant_id,
+            GenerationJob.tenant_id == tenant_id,
             GenerationJob.created_at >= today,
         )
     )
-    if int(used or 0) + requested_count > settings.generator_daily_tenant_limit:
+    return int(used or 0)
+
+
+def _enforce_generation_quota(
+    session: Session,
+    *,
+    actor: User,
+    idempotency_key: str,
+    requested_count: int,
+) -> bool:
+    if requested_count > settings.generator_max_batch_size:
+        raise _api_error(status.HTTP_422_UNPROCESSABLE_CONTENT, "generation_batch_limit_exceeded")
+    quota_day = _utc_today()
+    if not _claim_generation_quota_reservation(
+        session,
+        tenant_id=actor.tenant_id,
+        idempotency_key=idempotency_key,
+        quota_day=quota_day,
+        requested_count=requested_count,
+    ):
+        return False
+    _initialize_generation_quota_usage(session, tenant_id=actor.tenant_id, quota_day=quota_day)
+    reserved = session.execute(
+        update(GenerationQuotaUsage)
+        .where(
+            GenerationQuotaUsage.tenant_id == actor.tenant_id,
+            GenerationQuotaUsage.quota_day == quota_day,
+            GenerationQuotaUsage.used_count + requested_count
+            <= settings.generator_daily_tenant_limit,
+        )
+        .values(used_count=GenerationQuotaUsage.used_count + requested_count)
+    )
+    if reserved.rowcount != 1:
         raise _api_error(status.HTTP_429_TOO_MANY_REQUESTS, "generation_quota_exceeded")
+    return True
+
+
+def _claim_generation_quota_reservation(
+    session: Session,
+    *,
+    tenant_id: UUID,
+    idempotency_key: str,
+    quota_day: date,
+    requested_count: int,
+) -> bool:
+    insert_statement = _dialect_insert(session, GenerationQuotaReservation)
+    claimed = session.execute(
+        insert_statement.values(
+            tenant_id=tenant_id,
+            idempotency_key=idempotency_key,
+            quota_day=quota_day,
+            requested_count=requested_count,
+        )
+        .on_conflict_do_nothing(index_elements=["tenant_id", "idempotency_key"])
+        .returning(GenerationQuotaReservation.tenant_id)
+    ).first()
+    return claimed is not None
+
+
+def _initialize_generation_quota_usage(
+    session: Session, *, tenant_id: UUID, quota_day: date
+) -> None:
+    insert_statement = _dialect_insert(session, GenerationQuotaUsage)
+    initial_used_count = _generation_count_since_utc_midnight(session, tenant_id=tenant_id)
+    session.execute(
+        insert_statement.values(
+            tenant_id=tenant_id,
+            quota_day=quota_day,
+            used_count=initial_used_count,
+        ).on_conflict_do_nothing(index_elements=["tenant_id", "quota_day"])
+    )
+
+
+def _dialect_insert(session: Session, model: object) -> object:
+    if session.bind is not None and session.bind.dialect.name == "sqlite":
+        return sqlite_insert(model)
+    return postgresql_insert(model)
+
+
+def _utc_today() -> date:
+    return datetime.now(timezone.utc).date()
 
 
 def _job_payload(job: GenerationJob) -> dict[str, object]:

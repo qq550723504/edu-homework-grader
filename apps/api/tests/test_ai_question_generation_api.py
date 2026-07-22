@@ -1,7 +1,11 @@
 from dataclasses import dataclass
+from pathlib import Path
+from queue import Queue
+from threading import Event, Thread
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.exc import IntegrityError
@@ -27,6 +31,7 @@ from edu_grader_api.models import (
     CurriculumRevisionStatus,
     CurriculumSourceRecord,
     GenerationJob,
+    GenerationJobStatus,
     GeneratedQuestionDraft,
     GeneratedQuestionDraftRevision,
     GeneratedQuestionReviewDecision,
@@ -249,12 +254,8 @@ def create_and_fetch_e4_draft(client: TestClient, session: Session) -> object:
         headers=headers,
         json={
             "curriculum_objective_revision_id": str(revision.id),
-            "grade": "Grade 5",
-            "subject": "mathematics",
             "question_types": ["E4"],
             "requested_count": 1,
-            "policy_catalog_version": "2026.07",
-            "prompt_version": "generator-v1",
         },
     )
     assert created.status_code == 201
@@ -276,12 +277,8 @@ def create_generation_job(
         headers=headers,
         json={
             "curriculum_objective_revision_id": str(revision.id),
-            "grade": "Grade 5",
-            "subject": "mathematics",
             "question_types": ["M1"],
             "requested_count": 1,
-            "policy_catalog_version": "2026.07",
-            "prompt_version": "generator-v1",
         },
     )
     assert response.status_code == 201
@@ -301,6 +298,388 @@ def fetch_only_draft(
     return items[0]
 
 
+def test_generation_create_derives_course_and_versions_from_active_objective(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+
+    response = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=authorize(client, teacher) | {"Idempotency-Key": "derived-course-context"},
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "question_types": ["M1"],
+            "requested_count": 1,
+        },
+    )
+
+    assert response.status_code == 201
+    job = session.get(GenerationJob, UUID(response.json()["id"]))
+    assert job is not None
+    assert job.grade == revision.objective.grade_mapping.internal_level
+    assert job.subject == revision.objective.subject
+    assert job.policy_version == "2026.07"
+    assert job.prompt_version == "generator-v1"
+
+
+def test_generation_rejects_type_count_mismatch_with_a_stable_public_error(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+
+    response = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=authorize(client, teacher) | {"Idempotency-Key": "type-count-mismatch"},
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "question_types": ["M1"],
+            "requested_count": 2,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "generation_distribution_invalid"
+
+
+def test_generation_create_rejects_client_owned_course_and_version_fields(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+
+    response = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=authorize(client, teacher) | {"Idempotency-Key": "client-owned-context"},
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "question_types": ["M1"],
+            "requested_count": 1,
+            "grade": "forged-grade",
+            "subject": "forged-subject",
+            "policy_catalog_version": "forged-catalog",
+            "prompt_version": "forged-prompt",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_generation_create_rejects_pii_teacher_constraint_without_echoing_it(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    teacher_constraint = "Make it easier for alex@example.test."
+
+    response = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=authorize(client, teacher) | {"Idempotency-Key": "pii-create"},
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "question_types": ["M1"],
+            "requested_count": 1,
+            "teacher_constraint": teacher_constraint,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": {"code": "teacher_constraint_contains_pii"}}
+    assert teacher_constraint not in str(response.json())
+
+
+def test_generation_create_rejects_a_phone_number_teacher_constraint(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    teacher_constraint = "Call the guardian on +65 8123 4567."
+
+    response = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=authorize(client, teacher) | {"Idempotency-Key": "pii-create-phone"},
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "question_types": ["M1"],
+            "requested_count": 1,
+            "teacher_constraint": teacher_constraint,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": {"code": "teacher_constraint_contains_pii"}}
+
+
+def test_generation_create_rejects_a_phone_label_with_unformatted_digits(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+
+    response = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=authorize(client, teacher) | {"Idempotency-Key": "pii-create-labelled-phone"},
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "question_types": ["M1"],
+            "requested_count": 1,
+            "teacher_constraint": "Guardian phone: 81234567.",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": {"code": "teacher_constraint_contains_pii"}}
+
+
+def test_generation_regeneration_rejects_pii_teacher_constraint_without_echoing_it(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client, teacher, revision, idempotency_key="pii-regeneration-source"
+    )
+    draft = fetch_only_draft(client, headers, created["id"])
+    teacher_constraint = "Student ID: S-1001 needs extra practice."
+
+    response = client.post(
+        f"/v1/ai-generated-questions/{draft['id']}/regenerate",
+        headers=headers | {"Idempotency-Key": "pii-regeneration"},
+        json={"teacher_constraint": teacher_constraint},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": {"code": "teacher_constraint_contains_pii"}}
+    assert teacher_constraint not in str(response.json())
+
+
+def test_generation_routes_reject_oversized_idempotency_keys_with_a_stable_error(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    oversized_key = "x" * 129
+
+    create = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=authorize(client, teacher) | {"Idempotency-Key": oversized_key},
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "question_types": ["M1"],
+            "requested_count": 1,
+        },
+    )
+    headers, created = create_generation_job(
+        client, teacher, revision, idempotency_key="oversized-key-source"
+    )
+    draft = fetch_only_draft(client, headers, created["id"])
+    regenerate = client.post(
+        f"/v1/ai-generated-questions/{draft['id']}/regenerate",
+        headers=headers | {"Idempotency-Key": oversized_key},
+        json={},
+    )
+
+    assert create.status_code == 422
+    assert regenerate.status_code == 422
+    assert create.json() == {"detail": {"code": "idempotency_key_required"}}
+    assert regenerate.json() == {"detail": {"code": "idempotency_key_required"}}
+
+
+def test_generation_create_accepts_a_128_character_idempotency_key(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+
+    response = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=authorize(client, teacher) | {"Idempotency-Key": "x" * 128},
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "question_types": ["M1"],
+            "requested_count": 1,
+        },
+    )
+
+    assert response.status_code == 201
+
+
+def test_generation_limits_are_tenant_scoped(client: TestClient, session: Session) -> None:
+    teacher, revision = teacher_and_objective(session)
+    other_tenant = Tenant(slug="other-school", name="Other school")
+    other_teacher = User(
+        tenant=other_tenant,
+        role=Role.TEACHER,
+        oidc_issuer=ISSUER,
+        oidc_subject="other-tenant-teacher",
+        display_name="Other tenant teacher",
+        work_email="other-tenant-teacher@example.test",
+    )
+    session.add(other_teacher)
+    session.flush()
+    session.add_all(
+        [
+            GenerationJob(
+                tenant_id=teacher.tenant_id,
+                teacher_user_id=teacher.id,
+                curriculum_objective_revision_id=revision.id,
+                requested_count=3,
+                status=GenerationJobStatus.QUEUED,
+                idempotency_key="limits-current-tenant",
+            ),
+            GenerationJob(
+                tenant_id=other_teacher.tenant_id,
+                teacher_user_id=other_teacher.id,
+                curriculum_objective_revision_id=revision.id,
+                requested_count=5,
+                status=GenerationJobStatus.QUEUED,
+                idempotency_key="limits-other-tenant",
+            ),
+        ]
+    )
+    session.commit()
+
+    response = client.get("/v1/ai-question-generation/limits", headers=authorize(client, teacher))
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "max_batch_size": settings.generator_max_batch_size,
+        "daily_tenant_limit": settings.generator_daily_tenant_limit,
+        "daily_used_count": 3,
+        "remaining_count": settings.generator_daily_tenant_limit - 3,
+    }
+
+
+def test_generation_quota_reservation_rejects_a_second_independent_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = create_engine(
+        f"sqlite+pysqlite:///{tmp_path / 'generation-quota.db'}",
+        connect_args={"check_same_thread": False, "timeout": 5},
+    )
+    Base.metadata.create_all(engine)
+    with Session(engine) as seed_session:
+        teacher, _ = teacher_and_objective(seed_session)
+        teacher_id = teacher.id
+        seed_session.commit()
+
+    monkeypatch.setattr(settings, "generator_daily_tenant_limit", 1)
+    first_reserved = Event()
+    second_started = Event()
+    allow_first_commit = Event()
+    outcomes: Queue[str] = Queue()
+
+    def reserve_in_session(*, idempotency_key: str, wait_before_commit: bool) -> None:
+        with Session(engine) as reservation_session:
+            teacher = reservation_session.get(User, teacher_id)
+            assert teacher is not None
+            if not wait_before_commit:
+                second_started.set()
+            try:
+                generation_router._enforce_generation_quota(
+                    reservation_session,
+                    actor=teacher,
+                    idempotency_key=idempotency_key,
+                    requested_count=1,
+                )
+                if wait_before_commit:
+                    first_reserved.set()
+                    assert allow_first_commit.wait(timeout=5)
+                reservation_session.commit()
+                outcomes.put("reserved")
+            except HTTPException as exc:
+                reservation_session.rollback()
+                assert exc.status_code == 429
+                assert exc.detail == {"code": "generation_quota_exceeded"}
+                outcomes.put("quota_exceeded")
+
+    first = Thread(
+        target=reserve_in_session,
+        kwargs={"idempotency_key": "concurrent-first", "wait_before_commit": True},
+    )
+    second = Thread(
+        target=reserve_in_session,
+        kwargs={"idempotency_key": "concurrent-second", "wait_before_commit": False},
+    )
+    first.start()
+    assert first_reserved.wait(timeout=5)
+    second.start()
+    assert second_started.wait(timeout=5)
+    allow_first_commit.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert sorted((outcomes.get_nowait(), outcomes.get_nowait())) == [
+        "quota_exceeded",
+        "reserved",
+    ]
+
+
+def test_generation_quota_reservation_is_released_by_transaction_rollback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'generation-quota-rollback.db'}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as seed_session:
+        teacher, _ = teacher_and_objective(seed_session)
+        teacher_id = teacher.id
+        seed_session.commit()
+
+    monkeypatch.setattr(settings, "generator_daily_tenant_limit", 1)
+    with Session(engine) as failed_session:
+        teacher = failed_session.get(User, teacher_id)
+        assert teacher is not None
+        assert generation_router._enforce_generation_quota(
+            failed_session,
+            actor=teacher,
+            idempotency_key="rolled-back-generation",
+            requested_count=1,
+        )
+        failed_session.rollback()
+
+    with Session(engine) as succeeding_session:
+        teacher = succeeding_session.get(User, teacher_id)
+        assert teacher is not None
+        assert generation_router._enforce_generation_quota(
+            succeeding_session,
+            actor=teacher,
+            idempotency_key="succeeding-generation",
+            requested_count=1,
+        )
+        succeeding_session.commit()
+
+
+def test_generation_regeneration_preserves_original_job_snapshot(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client, teacher, revision, idempotency_key="regeneration-source"
+    )
+    source = session.get(GenerationJob, UUID(str(created["id"])))
+    assert source is not None
+    expected_snapshot = (
+        source.grade,
+        source.subject,
+        source.policy_version,
+        source.prompt_version,
+    )
+    draft = fetch_only_draft(client, headers, created["id"])
+    revision.objective.grade_mapping.internal_level = "G6"
+    revision.objective.subject = "science"
+    session.commit()
+
+    response = client.post(
+        f"/v1/ai-generated-questions/{draft['id']}/regenerate",
+        headers=headers | {"Idempotency-Key": "regeneration-snapshot"},
+        json={},
+    )
+
+    assert response.status_code == 201
+    regenerated = session.get(GenerationJob, UUID(response.json()["id"]))
+    assert regenerated is not None
+    assert (
+        regenerated.grade,
+        regenerated.subject,
+        regenerated.policy_version,
+        regenerated.prompt_version,
+    ) == expected_snapshot
+
+
 def test_teacher_job_request_is_idempotent_and_never_publishes(
     client: TestClient, session: Session
 ) -> None:
@@ -308,12 +687,8 @@ def test_teacher_job_request_is_idempotent_and_never_publishes(
     headers = authorize(client, teacher) | {"Idempotency-Key": "same-request"}
     payload = {
         "curriculum_objective_revision_id": str(revision.id),
-        "grade": "Grade 5",
-        "subject": "mathematics",
         "question_types": ["M1"],
         "requested_count": 1,
-        "policy_catalog_version": "2026.07",
-        "prompt_version": "generator-v1",
     }
 
     first = client.post("/v1/ai-question-generation/jobs", json=payload, headers=headers)
@@ -341,12 +716,8 @@ def test_generation_job_and_draft_payloads_do_not_expose_system_prompt(
         headers=headers,
         json={
             "curriculum_objective_revision_id": str(revision.id),
-            "grade": "Grade 5",
-            "subject": "mathematics",
             "question_types": ["M1"],
             "requested_count": 1,
-            "policy_catalog_version": "2026.07",
-            "prompt_version": "generator-v1",
             "teacher_constraint": teacher_constraint,
         },
     )
@@ -394,12 +765,8 @@ def test_generation_job_rejects_a_batch_over_the_configured_limit(
         headers=authorize(client, teacher) | {"Idempotency-Key": "oversized-request"},
         json={
             "curriculum_objective_revision_id": str(revision.id),
-            "grade": "Grade 5",
-            "subject": "mathematics",
             "question_types": ["M1"],
             "requested_count": 2,
-            "policy_catalog_version": "2026.07",
-            "prompt_version": "generator-v1",
         },
     )
 
@@ -418,12 +785,8 @@ def test_old_validation_run_is_not_current_after_edit(
         headers=headers,
         json={
             "curriculum_objective_revision_id": str(revision.id),
-            "grade": "Grade 5",
-            "subject": "mathematics",
             "question_types": ["M1"],
             "requested_count": 1,
-            "policy_catalog_version": "2026.07",
-            "prompt_version": "generator-v1",
             "teacher_constraint": teacher_constraint,
         },
     )
@@ -524,12 +887,8 @@ def test_validation_run_route_exposes_unavailable_difficulty_signal_without_diag
         headers=headers,
         json={
             "curriculum_objective_revision_id": str(revision.id),
-            "grade": "Grade 5",
-            "subject": "mathematics",
             "question_types": ["M1"],
             "requested_count": 1,
-            "policy_catalog_version": "2026.07",
-            "prompt_version": "generator-v1",
         },
     )
     draft_id = client.get(

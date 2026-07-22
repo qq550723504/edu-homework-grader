@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import StrEnum
 from uuid import UUID, uuid4
 
@@ -650,6 +650,23 @@ class GenerationJob(Base):
     attempts: Mapped[list[GenerationAttempt]] = relationship(back_populates="job")
     drafts: Mapped[list[GeneratedQuestionDraft]] = relationship(back_populates="job")
     validation_runs: Mapped[list[GenerationValidationRun]] = relationship(back_populates="job")
+
+
+class GenerationQuotaUsage(Base):
+    __tablename__ = "generation_quota_usages"
+
+    tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id"), primary_key=True)
+    quota_day: Mapped[date] = mapped_column(Date, primary_key=True)
+    used_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class GenerationQuotaReservation(Base):
+    __tablename__ = "generation_quota_reservations"
+
+    tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id"), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    quota_day: Mapped[date] = mapped_column(Date, nullable=False)
+    requested_count: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class GenerationAttempt(Base):

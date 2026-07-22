@@ -55,15 +55,17 @@ test('teacher edits, validates, rejects and accepts AI candidates through the br
     reason: 'duplicate',
     accepted_question_version_id: null,
   })
-  await expect(page.getByText('候选题已拒绝。')).toBeVisible()
+  await expect(page.getByTestId('rejected-notice')).toBeVisible()
 
-  const rejectedDrafts = await responseJson<{ items: Array<{ ordinal: number, teacher_state: string }> }>(
-    await page.request.get(
-      `${webBaseUrl}/api/core/v1/ai-question-generation/jobs/${selectedJobId}/questions`,
-    ),
-    'read rejected candidate state',
-  )
-  expect(rejectedDrafts.items.find(draft => draft.ordinal === 1)?.teacher_state).toBe('rejected')
+  await expect.poll(async () => {
+    const rejectedDrafts = await responseJson<{ items: Array<{ ordinal: number, teacher_state: string }> }>(
+      await page.request.get(
+        `${webBaseUrl}/api/core/v1/ai-question-generation/jobs/${selectedJobId}/questions`,
+      ),
+      'read rejected candidate state',
+    )
+    return rejectedDrafts.items.find(draft => draft.ordinal === 1)?.teacher_state
+  }).toBe('rejected')
 
   await page.getByRole('button', { name: /候选 2/ }).click()
   const acceptResponsePromise = page.waitForResponse(response =>

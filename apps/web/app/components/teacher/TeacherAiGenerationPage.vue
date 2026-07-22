@@ -1,9 +1,7 @@
 <script setup lang="ts">
-import LogoutButton from '../../components/LogoutButton.vue'
-import TeacherAiReviewWorkspace from '../../components/teacher/TeacherAiReviewWorkspace.vue'
-import TeacherWorkbenchNav from '../../components/teacher/TeacherWorkbenchNav.vue'
-
-useHead({ title: 'AI 出题审核' })
+import LogoutButton from '../LogoutButton.vue'
+import TeacherWorkbenchNav from './TeacherWorkbenchNav.vue'
+import TeacherAiGenerationForm from './TeacherAiGenerationForm.vue'
 </script>
 
 <template>
@@ -17,10 +15,10 @@ useHead({ title: 'AI 出题审核' })
     <section class="teacher-workbench__content">
       <div class="shell teacher-page">
         <header class="teacher-topbar">
-          <NuxtLink class="teacher-topbar__back" to="/teacher">← 返回教师工作台</NuxtLink>
+          <NuxtLink class="teacher-topbar__back" to="/teacher/ai-questions">← 返回 AI 出题审核</NuxtLink>
           <LogoutButton />
         </header>
-        <TeacherAiReviewWorkspace />
+        <TeacherAiGenerationForm />
       </div>
     </section>
   </main>

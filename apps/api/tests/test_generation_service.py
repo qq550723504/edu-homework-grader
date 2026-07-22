@@ -2,6 +2,7 @@ from types import MappingProxyType
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
@@ -104,13 +105,9 @@ def generation_request(
 ) -> GenerationJobRequest:
     return GenerationJobRequest(
         curriculum_objective_revision_id=revision.id,
-        grade="Grade 5",
-        subject="mathematics",
-        question_types=["M1"],
+        question_types=["M1", "M1"],
         requested_count=2,
         idempotency_key="same-request",
-        policy_catalog_version="2026.07",
-        prompt_version="generator-v1",
         teacher_constraint=teacher_constraint,
     )
 
@@ -124,13 +121,9 @@ def teacher_and_e4_objective(session: Session) -> tuple[User, CurriculumObjectiv
 def e4_generation_request(revision: CurriculumObjectiveRevision) -> GenerationJobRequest:
     return GenerationJobRequest(
         curriculum_objective_revision_id=revision.id,
-        grade="Grade 5",
-        subject="mathematics",
         question_types=["E4"],
         requested_count=1,
         idempotency_key="e4-reading-material",
-        policy_catalog_version="2026.07",
-        prompt_version="generator-v1",
     )
 
 
@@ -252,6 +245,62 @@ def test_creation_replays_a_matching_idempotency_key(session: Session) -> None:
     assert first.status is GenerationJobStatus.QUEUED
 
 
+def test_creation_derives_course_and_versions_from_active_objective(session: Session) -> None:
+    teacher, revision = teacher_and_objective(session)
+
+    job = create_or_get_job(session, request=generation_request(revision), actor=teacher)
+
+    assert job.grade == revision.objective.grade_mapping.internal_level
+    assert job.subject == revision.objective.subject
+    assert job.policy_version == "2026.07"
+    assert job.prompt_version == "generator-v1"
+
+
+def test_generation_request_rejects_server_owned_snapshot_fields(
+    session: Session,
+) -> None:
+    _, revision = teacher_and_objective(session)
+
+    with pytest.raises(ValidationError):
+        GenerationJobRequest(
+            curriculum_objective_revision_id=revision.id,
+            question_types=["M1"],
+            requested_count=1,
+            idempotency_key="server-owned-snapshot-fields",
+            grade="forged-grade",
+            subject="forged-subject",
+            policy_catalog_version="forged-catalog",
+            prompt_version="forged-prompt",
+        )
+
+
+@pytest.mark.parametrize(
+    "teacher_constraint",
+    [
+        "Make it easier for alex@example.test.",
+        "Use this phone number: +65 8123 4567.",
+        "Student ID: S-1001 needs extra practice.",
+    ],
+)
+def test_generation_rejects_pii_teacher_constraint_before_calling_provider(
+    session: Session, teacher_constraint: str
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    job = create_or_get_job(session, request=generation_request(revision), actor=teacher)
+    provider = FailIfCalledProvider()
+
+    with pytest.raises(GenerationServiceError) as exc_info:
+        run_generation_job(
+            session,
+            job=job,
+            provider=provider,
+            teacher_constraint=teacher_constraint,
+        )
+
+    assert str(exc_info.value) == "teacher_constraint_contains_pii"
+    assert provider.calls == 0
+
+
 def test_creation_rejects_an_inactive_objective_revision(session: Session) -> None:
     teacher, revision = teacher_and_objective(session)
     revision.status = CurriculumRevisionStatus.DRAFT
@@ -260,27 +309,11 @@ def test_creation_rejects_an_inactive_objective_revision(session: Session) -> No
         create_or_get_job(session, request=generation_request(revision), actor=teacher)
 
 
-def test_creation_rejects_an_unknown_prompt_template_before_persisting_a_job(
-    session: Session,
-) -> None:
-    teacher, revision = teacher_and_objective(session)
-    request = generation_request(revision).model_copy(
-        update={"prompt_version": "teacher-supplied-template"}
-    )
-
-    with pytest.raises(GenerationServiceError) as exc_info:
-        create_or_get_job(session, request=request, actor=teacher)
-
-    assert str(exc_info.value) == "prompt template is not available for this request"
-    assert request.prompt_version not in str(exc_info.value)
-    assert session.scalars(select(GenerationJob)).all() == []
-
-
 def test_creation_defensively_rejects_invalid_question_types_before_persisting_a_job(
     session: Session,
 ) -> None:
     teacher, revision = teacher_and_objective(session)
-    request = generation_request(revision).model_copy(update={"question_types": ["X1"]})
+    request = generation_request(revision).model_copy(update={"question_types": ["X1", "X1"]})
 
     with pytest.raises(GenerationServiceError) as exc_info:
         create_or_get_job(session, request=request, actor=teacher)
@@ -296,6 +329,7 @@ def test_creation_rejects_a_normal_request_outside_the_catalog_template_scope(
     revision.allowed_question_types = ["E1"]
     request_data = generation_request(revision).model_dump()
     request_data["question_types"] = ["E1"]
+    request_data["requested_count"] = 1
     request = GenerationJobRequest.model_validate(request_data)
     template = resolve_prompt_template("generator-v1", ["M1"])
     monkeypatch.setattr(
@@ -327,29 +361,26 @@ def test_matching_idempotency_replay_survives_a_historical_prompt_template(
     teacher, revision = teacher_and_objective(session)
     request = generation_request(revision)
     job = create_or_get_job(session, request=request, actor=teacher)
-    historical_request = request.model_copy(update={"prompt_version": "historical-template-v0"})
-    job.prompt_version = historical_request.prompt_version
-    job.request_digest = _request_digest(historical_request)
+    job.prompt_version = "historical-template-v0"
+    job.request_digest = _request_digest(request)
     session.flush()
 
-    replay = create_or_get_job(session, request=historical_request, actor=teacher)
+    replay = create_or_get_job(session, request=request, actor=teacher)
 
     assert replay.id == job.id
 
 
-def test_idempotency_conflict_precedes_prompt_template_validation(
+def test_idempotency_replay_precedes_active_objective_validation(
     session: Session,
 ) -> None:
     teacher, revision = teacher_and_objective(session)
-    create_or_get_job(session, request=generation_request(revision), actor=teacher)
-    conflicting_request = generation_request(revision).model_copy(
-        update={"prompt_version": "unknown-template"}
-    )
+    request = generation_request(revision)
+    first = create_or_get_job(session, request=request, actor=teacher)
+    revision.status = CurriculumRevisionStatus.DRAFT
 
-    with pytest.raises(GenerationServiceError) as exc_info:
-        create_or_get_job(session, request=conflicting_request, actor=teacher)
+    replay = create_or_get_job(session, request=request, actor=teacher)
 
-    assert str(exc_info.value) == "idempotency key belongs to another generation request"
+    assert replay.id == first.id
 
 
 def test_idempotency_key_rejects_a_changed_teacher_constraint(session: Session) -> None:
