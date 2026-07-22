@@ -1,4 +1,4 @@
-export type TeacherModule = 'overview' | 'reviews' | 'questions' | 'assignments' | 'roster' | 'requests'
+export type TeacherModule = 'overview' | 'reviews' | 'ai_questions' | 'questions' | 'assignments' | 'roster' | 'requests'
 
 export interface QuestionDraft {
   title: string
@@ -17,6 +17,7 @@ export interface AssignmentDraft {
 export const teacherModules: ReadonlyArray<{ id: TeacherModule; label: string; badge?: string }> = [
   { id: 'overview', label: '工作台' },
   { id: 'reviews', label: '复核队列' },
+  { id: 'ai_questions', label: 'AI 出题审核' },
   { id: 'questions', label: '题库' },
   { id: 'assignments', label: '作业' },
   { id: 'roster', label: '班级名册' },

@@ -63,10 +63,17 @@ describe('teacher workbench UI contract', () => {
     expect(navigation).toContain("return '/teacher/reviews'")
   })
 
-  it('exposes the six stable teacher modules in navigation order', () => {
+  it('exposes the AI review module in the stable teacher navigation order', () => {
     expect(teacherModules.map((module) => module.id)).toEqual([
-      'overview', 'reviews', 'questions', 'assignments', 'roster', 'requests'
+      'overview', 'reviews', 'ai_questions', 'questions', 'assignments', 'roster', 'requests'
     ])
+  })
+
+  it('routes AI review navigation to its dedicated teacher page', () => {
+    const navigation = readFileSync(new URL('../app/components/teacher/TeacherWorkbenchNav.vue', import.meta.url), 'utf8')
+
+    expect(navigation).toContain("module === 'ai_questions'")
+    expect(navigation).toContain("return '/teacher/ai-questions'")
   })
 
   it('requires the visible question creation fields', () => {
@@ -105,6 +112,7 @@ describe('teacher workbench UI contract', () => {
     expect(getTeacherModule('questions')).toMatchObject({ label: '题库' })
     expect(getTeacherModule('assignments')).toMatchObject({ label: '作业' })
     expect(getTeacherModule('requests')).toMatchObject({ label: '学生申请' })
+    expect(getTeacherModule('ai_questions')).toMatchObject({ label: 'AI 出题审核' })
   })
 
   it('rejects whitespace-only question answers', () => {

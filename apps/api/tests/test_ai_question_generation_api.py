@@ -359,6 +359,8 @@ def test_generation_job_and_draft_payloads_do_not_expose_system_prompt(
     assert created.status_code == 201
     assert job.status_code == 200
     assert drafts.status_code == 200
+    assert created.json()["subject"] == "mathematics"
+    assert job.json()["subject"] == "mathematics"
     assert system_instructions not in str(created.json())
     assert system_instructions not in str(job.json())
     assert system_instructions not in str(drafts.json())
@@ -904,6 +906,7 @@ def test_reject_api_replays_exact_action_and_conflicts_with_different_action_or_
     assert replay.status_code == 200
     assert replay.json() == first.json()
     assert first.json()["action"] == "reject"
+    assert first.json()["reason"] == "duplicate"
     assert first.json()["revision_number"] == 1
     assert first.json()["validation_run"]["revision_number"] == 1
     assert changed_body.status_code == 409
