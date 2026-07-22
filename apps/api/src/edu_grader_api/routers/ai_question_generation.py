@@ -664,6 +664,7 @@ def _enforce_generation_quota(session: Session, *, actor: User, requested_count:
 def _job_payload(job: GenerationJob) -> dict[str, object]:
     return {
         "id": str(job.id),
+        "subject": job.subject,
         "status": job.status.value,
         "requested_count": job.requested_count,
         "succeeded_count": job.succeeded_count,
@@ -702,6 +703,7 @@ def _decision_payload(decision: GeneratedQuestionReviewDecision) -> dict[str, ob
     return {
         "draft_id": str(decision.generated_question_draft_id),
         "action": decision.action,
+        "reason": decision.reason,
         "revision_number": decision.draft_revision.revision_number,
         "validation_run": _public_validation_run_payload(decision.validation_run),
         "accepted_question_version_id": (

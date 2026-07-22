@@ -21,7 +21,7 @@ const emit = defineEmits<{
           type="button"
           @click="emit('select-job', job.id)"
         >
-          <span>批次 {{ job.id }}</span>
+          <span>批次 {{ job.subject || job.id }}</span>
           <span>状态：{{ job.status }}</span>
           <span>成功 {{ job.succeeded_count ?? 0 }}</span>
           <span>失败 {{ job.failed_count ?? 0 }}</span>

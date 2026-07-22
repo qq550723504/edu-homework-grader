@@ -134,12 +134,13 @@ describe('teacher AI review rendering', () => {
 
   it('renders jobs with their status and counts, and selects a job', async () => {
     const jobs: TeacherAiGenerationJob[] = [
-      { id: 'job-1', status: 'completed', succeeded_count: 3, failed_count: 1 },
-      { id: 'job-2', status: 'running', succeeded_count: 1, failed_count: 0 },
+      { id: 'job-1', subject: 'E2E AI review batch', status: 'completed', succeeded_count: 3, failed_count: 1 },
+      { id: 'job-2', subject: 'English practice', status: 'running', succeeded_count: 1, failed_count: 0 },
     ]
     const wrapper = mount(TeacherAiJobList, { props: { jobs, selectedJobId: 'job-1' } })
 
     expect(wrapper.get('[data-testid="generation-job-job-1"]').text()).toContain('completed')
+    expect(wrapper.get('[data-testid="generation-job-job-1"]').text()).toContain('E2E AI review batch')
     expect(wrapper.get('[data-testid="generation-job-job-1"]').text()).toContain('成功 3')
     expect(wrapper.get('[data-testid="generation-job-job-1"]').text()).toContain('失败 1')
     expect(wrapper.get('[data-testid="generation-job-job-1"]').attributes('aria-current')).toBe('true')

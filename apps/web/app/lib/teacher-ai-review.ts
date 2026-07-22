@@ -16,6 +16,7 @@ export type TeacherAiRejectReason =
 
 export interface TeacherAiGenerationJob {
   id: string
+  subject?: string | null
   status: string
   requested_count?: number
   succeeded_count?: number
@@ -70,6 +71,7 @@ export interface TeacherAiDraft {
 export interface TeacherAiReviewDecision {
   draft_id: string
   action: 'accept' | 'reject'
+  reason: string | null
   revision_number: number
   validation_run: TeacherAiValidationRun
   accepted_question_version_id: string | null

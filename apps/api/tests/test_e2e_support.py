@@ -1,4 +1,19 @@
-from edu_grader_api.e2e_support import DeterministicE2EGraderClient, DeterministicM2Client
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.orm import Session
+
+from edu_grader_api.db import Base
+from edu_grader_api.e2e_support import (
+    AI_REVIEW_JOB_KEY,
+    DeterministicE2EGraderClient,
+    DeterministicM2Client,
+    seed_demo_assignment,
+)
+from edu_grader_api.models import (
+    GeneratedQuestionDraft,
+    GeneratedQuestionDraftRevision,
+    GenerationJob,
+    GenerationValidationRun,
+)
 
 
 def test_e2e_grader_evaluates_m1_numeric_answers_against_the_rule() -> None:
@@ -63,3 +78,30 @@ def test_e2e_grader_covers_english_authoring_policy_boundaries() -> None:
     assert e4_matched.evidence["criteria"] == [
         {"code": "cause", "passed": True, "score": 1.0, "max_score": 1.0}
     ]
+
+
+def test_ai_review_seed_is_idempotent() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    try:
+        with Session(engine) as session:
+            seed_demo_assignment(session)
+            seed_demo_assignment(session)
+
+            job_ids = session.scalars(
+                select(GenerationJob.id).where(GenerationJob.idempotency_key == AI_REVIEW_JOB_KEY)
+            ).all()
+            draft_count = session.scalar(select(func.count()).select_from(GeneratedQuestionDraft))
+            revision_count = session.scalar(
+                select(func.count()).select_from(GeneratedQuestionDraftRevision)
+            )
+            validation_count = session.scalar(
+                select(func.count()).select_from(GenerationValidationRun)
+            )
+
+            assert len(job_ids) == 1
+            assert draft_count == 2
+            assert revision_count == 3
+            assert validation_count == 2
+    finally:
+        engine.dispose()
