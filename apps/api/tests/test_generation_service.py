@@ -2,6 +2,7 @@ from types import MappingProxyType
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
@@ -253,6 +254,24 @@ def test_creation_derives_course_and_versions_from_active_objective(session: Ses
     assert job.subject == revision.objective.subject
     assert job.policy_version == "2026.07"
     assert job.prompt_version == "generator-v1"
+
+
+def test_generation_request_rejects_server_owned_snapshot_fields(
+    session: Session,
+) -> None:
+    _, revision = teacher_and_objective(session)
+
+    with pytest.raises(ValidationError):
+        GenerationJobRequest(
+            curriculum_objective_revision_id=revision.id,
+            question_types=["M1"],
+            requested_count=1,
+            idempotency_key="server-owned-snapshot-fields",
+            grade="forged-grade",
+            subject="forged-subject",
+            policy_catalog_version="forged-catalog",
+            prompt_version="forged-prompt",
+        )
 
 
 def test_creation_rejects_an_inactive_objective_revision(session: Session) -> None:

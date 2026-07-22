@@ -11,7 +11,7 @@ from edu_generator.contracts import GeneratedCandidate, GenerationRequest, Provi
 from edu_generator.prompt_templates import PromptTemplate, resolve_prompt_template
 from edu_generator.providers import GenerationProvider
 from edu_grader_processor_policy import assert_deidentified_payload
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -42,6 +42,8 @@ GENERATION_PROMPT_VERSION = "generator-v1"
 class GenerationJobRequest(BaseModel):
     """Bounded, de-identified teacher request for candidate generation."""
 
+    model_config = ConfigDict(extra="forbid")
+
     curriculum_objective_revision_id: UUID
     question_types: list[Literal["M1", "M2", "E1", "E2", "E3", "E4"]] = Field(
         min_length=1, max_length=20
@@ -49,10 +51,6 @@ class GenerationJobRequest(BaseModel):
     requested_count: int = Field(ge=1, le=20)
     idempotency_key: str = Field(min_length=1, max_length=128)
     teacher_constraint: str | None = Field(default=None, max_length=1_000)
-    grade: str | None = Field(default=None, min_length=1, max_length=100)
-    subject: str | None = Field(default=None, min_length=1, max_length=100)
-    policy_catalog_version: str | None = Field(default=None, min_length=1, max_length=100)
-    prompt_version: str | None = Field(default=None, min_length=1, max_length=100)
 
     def model_post_init(self, __context: object) -> None:
         try:
@@ -116,11 +114,7 @@ def create_or_get_job(
         raise GenerationServiceError("requested question types are not allowed by the objective")
     if len(request.question_types) != request.requested_count:
         raise GenerationServiceError("generation_distribution_invalid")
-    active_snapshot = (
-        snapshot
-        or _snapshot_from_internal_request(request)
-        or _snapshot_from_active_revision(revision)
-    )
+    active_snapshot = snapshot or _snapshot_from_active_revision(revision)
     try:
         resolve_prompt_template(active_snapshot.prompt_version, request.question_types)
     except ValueError as exc:
@@ -158,27 +152,6 @@ def _snapshot_from_active_revision(revision: CurriculumObjectiveRevision) -> Gen
     )
 
 
-def _snapshot_from_internal_request(
-    request: GenerationJobRequest,
-) -> GenerationJobSnapshot | None:
-    values = (
-        request.grade,
-        request.subject,
-        request.policy_catalog_version,
-        request.prompt_version,
-    )
-    if all(value is None for value in values):
-        return None
-    if any(value is None for value in values):
-        raise GenerationServiceError("generation job snapshot is incomplete")
-    return GenerationJobSnapshot(
-        grade=request.grade,
-        subject=request.subject,
-        policy_catalog_version=request.policy_catalog_version,
-        prompt_version=request.prompt_version,
-    )
-
-
 def run_generation_job(
     session: Session,
     *,
@@ -211,7 +184,7 @@ def run_generation_job(
         return job
     job.status = GenerationJobStatus.GENERATING
     job.started_at = job.started_at or utc_now()
-    session.commit()
+    session.flush()
 
     for attempt_number in range(len(job.attempts) + 1, max_attempts + 1):
         attempt = GenerationAttempt(

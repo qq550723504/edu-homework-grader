@@ -40,7 +40,12 @@ from .models import (
     VersionStatus,
 )
 from .services.ai_question_review import create_review_revision
-from .services.generation import GenerationJobRequest, create_or_get_job, run_generation_job
+from .services.generation import (
+    GenerationJobRequest,
+    GenerationJobSnapshot,
+    create_or_get_job,
+    run_generation_job,
+)
 from .services.grader import EmbeddingDependencyVersion, SemanticSimilarityResult
 from .services.question_verification import run_candidate_verification
 from .services.questions import GradeResult
@@ -508,15 +513,17 @@ def _seed_ai_review_batch(session: Session, *, tenant: Tenant, teacher: User) ->
         session,
         request=GenerationJobRequest(
             curriculum_objective_revision_id=revision.id,
-            grade="Grade 5",
-            subject="E2E AI review batch",
             question_types=["M1", "M1"],
             requested_count=2,
             idempotency_key=AI_REVIEW_JOB_KEY,
+        ),
+        actor=teacher,
+        snapshot=GenerationJobSnapshot(
+            grade="Grade 5",
+            subject="E2E AI review batch",
             policy_catalog_version="2026.07",
             prompt_version="generator-v1",
         ),
-        actor=teacher,
     )
     run_generation_job(session, job=job, provider=FakeGenerationProvider(seed=0))
 

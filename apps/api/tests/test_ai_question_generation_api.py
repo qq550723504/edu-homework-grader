@@ -1,7 +1,11 @@
 from dataclasses import dataclass
+from pathlib import Path
+from queue import Queue
+from threading import Event, Thread
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.exc import IntegrityError
@@ -403,6 +407,107 @@ def test_generation_limits_are_tenant_scoped(client: TestClient, session: Sessio
         "daily_used_count": 3,
         "remaining_count": settings.generator_daily_tenant_limit - 3,
     }
+
+
+def test_generation_quota_reservation_rejects_a_second_independent_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = create_engine(
+        f"sqlite+pysqlite:///{tmp_path / 'generation-quota.db'}",
+        connect_args={"check_same_thread": False, "timeout": 5},
+    )
+    Base.metadata.create_all(engine)
+    with Session(engine) as seed_session:
+        teacher, _ = teacher_and_objective(seed_session)
+        teacher_id = teacher.id
+        seed_session.commit()
+
+    monkeypatch.setattr(settings, "generator_daily_tenant_limit", 1)
+    first_reserved = Event()
+    second_started = Event()
+    allow_first_commit = Event()
+    outcomes: Queue[str] = Queue()
+
+    def reserve_in_session(*, idempotency_key: str, wait_before_commit: bool) -> None:
+        with Session(engine) as reservation_session:
+            teacher = reservation_session.get(User, teacher_id)
+            assert teacher is not None
+            if not wait_before_commit:
+                second_started.set()
+            try:
+                generation_router._enforce_generation_quota(
+                    reservation_session,
+                    actor=teacher,
+                    idempotency_key=idempotency_key,
+                    requested_count=1,
+                )
+                if wait_before_commit:
+                    first_reserved.set()
+                    assert allow_first_commit.wait(timeout=5)
+                reservation_session.commit()
+                outcomes.put("reserved")
+            except HTTPException as exc:
+                reservation_session.rollback()
+                assert exc.status_code == 429
+                assert exc.detail == {"code": "generation_quota_exceeded"}
+                outcomes.put("quota_exceeded")
+
+    first = Thread(
+        target=reserve_in_session,
+        kwargs={"idempotency_key": "concurrent-first", "wait_before_commit": True},
+    )
+    second = Thread(
+        target=reserve_in_session,
+        kwargs={"idempotency_key": "concurrent-second", "wait_before_commit": False},
+    )
+    first.start()
+    assert first_reserved.wait(timeout=5)
+    second.start()
+    assert second_started.wait(timeout=5)
+    allow_first_commit.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert sorted((outcomes.get_nowait(), outcomes.get_nowait())) == [
+        "quota_exceeded",
+        "reserved",
+    ]
+
+
+def test_generation_quota_reservation_is_released_by_transaction_rollback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'generation-quota-rollback.db'}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as seed_session:
+        teacher, _ = teacher_and_objective(seed_session)
+        teacher_id = teacher.id
+        seed_session.commit()
+
+    monkeypatch.setattr(settings, "generator_daily_tenant_limit", 1)
+    with Session(engine) as failed_session:
+        teacher = failed_session.get(User, teacher_id)
+        assert teacher is not None
+        assert generation_router._enforce_generation_quota(
+            failed_session,
+            actor=teacher,
+            idempotency_key="rolled-back-generation",
+            requested_count=1,
+        )
+        failed_session.rollback()
+
+    with Session(engine) as succeeding_session:
+        teacher = succeeding_session.get(User, teacher_id)
+        assert teacher is not None
+        assert generation_router._enforce_generation_quota(
+            succeeding_session,
+            actor=teacher,
+            idempotency_key="succeeding-generation",
+            requested_count=1,
+        )
+        succeeding_session.commit()
 
 
 def test_generation_regeneration_preserves_original_job_snapshot(
