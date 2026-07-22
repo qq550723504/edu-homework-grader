@@ -7,6 +7,7 @@ from typing import Literal
 from uuid import UUID
 
 from edu_generator.contracts import GeneratedCandidate, GenerationRequest, ProviderFailure
+from edu_generator.prompt_templates import resolve_prompt_template
 from edu_generator.providers import GenerationProvider
 from edu_grader_processor_policy import assert_deidentified_payload
 from pydantic import BaseModel, ConfigDict, Field
@@ -86,6 +87,10 @@ def create_or_get_job(
         raise GenerationServiceError("curriculum objective revision must be active")
     if not set(request.question_types).issubset(set(revision.allowed_question_types)):
         raise GenerationServiceError("requested question types are not allowed by the objective")
+    try:
+        resolve_prompt_template(request.prompt_version, request.question_types)
+    except ValueError as exc:
+        raise GenerationServiceError("prompt template is not available for this request") from exc
 
     job = GenerationJob(
         tenant_id=actor.tenant_id,

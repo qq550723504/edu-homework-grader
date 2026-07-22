@@ -1,11 +1,12 @@
 import json
 from dataclasses import FrozenInstanceError
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from uuid import uuid4
 
 import openai
 import pytest
 
+import edu_generator.prompt_templates as prompt_templates
 from edu_generator.contracts import (
     GeneratedCandidate,
     GeneratedCandidateEnvelope,
@@ -16,6 +17,7 @@ from edu_generator.openai_provider import OpenAIResponsesProvider
 from edu_generator.prompt_templates import (
     ALL_ACTIVE_CURRICULUM_PROFILES,
     GENERATED_QUESTION_CANDIDATES_SCHEMA_V1,
+    PromptTemplate,
     resolve_prompt_template,
 )
 from edu_generator.providers import FakeGenerationProvider, ProviderFailure
@@ -148,10 +150,115 @@ def test_openai_provider_instructs_conditional_reading_material_output(
     outgoing = _capture_openai_request(monkeypatch)
 
     assert (
-        "E4 must return a nonblank generated reading_material containing every E4 "
-        "evidence phrase; all other types must return reading_material null."
-        in outgoing["instructions"]
+        outgoing["instructions"]
+        == resolve_prompt_template("generator-v1", ["M1"]).system_instructions
     )
+    # Responses accepts the JSON Schema itself, not a separate schema-version parameter.
+    assert outgoing["text"]["format"]["name"] == "generated_question_candidates"
+
+
+@pytest.mark.parametrize(
+    ("prompt_version", "question_types"),
+    [
+        ("unknown-template", ["M1"]),
+        ("generator-v1", ["X1"]),
+    ],
+)
+def test_openai_provider_rejects_unknown_or_out_of_scope_prompt_templates(
+    monkeypatch: pytest.MonkeyPatch, prompt_version: str, question_types: list[str]
+) -> None:
+    request = GenerationRequest(
+        objective_revision_id=uuid4(),
+        objective_text="Use whole numbers under 100.",
+        difficulty_min=0,
+        difficulty_max=1,
+        grade="Grade 5",
+        subject="mathematics",
+        question_types=["M1"],
+        requested_count=1,
+        policy_version="1",
+        prompt_version="generator-v1",
+    ).model_copy(
+        update={"prompt_version": prompt_version, "question_types": question_types}
+    )
+    provider = OpenAIResponsesProvider(
+        api_key="test-key",
+        model="gpt-test-2025-08-07",
+        base_url="https://api.openai.com",
+        allowed_hosts=frozenset({"api.openai.com"}),
+    )
+    provider_called = False
+
+    def unexpected_provider_client(**_kwargs: object) -> SimpleNamespace:
+        nonlocal provider_called
+        provider_called = True
+        raise AssertionError(
+            "template validation must precede OpenAI client construction"
+        )
+
+    monkeypatch.setattr(openai, "OpenAI", unexpected_provider_client)
+
+    with pytest.raises(ProviderFailure) as exc_info:
+        provider.generate(request)
+
+    assert exc_info.value.code == "provider_prompt_template_unavailable"
+    assert prompt_version not in str(exc_info.value)
+    assert not provider_called
+
+
+def test_openai_provider_rejects_a_normal_request_outside_template_scope_before_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    template = resolve_prompt_template("generator-v1", ["M1"])
+    monkeypatch.setattr(
+        prompt_templates,
+        "PROMPT_TEMPLATE_CATALOG",
+        MappingProxyType(
+            {
+                template.version: PromptTemplate(
+                    version=template.version,
+                    system_instructions=template.system_instructions,
+                    schema_version=template.schema_version,
+                    allowed_question_types=frozenset({"M1"}),
+                    profile_scope=template.profile_scope,
+                )
+            }
+        ),
+    )
+    request = GenerationRequest(
+        objective_revision_id=uuid4(),
+        objective_text="Read and answer.",
+        difficulty_min=0,
+        difficulty_max=1,
+        grade="Grade 5",
+        subject="English",
+        question_types=["E1"],
+        requested_count=1,
+        policy_version="1",
+        prompt_version="generator-v1",
+    )
+    provider = OpenAIResponsesProvider(
+        api_key="test-key",
+        model="gpt-test-2025-08-07",
+        base_url="https://api.openai.com",
+        allowed_hosts=frozenset({"api.openai.com"}),
+    )
+    provider_called = False
+
+    def unexpected_provider_client(**_kwargs: object) -> SimpleNamespace:
+        nonlocal provider_called
+        provider_called = True
+        raise AssertionError(
+            "template validation must precede OpenAI client construction"
+        )
+
+    monkeypatch.setattr(openai, "OpenAI", unexpected_provider_client)
+
+    with pytest.raises(ProviderFailure) as exc_info:
+        provider.generate(request)
+
+    assert exc_info.value.code == "provider_prompt_template_unavailable"
+    assert not provider_called
 
 
 def test_fake_provider_emits_only_e4_reading_material() -> None:

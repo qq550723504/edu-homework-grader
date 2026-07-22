@@ -15,6 +15,7 @@ from .contracts import (
     ProviderFailure,
 )
 from .model_snapshots import validate_immutable_openai_model_id
+from .prompt_templates import resolve_prompt_template
 
 
 class OpenAIResponsesProvider:
@@ -59,6 +60,15 @@ class OpenAIResponsesProvider:
 
     def generate(self, request: GenerationRequest) -> GeneratedCandidateEnvelope:
         try:
+            template = resolve_prompt_template(
+                request.prompt_version, request.question_types
+            )
+        except ValueError as exc:
+            raise ProviderFailure(
+                "provider_prompt_template_unavailable",
+                "Prompt template is not available for this request",
+            ) from exc
+        try:
             from openai import OpenAI
             from openai.lib._pydantic import to_strict_json_schema
         except ImportError as exc:
@@ -74,18 +84,15 @@ class OpenAIResponsesProvider:
             )
             response = client.responses.create(
                 model=self.model_version,
-                instructions=(
-                    "Generate de-identified candidate homework questions. "
-                    "E4 must return a nonblank generated reading_material containing every E4 "
-                    "evidence phrase; all other types must return reading_material null. "
-                    "Return only JSON conforming to the supplied schema."
-                ),
+                instructions=template.system_instructions,
                 input=json.dumps(request.model_dump(mode="json"), ensure_ascii=True),
                 text={
                     "format": {
                         "type": "json_schema",
                         "name": "generated_question_candidates",
                         "strict": True,
+                        # Responses accepts a schema document, not a schema-version
+                        # parameter; this strict schema is cataloged as template.schema_version.
                         "schema": to_strict_json_schema(ProviderCandidatePayload),
                     }
                 },
