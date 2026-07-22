@@ -7,6 +7,9 @@ export default defineConfig({
   testDir: './e2e',
   testMatch: '**/*.spec.ts',
   outputDir: './test-results',
+  // The E2E API owns one mutable SQLite fixture database, so CI must not run
+  // browser scenarios concurrently against the same seeded review candidates.
+  workers: process.env.CI ? 1 : undefined,
   use: {
     baseURL: webBaseUrl,
     trace: 'retain-on-failure',

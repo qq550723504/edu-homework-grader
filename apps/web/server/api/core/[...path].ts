@@ -27,6 +27,7 @@ export default defineEventHandler(async (event) => {
   if (response.headers.get('content-type')) {
     setResponseHeader(event, 'content-type', response.headers.get('content-type')!)
   }
+  setResponseHeader(event, 'cache-control', 'no-store')
   setResponseStatus(event, response.status)
   return response.text()
 })
