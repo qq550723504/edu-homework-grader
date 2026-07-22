@@ -81,6 +81,9 @@ describe('teacher AI review API', () => {
     expect(() => candidateEditInput(candidate, { rule_json: '{' })).toThrow('valid JSON')
     expect(() => candidateEditInput({ ...candidate, question_type: 'M1', reading_material: null }, { reading_material: 'not allowed' })).toThrow('E4')
     expect(() => candidateEditInput(candidate, { difficulty: '1.1' })).toThrow('between 0 and 1')
+    expect(() => candidateEditInput(candidate, { difficulty: '' })).toThrow('between 0 and 1')
+    expect(() => candidateEditInput(candidate, { difficulty: '   ' })).toThrow('between 0 and 1')
+    expect(() => candidateEditInput(candidate, { difficulty: 'Infinity' })).toThrow('between 0 and 1')
   })
 
   it('sends one-operation idempotency keys for rejection and acceptance without publishing', async () => {

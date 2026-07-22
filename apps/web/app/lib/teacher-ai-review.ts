@@ -198,6 +198,9 @@ function parseRuleJson(value: string | Record<string, unknown>): Record<string, 
 }
 
 function parseDifficulty(value: string | number): number {
+  if (typeof value === 'string' && !value.trim()) {
+    throw new Error('Difficulty must be between 0 and 1')
+  }
   const difficulty = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(difficulty) || difficulty < 0 || difficulty > 1) {
     throw new Error('Difficulty must be between 0 and 1')
