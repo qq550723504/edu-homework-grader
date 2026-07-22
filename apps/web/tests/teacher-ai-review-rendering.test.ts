@@ -338,6 +338,46 @@ describe('teacher AI review rendering', () => {
     expect(wrapper.get('textarea[aria-label="题目提示"]').element).toHaveProperty('value', 'Job B prompt')
   })
 
+  it('does not let an older write completion cancel a newer deep-link load', async () => {
+    let resolveMutation!: (result: {
+      draft_id: string
+      revision_number: number
+      validation_run: TeacherAiValidationRun
+    }) => void
+    let resolveJobBDrafts!: (drafts: TeacherAiDraft[]) => void
+    const jobBDraft = {
+      ...warningE4Draft,
+      id: 'draft-b',
+      candidate: { ...warningE4Draft.candidate, prompt: 'Newest Job B prompt' },
+    }
+    mocks.fetchAiGenerationJobs.mockResolvedValue([
+      { id: 'job-1', status: 'completed' },
+      { id: 'job-2', status: 'completed' },
+    ])
+    mocks.fetchAiGenerationDrafts.mockImplementation((_request, jobId: string) => jobId === 'job-2'
+      ? new Promise((resolve) => { resolveJobBDrafts = resolve })
+      : Promise.resolve([warningE4Draft]))
+    mocks.fetchAiValidationRuns.mockImplementation((_request, draftId: string) => Promise.resolve([
+      { ...warningValidation, draft_id: draftId },
+    ]))
+    mocks.saveAiCandidateRevision.mockReturnValue(new Promise((resolve) => { resolveMutation = resolve }))
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="save-revision"]').trigger('click')
+    await flushPromises()
+    await navigateTo({ query: { job: 'job-2', draft: 'draft-b' } })
+    await flushPromises()
+
+    resolveMutation({ draft_id: 'draft-1', revision_number: 2, validation_run: warningValidation })
+    await flushPromises()
+    resolveJobBDrafts([jobBDraft])
+    await flushPromises()
+
+    expect(route.query).toEqual({ job: 'job-2', draft: 'draft-b' })
+    expect(wrapper.get('textarea[aria-label="题目提示"]').element).toHaveProperty('value', 'Newest Job B prompt')
+    expect(wrapper.text()).not.toContain('正在加载 AI 出题审核数据')
+  })
+
   it('keeps mutation success and retries only refresh after a 503', async () => {
     mocks.fetchAiGenerationDrafts
       .mockResolvedValueOnce([warningE4Draft])
@@ -354,6 +394,14 @@ describe('teacher AI review rendering', () => {
     expect(wrapper.text()).toContain('候选修订已保存。')
     expect(wrapper.text()).toContain('操作已成功，但最新审核状态暂时无法刷新。')
     expect(wrapper.get('[data-testid="retry-refresh"]').exists()).toBe(true)
+    expect(mocks.saveAiCandidateRevision).toHaveBeenCalledTimes(1)
+    expect(crypto.randomUUID).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-testid="save-revision"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="accept-candidate"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="reject-candidate"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.get('[data-testid="save-revision"]').trigger('click')
+    await flushPromises()
     expect(mocks.saveAiCandidateRevision).toHaveBeenCalledTimes(1)
     expect(crypto.randomUUID).toHaveBeenCalledTimes(1)
 

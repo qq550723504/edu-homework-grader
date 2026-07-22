@@ -24,6 +24,7 @@ const drafts = ref<TeacherAiDraft[]>([])
 const currentValidation = ref<TeacherAiValidationRun | null>(null)
 const currentValidationKey = ref('')
 const loading = ref(false)
+const refreshing = ref(false)
 const busyOperation = ref<'save' | 'reject' | 'accept' | null>(null)
 const notice = ref('')
 const errorMessage = ref('')
@@ -33,7 +34,8 @@ const pendingRefresh = ref<{
   draftId: string
   idempotencyKey: string
 } | null>(null)
-let requestGeneration = 0
+let routeLoadGeneration = 0
+let selectionRefreshGeneration = 0
 
 const selectedJobId = computed(() => queryValue(route.query.job))
 const selectedDraftId = computed(() => queryValue(route.query.draft))
@@ -44,15 +46,27 @@ const selectedValidation = computed(() => {
     ? currentValidation.value
     : null
 })
+const writeControlsDisabled = computed(() => loading.value
+  || busyOperation.value !== null
+  || refreshing.value
+  || (pendingRefresh.value !== null
+    && requestMatches(pendingRefresh.value.jobId, pendingRefresh.value.draftId)))
 
 function queryValue(value: unknown): string | null {
   return typeof value === 'string' && value ? value : null
 }
 
 async function loadWorkspace() {
-  const generation = ++requestGeneration
+  const generation = ++routeLoadGeneration
+  selectionRefreshGeneration += 1
   const requestedJobId = queryValue(route.query.job)
   const requestedDraftId = queryValue(route.query.draft)
+  if (pendingRefresh.value && !requestMatches(
+    pendingRefresh.value.jobId, pendingRefresh.value.draftId,
+  )) {
+    pendingRefresh.value = null
+    syncWarning.value = ''
+  }
   loading.value = true
   errorMessage.value = ''
   try {
@@ -87,17 +101,19 @@ async function loadWorkspace() {
       errorMessage.value = publicErrorMessage(error, '暂时无法读取 AI 出题审核数据，请稍后重试。')
     }
   } finally {
-    if (generation === requestGeneration) loading.value = false
+    if (generation === routeLoadGeneration) loading.value = false
   }
 }
 
 async function refreshSelection(jobId: string, draftId: string): Promise<'updated' | 'stale'> {
-  const generation = ++requestGeneration
+  if (!requestMatches(jobId, draftId)) return 'stale'
+  const generation = ++selectionRefreshGeneration
+  const owningRouteGeneration = routeLoadGeneration
   const nextDrafts = await fetchAiGenerationDrafts($fetch, jobId)
-  if (!requestIsCurrent(generation, jobId, draftId)) return 'stale'
+  if (!refreshIsCurrent(generation, owningRouteGeneration, jobId, draftId)) return 'stale'
   const draft = nextDrafts.find((item) => item.id === draftId) ?? null
   const validation = draft ? await fetchCurrentValidation(draft) : null
-  if (!requestIsCurrent(generation, jobId, draftId)) return 'stale'
+  if (!refreshIsCurrent(generation, owningRouteGeneration, jobId, draftId)) return 'stale'
 
   drafts.value = nextDrafts
   setCurrentValidation(draft, validation)
@@ -119,9 +135,20 @@ function validationKey(draft: TeacherAiDraft): string {
 }
 
 function requestIsCurrent(generation: number, jobId: string | null, draftId: string | null): boolean {
-  return generation === requestGeneration
+  return generation === routeLoadGeneration
     && queryValue(route.query.job) === jobId
     && queryValue(route.query.draft) === draftId
+}
+
+function refreshIsCurrent(
+  generation: number,
+  owningRouteGeneration: number,
+  jobId: string,
+  draftId: string,
+): boolean {
+  return generation === selectionRefreshGeneration
+    && owningRouteGeneration === routeLoadGeneration
+    && requestMatches(jobId, draftId)
 }
 
 function routeQuery(jobId: string | null, draftId: string | null): Record<string, string> {
@@ -150,7 +177,7 @@ async function csrfToken(): Promise<string> {
 async function saveRevision(candidate: TeacherAiCandidate) {
   const draft = selectedDraft.value
   const jobId = selectedJobId.value
-  if (!jobId || !draft || busyOperation.value) return
+  if (!jobId || !draft || writeControlsDisabled.value) return
   await runWrite('save', jobId, draft, async (csrf, key) => {
     const result = await saveAiCandidateRevision(
       $fetch, csrf, draft.id, key, draft.revision_number, candidate,
@@ -162,7 +189,7 @@ async function saveRevision(candidate: TeacherAiCandidate) {
 async function rejectCandidate(reason: TeacherAiRejectReason, detail: string) {
   const draft = selectedDraft.value
   const jobId = selectedJobId.value
-  if (!jobId || !draft || busyOperation.value) return
+  if (!jobId || !draft || writeControlsDisabled.value) return
   await runWrite('reject', jobId, draft, async (csrf, key) => {
     const result = await rejectAiCandidate(
       $fetch, csrf, draft.id, key, draft.revision_number, reason, detail,
@@ -174,7 +201,7 @@ async function rejectCandidate(reason: TeacherAiRejectReason, detail: string) {
 async function acceptCandidate(input: { confirmWarnings: boolean }) {
   const draft = selectedDraft.value
   const jobId = selectedJobId.value
-  if (!jobId || !draft || busyOperation.value) return
+  if (!jobId || !draft || writeControlsDisabled.value) return
   await runWrite('accept', jobId, draft, async (csrf, key) => {
     const result = await acceptAiCandidate(
       $fetch, csrf, draft.id, key, draft.revision_number, input.confirmWarnings,
@@ -197,11 +224,10 @@ async function runWrite(
   try {
     const csrf = await csrfToken()
     const result = await write(csrf, idempotencyKey)
+    if (!requestMatches(jobId, draft.id)) return
     notice.value = result.message
-    if (requestMatches(jobId, draft.id)) {
-      currentValidation.value = result.validation
-      currentValidationKey.value = `${draft.id}:${result.validation.revision_number}`
-    }
+    currentValidation.value = result.validation
+    currentValidationKey.value = `${draft.id}:${result.validation.revision_number}`
     try {
       const refresh = await refreshSelection(jobId, draft.id)
       if (refresh === 'updated') pendingRefresh.value = null
@@ -212,6 +238,7 @@ async function runWrite(
       }
     }
   } catch (error: unknown) {
+    if (!requestMatches(jobId, draft.id)) return
     if (isRevisionConflict(error)) {
       try {
         const refresh = await refreshSelection(jobId, draft.id)
@@ -234,17 +261,20 @@ async function runWrite(
 async function retryRefresh() {
   const pending = pendingRefresh.value
   if (!pending || !requestMatches(pending.jobId, pending.draftId)) return
-  loading.value = true
+  const operationIdentity = pending.idempotencyKey
+  refreshing.value = true
   try {
     const refresh = await refreshSelection(pending.jobId, pending.draftId)
-    if (refresh === 'updated') {
+    if (refresh === 'updated' && pendingRefresh.value?.idempotencyKey === operationIdentity) {
       pendingRefresh.value = null
       syncWarning.value = ''
     }
   } catch {
-    syncWarning.value = '操作已成功，但最新审核状态暂时无法刷新。请重试刷新。'
+    if (pendingRefresh.value?.idempotencyKey === operationIdentity) {
+      syncWarning.value = '操作已成功，但最新审核状态暂时无法刷新。请重试刷新。'
+    }
   } finally {
-    loading.value = false
+    refreshing.value = false
   }
 }
 
@@ -302,7 +332,7 @@ watch(() => route.query, loadWorkspace)
     <p v-if="errorMessage" class="notice" role="alert">{{ errorMessage }}</p>
     <p v-if="syncWarning" class="notice" role="alert">
       {{ syncWarning }}
-      <button data-testid="retry-refresh" type="button" @click="retryRefresh">重试刷新</button>
+      <button :disabled="refreshing" data-testid="retry-refresh" type="button" @click="retryRefresh">重试刷新</button>
     </p>
     <p v-if="loading" class="notice" role="status">正在加载 AI 出题审核数据…</p>
 
@@ -336,7 +366,7 @@ watch(() => route.query, loadWorkspace)
           v-if="selectedDraft"
           :draft="selectedDraft"
           :validation="selectedValidation"
-          :busy="busyOperation !== null || loading"
+          :busy="writeControlsDisabled"
           @save-revision="saveRevision"
           @reject="rejectCandidate"
           @accept="acceptCandidate"
