@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import LogoutButton from '../../components/LogoutButton.vue'
-import TeacherAiReviewWorkspace from '../../components/teacher/TeacherAiReviewWorkspace.vue'
-import TeacherWorkbenchNav from '../../components/teacher/TeacherWorkbenchNav.vue'
+import LogoutButton from '../../../components/LogoutButton.vue'
+import TeacherAiReviewWorkspace from '../../../components/teacher/TeacherAiReviewWorkspace.vue'
+import TeacherWorkbenchNav from '../../../components/teacher/TeacherWorkbenchNav.vue'
 
 useHead({ title: 'AI 出题审核' })
 </script>

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TeacherAiCandidateReview from '../app/components/teacher/TeacherAiCandidateReview.vue'
 import TeacherAiJobList from '../app/components/teacher/TeacherAiJobList.vue'
 import TeacherAiReviewWorkspace from '../app/components/teacher/TeacherAiReviewWorkspace.vue'
-import TeacherAiQuestionsPage from '../app/pages/teacher/ai-questions.vue'
+import TeacherAiQuestionsPage from '../app/pages/teacher/ai-questions/index.vue'
 import type { TeacherAiDraft, TeacherAiGenerationJob, TeacherAiValidationRun } from '../app/lib/teacher-ai-review'
 
 const mocks = vi.hoisted(() => ({

@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
 
 import { flushPromises, mount } from '@vue/test-utils'
+import { existsSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { nextTick } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -201,5 +203,17 @@ describe('teacher AI generation request rendering', () => {
     expect(wrapper.get('main').classes()).toContain('teacher-workbench')
     expect(wrapper.text()).toContain('创建 AI 出题批次')
     expect(routeWrapper.findComponent({ name: 'TeacherAiGenerationPage' }).exists()).toBe(true)
+  })
+
+  it('uses directory pages so Nuxt maps the review root and new-batch child routes separately', () => {
+    const reviewPage = resolve(process.cwd(), 'app/pages/teacher/ai-questions/index.vue')
+    const newBatchPage = resolve(process.cwd(), 'app/pages/teacher/ai-questions/new.vue')
+    const conflictingFlatPage = resolve(process.cwd(), 'app/pages/teacher/ai-questions.vue')
+
+    expect(existsSync(reviewPage)).toBe(true)
+    expect(existsSync(newBatchPage)).toBe(true)
+    expect(existsSync(conflictingFlatPage)).toBe(false)
+    expect(readFileSync(reviewPage, 'utf8')).toContain('TeacherAiReviewWorkspace')
+    expect(readFileSync(newBatchPage, 'utf8')).toContain('TeacherAiGenerationPage')
   })
 })
