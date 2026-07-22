@@ -10,7 +10,7 @@ from edu_generator.contracts import GeneratedCandidate, ProviderFailure
 from edu_generator.openai_provider import OpenAIResponsesProvider
 from edu_generator.providers import FakeGenerationProvider, GenerationProvider
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -38,6 +38,7 @@ from ..services.ai_question_review import (
 )
 from ..services.generation import (
     GenerationJobRequest,
+    GenerationJobSnapshot,
     GenerationServiceError,
     cancel_generation_job,
     create_or_get_job,
@@ -52,15 +53,13 @@ draft_router = APIRouter(prefix="/v1/ai-generated-questions", tags=["AI question
 
 
 class CreateGenerationJobRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     curriculum_objective_revision_id: UUID
-    grade: str = Field(min_length=1, max_length=100)
-    subject: str = Field(min_length=1, max_length=100)
     question_types: list[Literal["M1", "M2", "E1", "E2", "E3", "E4"]] = Field(
         min_length=1, max_length=20
     )
     requested_count: int = Field(ge=1, le=20)
-    policy_catalog_version: str = Field(min_length=1, max_length=100)
-    prompt_version: str = Field(min_length=1, max_length=100)
     teacher_constraint: str | None = Field(default=None, max_length=1_000)
 
 
@@ -89,6 +88,14 @@ class RejectReviewDraftRequest(BaseModel):
 class AcceptReviewDraftRequest(BaseModel):
     expected_revision_number: int = Field(ge=1)
     confirm_warnings: bool = False
+
+
+@router.get("/limits")
+def generation_limits_route(
+    principal: Annotated[CurrentPrincipal, Depends(require_any_role(Role.ADMIN, Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, int]:
+    return _generation_limits(session, actor=_actor(session, principal))
 
 
 @router.post("/jobs", status_code=status.HTTP_201_CREATED)
@@ -136,6 +143,8 @@ def create_generation_job_route(
         session.commit()
     except GenerationServiceError as exc:
         session.rollback()
+        if str(exc) == "generation_distribution_invalid":
+            raise _api_error(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
         raise _api_error(status.HTTP_409_CONFLICT, "generation_request_rejected") from exc
     except ProviderFailure as exc:
         session.rollback()
@@ -248,20 +257,17 @@ def regenerate_draft_route(
         raise _api_error(status.HTTP_409_CONFLICT, "generation_draft_invalid")
     request = GenerationJobRequest(
         curriculum_objective_revision_id=original.curriculum_objective_revision_id,
-        grade=original.grade or "unspecified",
-        subject=original.subject or "unspecified",
         question_types=[question_type],
         requested_count=1,
         idempotency_key=idempotency_key,
-        policy_catalog_version=original.policy_version or "unknown",
-        prompt_version=original.prompt_version or "unknown",
         teacher_constraint=body.teacher_constraint,
     )
+    snapshot = GenerationJobSnapshot.from_job(original)
     existing = _find_job_by_idempotency(session, actor=actor, idempotency_key=idempotency_key)
     if existing is None:
         _enforce_generation_quota(session, actor=actor, requested_count=1)
     try:
-        job = create_or_get_job(session, request=request, actor=actor)
+        job = create_or_get_job(session, request=request, actor=actor, snapshot=snapshot)
         if existing is None:
             session.commit()
             run_generation_job(
@@ -647,18 +653,34 @@ def _recover_decision_replay(
     )
 
 
+def _generation_limits(session: Session, *, actor: User) -> dict[str, int]:
+    daily_tenant_limit = settings.generator_daily_tenant_limit
+    used = _generation_count_since_utc_midnight(session, tenant_id=actor.tenant_id)
+    return {
+        "max_batch_size": settings.generator_max_batch_size,
+        "daily_tenant_limit": daily_tenant_limit,
+        "daily_used_count": used,
+        "remaining_count": max(daily_tenant_limit - used, 0),
+    }
+
+
 def _enforce_generation_quota(session: Session, *, actor: User, requested_count: int) -> None:
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     if requested_count > settings.generator_max_batch_size:
         raise _api_error(status.HTTP_422_UNPROCESSABLE_CONTENT, "generation_batch_limit_exceeded")
+    used = _generation_count_since_utc_midnight(session, tenant_id=actor.tenant_id)
+    if used + requested_count > settings.generator_daily_tenant_limit:
+        raise _api_error(status.HTTP_429_TOO_MANY_REQUESTS, "generation_quota_exceeded")
+
+
+def _generation_count_since_utc_midnight(session: Session, *, tenant_id: UUID) -> int:
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     used = session.scalar(
         select(func.coalesce(func.sum(GenerationJob.requested_count), 0)).where(
-            GenerationJob.tenant_id == actor.tenant_id,
+            GenerationJob.tenant_id == tenant_id,
             GenerationJob.created_at >= today,
         )
     )
-    if int(used or 0) + requested_count > settings.generator_daily_tenant_limit:
-        raise _api_error(status.HTTP_429_TOO_MANY_REQUESTS, "generation_quota_exceeded")
+    return int(used or 0)
 
 
 def _job_payload(job: GenerationJob) -> dict[str, object]:

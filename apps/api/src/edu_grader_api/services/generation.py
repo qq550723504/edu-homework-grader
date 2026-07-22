@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
@@ -10,7 +11,7 @@ from edu_generator.contracts import GeneratedCandidate, GenerationRequest, Provi
 from edu_generator.prompt_templates import PromptTemplate, resolve_prompt_template
 from edu_generator.providers import GenerationProvider
 from edu_grader_processor_policy import assert_deidentified_payload
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -34,22 +35,24 @@ class GenerationServiceError(ValueError):
     """Stable service-layer error safe for API responses and audit metadata."""
 
 
+GENERATION_POLICY_CATALOG_VERSION = "2026.07"
+GENERATION_PROMPT_VERSION = "generator-v1"
+
+
 class GenerationJobRequest(BaseModel):
     """Bounded, de-identified teacher request for candidate generation."""
 
-    model_config = ConfigDict(extra="forbid")
-
     curriculum_objective_revision_id: UUID
-    grade: str = Field(min_length=1, max_length=100)
-    subject: str = Field(min_length=1, max_length=100)
     question_types: list[Literal["M1", "M2", "E1", "E2", "E3", "E4"]] = Field(
         min_length=1, max_length=20
     )
     requested_count: int = Field(ge=1, le=20)
     idempotency_key: str = Field(min_length=1, max_length=128)
-    policy_catalog_version: str = Field(min_length=1, max_length=100)
-    prompt_version: str = Field(min_length=1, max_length=100)
     teacher_constraint: str | None = Field(default=None, max_length=1_000)
+    grade: str | None = Field(default=None, min_length=1, max_length=100)
+    subject: str | None = Field(default=None, min_length=1, max_length=100)
+    policy_catalog_version: str | None = Field(default=None, min_length=1, max_length=100)
+    prompt_version: str | None = Field(default=None, min_length=1, max_length=100)
 
     def model_post_init(self, __context: object) -> None:
         try:
@@ -58,8 +61,31 @@ class GenerationJobRequest(BaseModel):
             raise ValueError("generation requests must be de-identified") from exc
 
 
+@dataclass(frozen=True, slots=True)
+class GenerationJobSnapshot:
+    """Server-owned generation metadata persisted with a job."""
+
+    grade: str
+    subject: str
+    policy_catalog_version: str
+    prompt_version: str
+
+    @classmethod
+    def from_job(cls, job: GenerationJob) -> GenerationJobSnapshot:
+        return cls(
+            grade=job.grade or "unspecified",
+            subject=job.subject or "unspecified",
+            policy_catalog_version=job.policy_version or "unknown",
+            prompt_version=job.prompt_version or "unknown",
+        )
+
+
 def create_or_get_job(
-    session: Session, *, request: GenerationJobRequest, actor: User
+    session: Session,
+    *,
+    request: GenerationJobRequest,
+    actor: User,
+    snapshot: GenerationJobSnapshot | None = None,
 ) -> GenerationJob:
     """Create a tenant-scoped job or safely replay its exact idempotency key."""
 
@@ -88,8 +114,15 @@ def create_or_get_job(
         raise GenerationServiceError("curriculum objective revision must be active")
     if not set(request.question_types).issubset(set(revision.allowed_question_types)):
         raise GenerationServiceError("requested question types are not allowed by the objective")
+    if len(request.question_types) != request.requested_count:
+        raise GenerationServiceError("generation_distribution_invalid")
+    active_snapshot = (
+        snapshot
+        or _snapshot_from_internal_request(request)
+        or _snapshot_from_active_revision(revision)
+    )
     try:
-        resolve_prompt_template(request.prompt_version, request.question_types)
+        resolve_prompt_template(active_snapshot.prompt_version, request.question_types)
     except ValueError as exc:
         raise GenerationServiceError("prompt template is not available for this request") from exc
 
@@ -98,19 +131,52 @@ def create_or_get_job(
         teacher_user_id=actor.id,
         curriculum_profile_id=revision.objective.profile_id,
         curriculum_objective_revision_id=revision.id,
-        grade=request.grade,
-        subject=request.subject,
+        grade=active_snapshot.grade,
+        subject=active_snapshot.subject,
         distribution_json={"question_types": request.question_types},
         requested_count=request.requested_count,
         status=GenerationJobStatus.QUEUED,
         idempotency_key=request.idempotency_key,
-        policy_version=request.policy_catalog_version,
-        prompt_version=request.prompt_version,
+        policy_version=active_snapshot.policy_catalog_version,
+        prompt_version=active_snapshot.prompt_version,
         request_digest=request_digest,
     )
     session.add(job)
     session.flush()
     return job
+
+
+def _snapshot_from_active_revision(revision: CurriculumObjectiveRevision) -> GenerationJobSnapshot:
+    grade_mapping = revision.objective.grade_mapping
+    if grade_mapping is None:
+        raise GenerationServiceError("curriculum objective revision requires a grade mapping")
+    return GenerationJobSnapshot(
+        grade=grade_mapping.internal_level,
+        subject=revision.objective.subject,
+        policy_catalog_version=GENERATION_POLICY_CATALOG_VERSION,
+        prompt_version=GENERATION_PROMPT_VERSION,
+    )
+
+
+def _snapshot_from_internal_request(
+    request: GenerationJobRequest,
+) -> GenerationJobSnapshot | None:
+    values = (
+        request.grade,
+        request.subject,
+        request.policy_catalog_version,
+        request.prompt_version,
+    )
+    if all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        raise GenerationServiceError("generation job snapshot is incomplete")
+    return GenerationJobSnapshot(
+        grade=request.grade,
+        subject=request.subject,
+        policy_catalog_version=request.policy_catalog_version,
+        prompt_version=request.prompt_version,
+    )
 
 
 def run_generation_job(
