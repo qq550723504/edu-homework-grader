@@ -234,6 +234,7 @@ def accept_review_draft(
         question_type=candidate.question_type,
         policy_version=candidate.policy_version,
         rule_json=candidate.rule_json,
+        reading_material=candidate.reading_material,
     )
     session.flush()
     digest = request_digest or _content_hash(
@@ -311,6 +312,8 @@ def _lock_pending_review(
 
 def _require_review_access(session: Session, *, draft: GeneratedQuestionDraft, actor: User) -> None:
     job = session.get(GenerationJob, draft.job_id)
+    if actor.role not in {Role.TEACHER, Role.ADMIN}:
+        raise ReviewAccessError("review_access_denied")
     if job is None or actor.tenant_id != job.tenant_id:
         raise ReviewAccessError("review_access_denied")
     if actor.role is Role.TEACHER and actor.id != job.teacher_user_id:

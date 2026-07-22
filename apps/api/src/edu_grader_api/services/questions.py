@@ -77,6 +77,7 @@ def create_question(
     question_type: str,
     policy_version: str,
     rule_json: dict[str, object],
+    reading_material: str | None = None,
 ) -> QuestionVersion:
     """Create a tenant question and its first mutable version."""
 
@@ -109,7 +110,11 @@ def create_question(
         question_id=question.id,
         version_number=1,
         status=VersionStatus.DRAFT,
-        prompt=prompt,
+        prompt=_stored_question_prompt(
+            question_type=question_type,
+            prompt=prompt,
+            reading_material=reading_material,
+        ),
         question_type=question_type,
         grading_policy_id=policy.id,
         rule_json=rule_json,
@@ -126,6 +131,14 @@ def create_question(
         metadata={"version_number": 1},
     )
     return version
+
+
+def _stored_question_prompt(
+    *, question_type: str, prompt: str, reading_material: str | None
+) -> str:
+    if question_type != "E4" or reading_material is None:
+        return prompt
+    return f"{reading_material.strip()}\n\n{prompt.strip()}"
 
 
 def create_successor_draft(

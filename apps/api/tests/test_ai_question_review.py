@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.orm import Session
 
+from edu_grader_api.auth import CurrentPrincipal
 from edu_grader_api.models import (
     AuditLog,
     Base,
@@ -34,6 +35,7 @@ from edu_grader_api.models import (
     VersionStatus,
 )
 from edu_grader_api.services.ai_question_review import (
+    ReviewAccessError,
     ReviewConflictError,
     ReviewStateError,
     accept_review_draft,
@@ -41,6 +43,7 @@ from edu_grader_api.services.ai_question_review import (
     reject_review_draft,
 )
 from edu_grader_api.services.questions import GradeResult
+from edu_grader_api.routers.questions import list_question_versions_route
 
 
 class PassingGrader:
@@ -217,6 +220,21 @@ def _add_validation_run(
     return run
 
 
+def _replace_current_candidate(
+    session: Session,
+    draft: GeneratedQuestionDraft,
+    candidate: dict[str, object],
+) -> GeneratedQuestionDraftRevision:
+    revision = session.get(GeneratedQuestionDraftRevision, draft.current_revision_id)
+    assert revision is not None
+    draft.candidate_json = candidate
+    revision.candidate_json = candidate
+    draft.content_hash = "e" * 64
+    revision.content_hash = draft.content_hash
+    session.flush()
+    return revision
+
+
 def test_create_revision_is_append_only_and_validates_the_new_revision(
     session: Session, review_draft: tuple[GeneratedQuestionDraft, User]
 ) -> None:
@@ -242,6 +260,58 @@ def test_stale_revision_never_overwrites_newer_edit(
 
     with pytest.raises(ReviewConflictError, match="review_revision_conflict"):
         create_review_revision(session, draft, actor, 1, payload, PassingGrader())
+
+
+@pytest.mark.parametrize(
+    "actor_kind",
+    ["student", "same_tenant_other_teacher", "cross_tenant_teacher"],
+)
+def test_review_service_denies_unauthorized_actor_roles_and_ownership(
+    session: Session,
+    review_draft: tuple[GeneratedQuestionDraft, User],
+    actor_kind: str,
+) -> None:
+    draft, owner = review_draft
+    if actor_kind == "student":
+        actor = User(
+            tenant_id=owner.tenant_id,
+            role=Role.STUDENT,
+            oidc_issuer="https://issuer.example.test",
+            oidc_subject=str(uuid4()),
+            display_name="Student",
+            school_id=f"student-{uuid4()}",
+        )
+    elif actor_kind == "same_tenant_other_teacher":
+        actor = User(
+            tenant_id=owner.tenant_id,
+            role=Role.TEACHER,
+            oidc_issuer="https://issuer.example.test",
+            oidc_subject=str(uuid4()),
+            display_name="Other teacher",
+        )
+    else:
+        other_tenant = Tenant(slug=f"other-{uuid4()}", name="Other tenant")
+        actor = User(
+            tenant=other_tenant,
+            role=Role.TEACHER,
+            oidc_issuer="https://issuer.example.test",
+            oidc_subject=str(uuid4()),
+            display_name="Cross-tenant teacher",
+        )
+    session.add(actor)
+    session.flush()
+
+    with pytest.raises(ReviewAccessError, match="review_access_denied"):
+        create_review_revision(
+            session,
+            draft,
+            actor,
+            1,
+            {**draft.candidate_json, "prompt": "Unauthorized edit"},
+            PassingGrader(),
+        )
+
+    assert len(draft.revisions) == 1
 
 
 @pytest.mark.parametrize("field", ["objective_revision_id", "question_type", "policy_version"])
@@ -293,6 +363,71 @@ def test_warning_confirmation_creates_exactly_one_draft(
     with pytest.raises(ReviewConflictError, match="review_state_conflict"):
         accept_review_draft(session, draft, actor, 1, confirm_warnings=True)
     assert session.scalar(select(func.count(QuestionVersion.id))) == 1
+
+
+def test_accept_preserves_non_e4_prompt_byte_for_byte(
+    session: Session, review_draft: tuple[GeneratedQuestionDraft, User]
+) -> None:
+    draft, actor = review_draft
+    prompt = "  What is 2 + 2?\n"
+    _replace_current_candidate(session, draft, {**draft.candidate_json, "prompt": prompt})
+    _add_validation_run(session, draft, ValidationRunStatus.PASSED)
+
+    result = accept_review_draft(session, draft, actor, 1, confirm_warnings=False)
+
+    assert result.question_version.prompt == prompt
+
+
+def test_accept_e4_projects_reading_material_into_question_version_and_visible_payload(
+    session: Session, review_draft: tuple[GeneratedQuestionDraft, User]
+) -> None:
+    draft, actor = review_draft
+    objective_revision_id = draft.candidate_json["objective_revision_id"]
+    candidate = {
+        "objective_revision_id": objective_revision_id,
+        "question_type": "E4",
+        "policy_version": "2",
+        "prompt": "  Why did the students arrive late?  ",
+        "reading_material": "  Because the bridge was closed, the students arrived late.\n  ",
+        "rule_json": {
+            "scoring_points": [
+                {
+                    "id": "cause",
+                    "evidence_phrases": ["because the bridge was closed"],
+                    "score": 1,
+                }
+            ],
+            "max_score": 1,
+        },
+        "explanation": "Identify the cause from the passage.",
+        "knowledge_point": "reading comprehension",
+        "difficulty": 0.4,
+    }
+    source_revision = _replace_current_candidate(session, draft, candidate)
+    _add_validation_run(session, draft, ValidationRunStatus.PASSED)
+
+    result = accept_review_draft(session, draft, actor, 1, confirm_warnings=False)
+    expected_prompt = (
+        "Because the bridge was closed, the students arrived late."
+        "\n\nWhy did the students arrive late?"
+    )
+    visible = list_question_versions_route(
+        CurrentPrincipal(
+            user_id=str(actor.id),
+            tenant_id=str(actor.tenant_id),
+            role=Role.TEACHER,
+            school_id=None,
+            display_name=actor.display_name,
+        ),
+        session,
+        query=None,
+        question_type="E4",
+        status=VersionStatus.DRAFT,
+    )
+
+    assert result.question_version.prompt == expected_prompt
+    assert visible["question_versions"][0]["prompt"] == expected_prompt
+    assert result.decision.draft_revision_id == source_revision.id
 
 
 def test_accept_requires_a_latest_run_for_the_current_revision(
