@@ -354,6 +354,7 @@ watch(() => route.query, loadWorkspace)
         <h1 id="ai-review-workspace-heading">AI 出题审核</h1>
         <p class="teacher-page-heading__copy">查看生成批次，修订候选题并完成接受或拒绝决策。</p>
       </div>
+      <NuxtLink class="button primary" to="/teacher/ai-questions/new">生成新批次</NuxtLink>
     </header>
 
     <p v-if="notice" class="notice" role="status">{{ notice }}</p>
