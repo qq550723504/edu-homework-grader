@@ -10,7 +10,11 @@ from uuid import UUID
 from edu_generator.contracts import GeneratedCandidate, GenerationRequest, ProviderFailure
 from edu_generator.prompt_templates import PromptTemplate, resolve_prompt_template
 from edu_generator.providers import GenerationProvider
-from edu_grader_processor_policy import assert_deidentified_payload
+from edu_grader_processor_policy import (
+    ProcessorPolicyError,
+    assert_deidentified_payload,
+    assert_deidentified_text,
+)
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -260,6 +264,11 @@ def cancel_generation_job(session: Session, *, job: GenerationJob) -> Generation
 def _provider_request(
     session: Session, job: GenerationJob, *, teacher_constraint: str | None
 ) -> GenerationRequest:
+    if teacher_constraint is not None:
+        try:
+            assert_deidentified_text(teacher_constraint)
+        except ProcessorPolicyError as exc:
+            raise GenerationServiceError("teacher_constraint_contains_pii") from exc
     question_types = job.distribution_json.get("question_types", [])
     if not isinstance(question_types, list) or not all(
         isinstance(item, str) for item in question_types

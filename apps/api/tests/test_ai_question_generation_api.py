@@ -363,6 +363,98 @@ def test_generation_create_rejects_client_owned_course_and_version_fields(
     assert response.status_code == 422
 
 
+def test_generation_create_rejects_pii_teacher_constraint_without_echoing_it(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    teacher_constraint = "Make it easier for alex@example.test."
+
+    response = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=authorize(client, teacher) | {"Idempotency-Key": "pii-create"},
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "question_types": ["M1"],
+            "requested_count": 1,
+            "teacher_constraint": teacher_constraint,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": {"code": "teacher_constraint_contains_pii"}}
+    assert teacher_constraint not in str(response.json())
+
+
+def test_generation_regeneration_rejects_pii_teacher_constraint_without_echoing_it(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client, teacher, revision, idempotency_key="pii-regeneration-source"
+    )
+    draft = fetch_only_draft(client, headers, created["id"])
+    teacher_constraint = "Student ID: S-1001 needs extra practice."
+
+    response = client.post(
+        f"/v1/ai-generated-questions/{draft['id']}/regenerate",
+        headers=headers | {"Idempotency-Key": "pii-regeneration"},
+        json={"teacher_constraint": teacher_constraint},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": {"code": "teacher_constraint_contains_pii"}}
+    assert teacher_constraint not in str(response.json())
+
+
+def test_generation_routes_reject_oversized_idempotency_keys_with_a_stable_error(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    oversized_key = "x" * 129
+
+    create = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=authorize(client, teacher) | {"Idempotency-Key": oversized_key},
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "question_types": ["M1"],
+            "requested_count": 1,
+        },
+    )
+    headers, created = create_generation_job(
+        client, teacher, revision, idempotency_key="oversized-key-source"
+    )
+    draft = fetch_only_draft(client, headers, created["id"])
+    regenerate = client.post(
+        f"/v1/ai-generated-questions/{draft['id']}/regenerate",
+        headers=headers | {"Idempotency-Key": oversized_key},
+        json={},
+    )
+
+    assert create.status_code == 422
+    assert regenerate.status_code == 422
+    assert create.json() == {"detail": {"code": "idempotency_key_required"}}
+    assert regenerate.json() == {"detail": {"code": "idempotency_key_required"}}
+
+
+def test_generation_create_accepts_a_128_character_idempotency_key(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+
+    response = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=authorize(client, teacher) | {"Idempotency-Key": "x" * 128},
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "question_types": ["M1"],
+            "requested_count": 1,
+        },
+    )
+
+    assert response.status_code == 201
+
+
 def test_generation_limits_are_tenant_scoped(client: TestClient, session: Session) -> None:
     teacher, revision = teacher_and_objective(session)
     other_tenant = Tenant(slug="other-school", name="Other school")

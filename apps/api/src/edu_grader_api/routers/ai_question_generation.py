@@ -109,14 +109,13 @@ def create_generation_job_route(
     session: Annotated[Session, Depends(get_session)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict[str, object]:
-    if not idempotency_key:
-        raise _api_error(status.HTTP_422_UNPROCESSABLE_CONTENT, "idempotency_key_required")
+    key = _required_idempotency_key(idempotency_key)
     actor = _actor(session, principal)
     request = GenerationJobRequest(
         **body.model_dump(),
-        idempotency_key=idempotency_key,
+        idempotency_key=key,
     )
-    existing = _find_job_by_idempotency(session, actor=actor, idempotency_key=idempotency_key)
+    existing = _find_job_by_idempotency(session, actor=actor, idempotency_key=key)
     try:
         reserved = False
         if existing is None:
@@ -152,7 +151,7 @@ def create_generation_job_route(
         session.commit()
     except GenerationServiceError as exc:
         session.rollback()
-        if str(exc) == "generation_distribution_invalid":
+        if str(exc) in {"generation_distribution_invalid", "teacher_constraint_contains_pii"}:
             raise _api_error(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
         raise _api_error(status.HTTP_409_CONFLICT, "generation_request_rejected") from exc
     except ProviderFailure as exc:
@@ -259,8 +258,7 @@ def regenerate_draft_route(
     session: Annotated[Session, Depends(get_session)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict[str, object]:
-    if not idempotency_key:
-        raise _api_error(status.HTTP_422_UNPROCESSABLE_CONTENT, "idempotency_key_required")
+    key = _required_idempotency_key(idempotency_key)
     actor = _actor(session, principal)
     draft = _authorized_draft(session, draft_id=draft_id, actor=actor)
     original = draft.job
@@ -271,11 +269,11 @@ def regenerate_draft_route(
         curriculum_objective_revision_id=original.curriculum_objective_revision_id,
         question_types=[question_type],
         requested_count=1,
-        idempotency_key=idempotency_key,
+        idempotency_key=key,
         teacher_constraint=body.teacher_constraint,
     )
     snapshot = GenerationJobSnapshot.from_job(original)
-    existing = _find_job_by_idempotency(session, actor=actor, idempotency_key=idempotency_key)
+    existing = _find_job_by_idempotency(session, actor=actor, idempotency_key=key)
     try:
         reserved = False
         if existing is None:
@@ -305,6 +303,8 @@ def regenerate_draft_route(
         session.commit()
     except GenerationServiceError as exc:
         session.rollback()
+        if str(exc) == "teacher_constraint_contains_pii":
+            raise _api_error(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
         raise _api_error(status.HTTP_409_CONFLICT, "generation_request_rejected") from exc
     except ProviderFailure as exc:
         session.rollback()

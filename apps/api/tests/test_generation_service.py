@@ -274,6 +274,33 @@ def test_generation_request_rejects_server_owned_snapshot_fields(
         )
 
 
+@pytest.mark.parametrize(
+    "teacher_constraint",
+    [
+        "Make it easier for alex@example.test.",
+        "Use this phone number: +65 8123 4567.",
+        "Student ID: S-1001 needs extra practice.",
+    ],
+)
+def test_generation_rejects_pii_teacher_constraint_before_calling_provider(
+    session: Session, teacher_constraint: str
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    job = create_or_get_job(session, request=generation_request(revision), actor=teacher)
+    provider = FailIfCalledProvider()
+
+    with pytest.raises(GenerationServiceError) as exc_info:
+        run_generation_job(
+            session,
+            job=job,
+            provider=provider,
+            teacher_constraint=teacher_constraint,
+        )
+
+    assert str(exc_info.value) == "teacher_constraint_contains_pii"
+    assert provider.calls == 0
+
+
 def test_creation_rejects_an_inactive_objective_revision(session: Session) -> None:
     teacher, revision = teacher_and_objective(session)
     revision.status = CurriculumRevisionStatus.DRAFT
