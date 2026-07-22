@@ -13,10 +13,11 @@ from ..db import get_session
 from ..dependencies import require_any_role
 from ..models import (
     GeneratedQuestionDraftRevision,
+    GenerationJob,
     GenerationValidationRun,
     Role,
 )
-from .ai_question_generation import _actor, _authorized_draft, _authorized_job
+from .ai_question_generation import _actor, _authorized_draft
 from ..services.grader import HttpGraderClient
 from ..services.question_verification import run_candidate_verification
 from ..settings import settings
@@ -40,7 +41,42 @@ _PUBLIC_DIFFICULTY_RANGE_KEYS = ("min", "max")
 _PUBLIC_DIFFICULTY_FEATURE_KEYS = ("type", "value", "contribution")
 _PUBLIC_COMPARISON_COUNT_KEYS = ("published_question", "batch_candidate")
 _PUBLIC_EMBEDDING_DEPENDENCY_KEYS = ("id", "revision")
+_PUBLIC_FINDING_EVIDENCE_SCALAR_KEYS = (
+    "revision_status",
+    "difficulty_min",
+    "difficulty_max",
+    "question_type",
+    "prompt_present",
+    "explanation_present",
+    "grade_level",
+    "metric",
+    "observed",
+    "limit",
+    "expected_is_numeric",
+    "tolerance_is_valid",
+    "reason",
+    "probe",
+    "accepted_form_count",
+    "target",
+    "reference_answer_count",
+    "grammar_match_count",
+    "scoring_point_count",
+    "evidence_phrase_count",
+    "point_score_total",
+    "max_score",
+    "comparison",
+    "method",
+    "threshold_band",
+    "category",
+    "rule_id",
+    "policy_version",
+)
+_PUBLIC_FINDING_EVIDENCE_STRING_LIST_KEYS = ("allowed_question_types",)
 _PRIVATE_FEATURE_KEY_PARTS = ("digest", "fingerprint", "hash")
+_PUBLIC_FINDING_REMEDIATION = {
+    "blocked": "Resolve this validation finding and run validation again.",
+    "warning": "Review this validation finding before accepting the candidate.",
+}
 
 
 @router.post(
@@ -105,10 +141,19 @@ def get_validation_run_route(
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, object]:
     actor = _actor(session, principal)
-    run = session.get(GenerationValidationRun, run_id)
+    statement = (
+        select(GenerationValidationRun)
+        .join(GenerationJob, GenerationValidationRun.generation_job_id == GenerationJob.id)
+        .where(
+            GenerationValidationRun.id == run_id,
+            GenerationJob.tenant_id == actor.tenant_id,
+        )
+    )
+    if actor.role is Role.TEACHER:
+        statement = statement.where(GenerationJob.teacher_user_id == actor.id)
+    run = session.scalar(statement)
     if run is None:
         raise _api_error(status.HTTP_404_NOT_FOUND, "validation_run_not_found")
-    _authorized_job(session, job_id=run.generation_job_id, actor=actor)
     return _run_payload(run)
 
 
@@ -127,12 +172,21 @@ def _run_payload(run: GenerationValidationRun) -> dict[str, object]:
             {
                 "code": finding.code,
                 "severity": finding.severity.value,
-                "evidence": finding.evidence_json,
-                "remediation": finding.remediation,
+                "evidence": _public_finding_evidence(finding.evidence_json),
+                "remediation": _PUBLIC_FINDING_REMEDIATION[finding.severity.value],
             }
             for finding in run.findings
         ],
     }
+
+
+def _public_finding_evidence(evidence: dict[str, object]) -> dict[str, object]:
+    public_evidence = _public_scalar_fields(evidence, _PUBLIC_FINDING_EVIDENCE_SCALAR_KEYS)
+    for key in _PUBLIC_FINDING_EVIDENCE_STRING_LIST_KEYS:
+        value = evidence.get(key)
+        if isinstance(value, list) and all(isinstance(item, str) for item in value):
+            public_evidence[key] = list(value)
+    return public_evidence
 
 
 def _public_feature_summary(summary: dict[str, object]) -> dict[str, object]:

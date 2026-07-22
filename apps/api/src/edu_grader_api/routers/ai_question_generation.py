@@ -12,6 +12,7 @@ from edu_generator.providers import FakeGenerationProvider, GenerationProvider
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..audit import append_audit_event
@@ -298,7 +299,7 @@ def create_review_revision_route(
 ) -> dict[str, object]:
     key = _required_idempotency_key(idempotency_key)
     actor = _actor(session, principal)
-    draft = _authorized_draft(session, draft_id=draft_id, actor=actor)
+    draft = _authorized_draft(session, draft_id=draft_id, actor=actor, for_update=True)
     digest = _request_digest("revision", body)
     replay = _replayed_revision(
         session,
@@ -320,7 +321,21 @@ def create_review_revision_route(
             request_digest=digest,
         )
         session.commit()
-    except (ReviewConflictError, ReviewStateError, ReviewAccessError) as exc:
+    except (IntegrityError, ReviewConflictError) as exc:
+        session.rollback()
+        replay = _recover_revision_replay(
+            session,
+            draft_id=draft_id,
+            actor=actor,
+            idempotency_key=key,
+            request_digest=digest,
+        )
+        if replay is not None:
+            return replay
+        if isinstance(exc, ReviewConflictError):
+            raise _review_error(exc) from exc
+        raise _api_error(status.HTTP_409_CONFLICT, "review_write_conflict") from exc
+    except (ReviewStateError, ReviewAccessError) as exc:
         session.rollback()
         raise _review_error(exc) from exc
     return _revision_payload(result.revision, result.validation_run)
@@ -336,7 +351,7 @@ def reject_review_draft_route(
 ) -> dict[str, object]:
     key = _required_idempotency_key(idempotency_key)
     actor = _actor(session, principal)
-    draft = _authorized_draft(session, draft_id=draft_id, actor=actor)
+    draft = _authorized_draft(session, draft_id=draft_id, actor=actor, for_update=True)
     digest = _request_digest("reject", body)
     replay = _replayed_decision(
         session,
@@ -359,7 +374,22 @@ def reject_review_draft_route(
             request_digest=digest,
         )
         session.commit()
-    except (ReviewConflictError, ReviewStateError, ReviewAccessError) as exc:
+    except (IntegrityError, ReviewConflictError) as exc:
+        session.rollback()
+        replay = _recover_decision_replay(
+            session,
+            draft_id=draft_id,
+            actor=actor,
+            action="reject",
+            idempotency_key=key,
+            request_digest=digest,
+        )
+        if replay is not None:
+            return replay
+        if isinstance(exc, ReviewConflictError):
+            raise _review_error(exc) from exc
+        raise _api_error(status.HTTP_409_CONFLICT, "review_write_conflict") from exc
+    except (ReviewStateError, ReviewAccessError) as exc:
         session.rollback()
         raise _review_error(exc) from exc
     return _decision_payload(decision)
@@ -375,7 +405,7 @@ def accept_review_draft_route(
 ) -> dict[str, object]:
     key = _required_idempotency_key(idempotency_key)
     actor = _actor(session, principal)
-    draft = _authorized_draft(session, draft_id=draft_id, actor=actor)
+    draft = _authorized_draft(session, draft_id=draft_id, actor=actor, for_update=True)
     digest = _request_digest("accept", body)
     replay = _replayed_decision(
         session,
@@ -397,7 +427,22 @@ def accept_review_draft_route(
             request_digest=digest,
         )
         session.commit()
-    except (ReviewConflictError, ReviewStateError, ReviewAccessError) as exc:
+    except (IntegrityError, ReviewConflictError) as exc:
+        session.rollback()
+        replay = _recover_decision_replay(
+            session,
+            draft_id=draft_id,
+            actor=actor,
+            action="accept",
+            idempotency_key=key,
+            request_digest=digest,
+        )
+        if replay is not None:
+            return replay
+        if isinstance(exc, ReviewConflictError):
+            raise _review_error(exc) from exc
+        raise _api_error(status.HTTP_409_CONFLICT, "review_write_conflict") from exc
+    except (ReviewStateError, ReviewAccessError) as exc:
         session.rollback()
         raise _review_error(exc) from exc
     return _decision_payload(result.decision)
@@ -441,7 +486,13 @@ def _authorized_job(session: Session, *, job_id: UUID, actor: User) -> Generatio
     return job
 
 
-def _authorized_draft(session: Session, *, draft_id: UUID, actor: User) -> GeneratedQuestionDraft:
+def _authorized_draft(
+    session: Session,
+    *,
+    draft_id: UUID,
+    actor: User,
+    for_update: bool = False,
+) -> GeneratedQuestionDraft:
     statement = (
         select(GeneratedQuestionDraft)
         .join(GenerationJob, GeneratedQuestionDraft.job_id == GenerationJob.id)
@@ -452,6 +503,10 @@ def _authorized_draft(session: Session, *, draft_id: UUID, actor: User) -> Gener
     )
     if actor.role is Role.TEACHER:
         statement = statement.where(GenerationJob.teacher_user_id == actor.id)
+    if for_update:
+        statement = statement.with_for_update(of=GeneratedQuestionDraft).execution_options(
+            populate_existing=True
+        )
     draft = session.scalar(statement)
     if draft is None:
         raise _api_error(status.HTTP_404_NOT_FOUND, "generation_draft_not_found")
@@ -519,7 +574,7 @@ def _replayed_revision(
             GenerationValidationRun.generated_question_draft_id == draft.id,
             GenerationValidationRun.draft_revision_id == revision.id,
         )
-        .order_by(GenerationValidationRun.run_number.desc())
+        .order_by(GenerationValidationRun.run_number.asc())
         .limit(1)
     )
     if validation_run is None:
@@ -554,6 +609,42 @@ def _replayed_decision(
     if decision.action != action or decision.request_digest != request_digest:
         raise _api_error(status.HTTP_409_CONFLICT, "idempotency_key_conflict")
     return _decision_payload(decision)
+
+
+def _recover_revision_replay(
+    session: Session,
+    *,
+    draft_id: UUID,
+    actor: User,
+    idempotency_key: str,
+    request_digest: str,
+) -> dict[str, object] | None:
+    draft = _authorized_draft(session, draft_id=draft_id, actor=actor)
+    return _replayed_revision(
+        session,
+        draft=draft,
+        idempotency_key=idempotency_key,
+        request_digest=request_digest,
+    )
+
+
+def _recover_decision_replay(
+    session: Session,
+    *,
+    draft_id: UUID,
+    actor: User,
+    action: str,
+    idempotency_key: str,
+    request_digest: str,
+) -> dict[str, object] | None:
+    draft = _authorized_draft(session, draft_id=draft_id, actor=actor)
+    return _replayed_decision(
+        session,
+        draft=draft,
+        action=action,
+        idempotency_key=idempotency_key,
+        request_digest=request_digest,
+    )
 
 
 def _enforce_generation_quota(session: Session, *, actor: User, requested_count: int) -> None:

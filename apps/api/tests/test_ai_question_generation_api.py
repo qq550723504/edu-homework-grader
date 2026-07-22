@@ -1,13 +1,19 @@
 from dataclasses import dataclass
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from edu_grader_api.auth import VerifiedIdentity, get_token_verifier
+from edu_grader_api.auth import (
+    CurrentPrincipal,
+    VerifiedIdentity,
+    get_current_principal,
+    get_token_verifier,
+)
 from edu_grader_api.db import Base, get_session
 from edu_grader_api.e2e_support import DeterministicM2Client
 from edu_grader_api.main import app
@@ -29,6 +35,8 @@ from edu_grader_api.models import (
     Role,
     Tenant,
     User,
+    ValidationFinding,
+    ValidationFindingSeverity,
     ValidationRunStatus,
 )
 from edu_grader_api.settings import settings
@@ -620,6 +628,129 @@ def test_teacher_lists_and_reads_only_own_generation_jobs_while_tenant_admin_can
     assert [item["id"] for item in admin_list.json()["items"]] == [created["id"]]
 
 
+def test_cross_tenant_actor_cannot_discover_jobs_drafts_or_validation_runs(
+    client: TestClient, session: Session
+) -> None:
+    teacher, objective_revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client,
+        teacher,
+        objective_revision,
+        idempotency_key="cross-tenant-source-job",
+    )
+    draft_payload = fetch_only_draft(client, headers, created["id"])
+    draft = session.get(GeneratedQuestionDraft, UUID(str(draft_payload["id"])))
+    assert draft is not None
+    run = GenerationValidationRun(
+        generated_question_draft_id=draft.id,
+        draft_revision_id=draft.current_revision_id,
+        generation_job_id=draft.job_id,
+        run_number=1,
+        validator_version="api-test",
+        ruleset_version="api-test",
+        status=ValidationRunStatus.PASSED,
+        feature_summary_json={},
+    )
+    other_tenant = Tenant(slug="other-school", name="Other school")
+    other_teacher = User(
+        tenant=other_tenant,
+        role=Role.TEACHER,
+        oidc_issuer=ISSUER,
+        oidc_subject="cross-tenant-teacher",
+        display_name="Cross-tenant teacher",
+        work_email="cross-tenant@example.test",
+    )
+    session.add_all([run, other_teacher])
+    session.commit()
+    client.app.dependency_overrides[get_current_principal] = lambda: CurrentPrincipal(
+        user_id=str(other_teacher.id),
+        tenant_id=str(other_teacher.tenant_id),
+        role=other_teacher.role,
+        school_id=None,
+        display_name=other_teacher.display_name,
+        oidc_subject=other_teacher.oidc_subject or "",
+    )
+
+    assert client.get("/v1/ai-question-generation/jobs").json() == {
+        "items": [],
+        "next_after": None,
+    }
+    job_response = client.get(f"/v1/ai-question-generation/jobs/{created['id']}")
+    draft_response = client.post(
+        f"/v1/ai-generated-questions/{draft.id}/reject",
+        headers={"Idempotency-Key": "cross-tenant-reject"},
+        json={"expected_revision_number": 1, "reason": "duplicate"},
+    )
+    run_response = client.get(f"/v1/ai-question-validation-runs/{run.id}")
+    missing_run_response = client.get(f"/v1/ai-question-validation-runs/{uuid4()}")
+
+    assert job_response.status_code == 404
+    assert job_response.json()["detail"]["code"] == "generation_job_not_found"
+    assert draft_response.status_code == 404
+    assert draft_response.json()["detail"]["code"] == "generation_draft_not_found"
+    assert run_response.status_code == 404
+    assert run_response.json()["detail"]["code"] == "validation_run_not_found"
+    assert missing_run_response.status_code == 404
+    assert missing_run_response.json()["detail"]["code"] == "validation_run_not_found"
+
+
+def test_validation_finding_response_uses_explicit_safe_projection(
+    client: TestClient, session: Session
+) -> None:
+    teacher, objective_revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client,
+        teacher,
+        objective_revision,
+        idempotency_key="safe-finding-source-job",
+    )
+    draft_payload = fetch_only_draft(client, headers, created["id"])
+    draft = session.get(GeneratedQuestionDraft, UUID(str(draft_payload["id"])))
+    assert draft is not None
+    run = GenerationValidationRun(
+        generated_question_draft_id=draft.id,
+        draft_revision_id=draft.current_revision_id,
+        generation_job_id=draft.job_id,
+        run_number=1,
+        validator_version="api-test",
+        ruleset_version="api-test",
+        status=ValidationRunStatus.WARNING,
+        feature_summary_json={},
+    )
+    finding = ValidationFinding(
+        validation_run=run,
+        code="grade_complexity_warning",
+        severity=ValidationFindingSeverity.WARNING,
+        evidence_json={
+            "grade_level": "G5",
+            "metric": "prompt_units",
+            "observed": 12,
+            "limit": 10,
+            "content_hash": "private-content-hash",
+            "request_metadata": {"provider": "private-provider"},
+            "exception": "private exception text",
+            "candidate": {"prompt": "private candidate body"},
+        },
+        remediation="private exception text with private candidate body",
+    )
+    session.add(finding)
+    session.commit()
+
+    response = client.get(f"/v1/ai-question-validation-runs/{run.id}", headers=headers)
+
+    assert response.status_code == 200
+    public_finding = response.json()["findings"][0]
+    assert public_finding["evidence"] == {
+        "grade_level": "G5",
+        "metric": "prompt_units",
+        "observed": 12,
+        "limit": 10,
+    }
+    assert "private" not in str(public_finding).casefold()
+    assert "hash" not in str(public_finding).casefold()
+    assert "exception" not in str(public_finding).casefold()
+
+
 def test_revision_api_replays_exact_request_and_rejects_changed_body(
     client: TestClient, session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -643,6 +774,11 @@ def test_revision_api_replays_exact_request_and_rejects_changed_body(
         headers=write_headers,
         json=body,
     )
+    monkeypatch.setattr(validation_router, "HttpGraderClient", DeterministicM2Client)
+    later_validation = client.post(
+        f"/v1/ai-generated-questions/{draft['id']}/validation-runs",
+        headers=headers,
+    )
     replay = client.post(
         f"/v1/ai-generated-questions/{draft['id']}/revisions",
         headers=write_headers,
@@ -655,6 +791,8 @@ def test_revision_api_replays_exact_request_and_rejects_changed_body(
     )
 
     assert first.status_code == 201
+    assert later_validation.status_code == 201
+    assert later_validation.json()["id"] != first.json()["validation_run"]["id"]
     assert replay.status_code == 201
     assert replay.json() == first.json()
     assert first.json()["revision_number"] == 2
@@ -664,6 +802,49 @@ def test_revision_api_replays_exact_request_and_rejects_changed_body(
     assert session.scalar(select(func.count(GeneratedQuestionDraftRevision.id))) == 2
     assert "hash" not in str(first.json()).casefold()
     assert "request_summary" not in str(first.json()).casefold()
+
+
+def test_revision_api_recovers_exact_replay_after_post_lock_unique_conflict(
+    client: TestClient,
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    teacher, objective_revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client,
+        teacher,
+        objective_revision,
+        idempotency_key="unique-conflict-source-job",
+    )
+    draft = fetch_only_draft(client, headers, created["id"])
+    body = {
+        "expected_revision_number": 1,
+        "candidate": {**draft["candidate"], "prompt": "What is 7 + 5?"},
+    }
+    original_create_revision = generation_router.create_review_revision
+
+    def persist_competing_request_then_raise(*args: object, **kwargs: object) -> object:
+        original_create_revision(*args, **kwargs)
+        session.commit()
+        raise IntegrityError("forced unique conflict", {}, RuntimeError("duplicate key"))
+
+    monkeypatch.setattr(generation_router, "HttpGraderClient", DeterministicM2Client)
+    monkeypatch.setattr(
+        generation_router,
+        "create_review_revision",
+        persist_competing_request_then_raise,
+    )
+
+    response = client.post(
+        f"/v1/ai-generated-questions/{draft['id']}/revisions",
+        headers=headers | {"Idempotency-Key": "post-lock-unique-key"},
+        json=body,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["revision_number"] == 2
+    assert response.json()["validation_run"]["revision_number"] == 2
+    assert session.scalar(select(func.count(GeneratedQuestionDraftRevision.id))) == 2
 
 
 def test_reject_api_replays_exact_action_and_conflicts_with_different_action_or_body(
@@ -811,3 +992,54 @@ def test_accept_api_requires_current_validation_and_replays_accepted_version(
     assert conflict.status_code == 409
     assert conflict.json()["detail"]["code"] == "idempotency_key_conflict"
     assert session.scalar(select(func.count(QuestionVersion.id))) == 1
+
+
+def test_accept_api_requires_warning_confirmation_then_persists_confirmed_decision(
+    client: TestClient, session: Session
+) -> None:
+    teacher, objective_revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client,
+        teacher,
+        objective_revision,
+        idempotency_key="warning-accept-source-job",
+    )
+    draft_payload = fetch_only_draft(client, headers, created["id"])
+    draft = session.get(GeneratedQuestionDraft, UUID(str(draft_payload["id"])))
+    assert draft is not None
+    session.add(
+        GenerationValidationRun(
+            generated_question_draft_id=draft.id,
+            draft_revision_id=draft.current_revision_id,
+            generation_job_id=draft.job_id,
+            run_number=1,
+            validator_version="api-test",
+            ruleset_version="api-test",
+            status=ValidationRunStatus.WARNING,
+            feature_summary_json={},
+        )
+    )
+    session.commit()
+
+    without_confirmation = client.post(
+        f"/v1/ai-generated-questions/{draft.id}/accept",
+        headers=headers | {"Idempotency-Key": "warning-not-confirmed"},
+        json={"expected_revision_number": 1, "confirm_warnings": False},
+    )
+    with_confirmation = client.post(
+        f"/v1/ai-generated-questions/{draft.id}/accept",
+        headers=headers | {"Idempotency-Key": "warning-confirmed"},
+        json={"expected_revision_number": 1, "confirm_warnings": True},
+    )
+
+    assert without_confirmation.status_code == 409
+    assert without_confirmation.json()["detail"]["code"] == "warning_confirmation_required"
+    assert with_confirmation.status_code == 200
+    assert with_confirmation.json()["accepted_question_version_id"]
+    decision = session.scalar(
+        select(GeneratedQuestionReviewDecision).where(
+            GeneratedQuestionReviewDecision.generated_question_draft_id == draft.id
+        )
+    )
+    assert decision is not None
+    assert decision.warning_confirmed is True
