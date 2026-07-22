@@ -1,5 +1,6 @@
 from urllib.parse import urlparse
 
+from edu_generator.model_snapshots import validate_immutable_openai_model_snapshot
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -73,6 +74,7 @@ class Settings(BaseSettings):
                     raise ValueError(
                         "GENERATOR_OPENAI_MODEL is required when GENERATION_PROVIDER=openai"
                     )
+                validate_immutable_openai_model_snapshot(self.generator_openai_model)
                 if not self.generator_provider_allowed_hosts:
                     raise ValueError("GENERATOR_PROVIDER_ALLOWED_HOSTS is required")
         return self

@@ -130,6 +130,43 @@ def test_openai_provider_default_uses_the_versioned_api_endpoint() -> None:
     assert settings.generator_openai_base_url == "https://api.openai.com/v1"
 
 
+def test_production_openai_settings_accept_a_dated_model_snapshot() -> None:
+    settings = Settings(
+        app_env="production",
+        audit_hmac_key="x" * 32,
+        database_url="postgresql://edu_grader:secure-password@db.example/edu_grader",
+        oidc_issuer="https://identity.example/realms/edu-grader",
+        processor_allowed_hosts="grader",
+        grader_base_url="http://grader:8010",
+        generation_provider="openai",
+        openai_api_key="test-key",
+        generator_openai_model="gpt-5-2025-08-07",
+        generator_provider_allowed_hosts="api.openai.com",
+    )
+
+    assert settings.generator_openai_model == "gpt-5-2025-08-07"
+
+
+@pytest.mark.parametrize("model", ["gpt-5", "gpt-5-2025-02-30"])
+def test_production_openai_settings_reject_unpinned_model_without_echoing_it(model: str) -> None:
+    with pytest.raises(ValueError, match="OpenAI model must use a dated snapshot") as error:
+        Settings(
+            app_env="production",
+            audit_hmac_key="x" * 32,
+            database_url="postgresql://edu_grader:secure-password@db.example/edu_grader",
+            oidc_issuer="https://identity.example/realms/edu-grader",
+            processor_allowed_hosts="grader",
+            grader_base_url="http://grader:8010",
+            generation_provider="openai",
+            openai_api_key="secret-key-that-must-not-appear",
+            generator_openai_model=model,
+            generator_provider_allowed_hosts="api.openai.com",
+        )
+
+    assert model not in str(error.value)
+    assert "secret-key-that-must-not-appear" not in str(error.value)
+
+
 def test_ai_duplicate_similarity_threshold_defaults_to_conservative_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
