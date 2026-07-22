@@ -42,7 +42,7 @@ pending_review --接受--> accepted (创建 Question + draft QuestionVersion)
 - 编辑成功后立即以新修订调用现有验证器；API 返回新修订和该验证运行。所有旧运行仍可读取，但不再可作为接受依据。
 - `blocked` 的当前修订不能接受；`warning` 只能在 `confirm_warnings=true` 时接受；`passed` 不需要确认。
 - 只允许 `pending_review` 转换。重复接受或拒绝返回冲突，绝不创建第二个题库草稿。
-- 拒绝原因固定为 `incorrect_answer`、`out_of_scope`、`unclear_wording`、`duplicate`、`unsuitable_for_students`、`other`，其中 `other` 必须提供 1–500 字说明。
+- 拒绝原因固定为 `incorrect_answer`、`out_of_scope`、`unclear_wording`、`duplicate`、`unsuitable_for_students`、`other`，其中 `other` 必须提供 1–500 字说明。若当前修订尚无验证运行，拒绝操作先同步创建一条运行再记录拒绝；其结果不阻止拒绝，但保证每项审核决定都关联可追溯证据。
 - 接受操作在一个事务内锁定草稿、修订和最新验证运行，创建现有 `Question` / draft `QuestionVersion`，写入审核决策和审计事件。它不自动发布，也不绕过测试运行。
 
 ## API 与授权
@@ -59,7 +59,9 @@ pending_review --接受--> accepted (创建 Question + draft QuestionVersion)
 
 ## 与既有题库的桥接
 
-接受后使用既有 `create_question` 服务，以候选的 `prompt`、`question_type`、`policy_version` 与 `rule_json` 创建草稿。标题由安全截断的题干派生，保证不引入另一套题库创建逻辑。首次切片不自动建测试用例：现有教师题库界面已经能为草稿创建测试、运行测试和发布；下一 UI 切片会将其串联。题库版本不会直接成为 `published`。
+接受后使用既有 `create_question` 服务，以候选的 `prompt`、`question_type`、`policy_version` 与 `rule_json` 创建草稿。标题由安全截断的题干派生，保证不引入另一套题库创建逻辑。
+
+E4 阅读材料不能拼接进 `QuestionVersion.prompt`：该列有 10,000 字符契约，且 prompt 指纹是题干去重的稳定边界。为此，`QuestionVersion` 增加独立的可空 `reading_material` 文本字段；AI E4 接受时写入该字段、题干仍写入 `prompt`，因此材料不会截断且题干重复检测保持不变。学生作业详情单独投影 `reading_material`，前端在题干前渲染它；旧题和非 E4 均返回/渲染为空。继任草稿保留该字段。首次切片不自动建测试用例：现有教师题库界面已经能为草稿创建测试、运行测试和发布；下一 UI 切片会将其串联。题库版本不会直接成为 `published`。
 
 ## 验收与测试
 
@@ -72,3 +74,10 @@ pending_review --接受--> accepted (创建 Question + draft QuestionVersion)
 ## 后续切片（不在本 PR）
 
 Nuxt “AI 出题”模块将基于这些 API 添加生成表单、任务/候选卡、验证证据、编辑、拒绝、接受和批量操作。课程 profile 级联选择、成本预估、批量接受与 Playwright 全链路会在该 API 可用且数据契约稳定后实现，避免 UI 先行固化错误协议。
+
+## 交付验证记录（2026-07-22）
+
+- API 回归命令使用实际存在的 `apps/api/tests/test_questions.py`（计划中的 `test_questions_api.py` 不存在），连同生成模型、候选验证、审核 API、审核状态机和验证模型共运行 259 项测试，全部通过（47.34 秒）。
+- `ruff check` 覆盖 `apps/api/src/edu_grader_api` 和上述测试文件，结果为 `All checks passed!`；`ruff format --check` 报告 53 个文件均已格式化；`git diff --check origin/main...HEAD` 无输出且退出成功。
+- 迁移脚本链的当前 head 是 `0020_question_version_reading_material`。本地未取得 `alembic upgrade head` 的应用结果：工作树没有 `.env`，`docker compose ps` 因缺少必填的 PostgreSQL 密码变量不能启动数据库，默认本地 PostgreSQL 连接在 64 秒后超时。因此合并前仍需在已配置 PostgreSQL 环境运行升级验证；不要把该迁移标记为已在本地数据库应用。
+- 授权回归包含教师仅可列出和变更自己生成任务的检查，跨教师草稿变更返回 `404`；管理员仍保持租户范围。Nuxt 审核界面、课程 profile 级联选择、成本预估、批量接受及 Playwright 端到端流程仍明确留在后续切片，Issue #41 不在本 PR 关闭。
