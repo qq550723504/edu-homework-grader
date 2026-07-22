@@ -82,7 +82,10 @@ async function selectProfile() {
   subjects.value = []
   objectives.value = []
   resetCounts()
-  if (!profile) return
+  if (!profile) {
+    catalogLoading.value = false
+    return
+  }
   catalogLoading.value = true
   errorMessage.value = ''
   try {
@@ -104,7 +107,10 @@ async function selectGrade() {
   subjects.value = []
   objectives.value = []
   resetCounts()
-  if (!profile || !grade) return
+  if (!profile || !grade) {
+    catalogLoading.value = false
+    return
+  }
   catalogLoading.value = true
   errorMessage.value = ''
   try {
@@ -126,7 +132,10 @@ async function selectSubject() {
   selectedObjectiveRevisionId.value = ''
   objectives.value = []
   resetCounts()
-  if (!profile || !grade || !subject) return
+  if (!profile || !grade || !subject) {
+    catalogLoading.value = false
+    return
+  }
   catalogLoading.value = true
   errorMessage.value = ''
   try {
@@ -206,7 +215,7 @@ class MissingCsrfTokenError extends Error {}
 </script>
 
 <template>
-  <section class="ai-generation-form" aria-labelledby="ai-generation-form-heading">
+  <section class="ai-generation-form" aria-labelledby="ai-generation-form-heading" :aria-busy="catalogLoading">
     <header class="teacher-page-heading">
       <div>
         <p class="eyebrow">教师端 · AI 出题</p>

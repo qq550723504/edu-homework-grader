@@ -63,4 +63,28 @@ describe('teacher AI generation API', () => {
       expect(serializedRequest).not.toContain(serverOwnedField)
     }
   })
+
+  it('drops untyped server-owned and private fields instead of forwarding the caller object', async () => {
+    const request = vi.fn().mockResolvedValue({ id: 'job-1' })
+    const untrustedInput = {
+      curriculum_objective_revision_id: 'objective-revision-1',
+      question_types: ['M1'],
+      requested_count: 1,
+      teacher_constraint: '使用课堂词汇。',
+      grade: 'forged-grade',
+      subject: 'forged-subject',
+      policy_catalog_version: 'forged-catalog',
+      prompt_version: 'forged-prompt',
+      private_validation_features: { secret: true },
+    }
+
+    await createAiGenerationJob(request, 'csrf-token', 'request-key', untrustedInput as never)
+
+    expect(request.mock.calls[0][1].body).toEqual({
+      curriculum_objective_revision_id: 'objective-revision-1',
+      question_types: ['M1'],
+      requested_count: 1,
+      teacher_constraint: '使用课堂词汇。',
+    })
+  })
 })

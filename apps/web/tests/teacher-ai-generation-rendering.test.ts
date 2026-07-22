@@ -152,6 +152,44 @@ describe('teacher AI generation request rendering', () => {
     expect(objectiveValues).not.toContain('objective-old')
   })
 
+  it('clearing a parent selection releases catalogue loading while its stale child request is pending', async () => {
+    let resolveGrades!: (value: Array<{ internal_level: string, external_label: string }>) => void
+    mocks.fetchCurriculumGradeMappings.mockImplementationOnce(() => new Promise((resolve) => { resolveGrades = resolve }))
+    const wrapper = await mountForm()
+
+    await wrapper.get('select[aria-label="课程方案"]').setValue('cn-2022')
+    await nextTick()
+    await wrapper.get('select[aria-label="课程方案"]').setValue('')
+    await nextTick()
+    expect(wrapper.get('.ai-generation-form').attributes('aria-busy')).toBe('false')
+    resolveGrades([{ internal_level: 'G5', external_label: '五年级' }])
+    await flushPromises()
+
+    await wrapper.get('select[aria-label="课程方案"]').setValue('cn-2022')
+    await flushPromises()
+    let resolveSubjects!: (value: ReturnType<typeof objective>[]) => void
+    mocks.fetchCurriculumObjectives.mockImplementationOnce(() => new Promise((resolve) => { resolveSubjects = resolve }))
+    await wrapper.get('select[aria-label="年级"]').setValue('G5')
+    await nextTick()
+    await wrapper.get('select[aria-label="年级"]').setValue('')
+    await nextTick()
+    expect(wrapper.get('.ai-generation-form').attributes('aria-busy')).toBe('false')
+    resolveSubjects([objective()])
+    await flushPromises()
+
+    await wrapper.get('select[aria-label="年级"]').setValue('G5')
+    await flushPromises()
+    let resolveObjectives!: (value: ReturnType<typeof objective>[]) => void
+    mocks.fetchCurriculumObjectives.mockImplementationOnce(() => new Promise((resolve) => { resolveObjectives = resolve }))
+    await wrapper.get('select[aria-label="学科"]').setValue('mathematics')
+    await nextTick()
+    await wrapper.get('select[aria-label="学科"]').setValue('')
+    await nextTick()
+    expect(wrapper.get('.ai-generation-form').attributes('aria-busy')).toBe('false')
+    resolveObjectives([objective()])
+    await flushPromises()
+  })
+
   it('renders the dedicated generation page shell and exposes a new-batch entry from review', () => {
     const wrapper = mount(TeacherAiGenerationPage, {
       global: { stubs: { LogoutButton: true, NuxtLink: { template: '<a><slot /></a>' }, TeacherWorkbenchNav: true } },

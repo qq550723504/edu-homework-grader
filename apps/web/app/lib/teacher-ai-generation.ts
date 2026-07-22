@@ -95,9 +95,15 @@ export function createAiGenerationJob(
   idempotencyKey: string,
   input: CreateAiGenerationJobInput,
 ): Promise<TeacherAiGenerationJobResult> {
+  const body = {
+    curriculum_objective_revision_id: input.curriculum_objective_revision_id,
+    question_types: input.question_types,
+    requested_count: input.requested_count,
+    ...(input.teacher_constraint === undefined ? {} : { teacher_constraint: input.teacher_constraint }),
+  }
   return request<TeacherAiGenerationJobResult>('/api/core/v1/ai-question-generation/jobs', {
     method: 'POST',
     headers: { 'X-CSRF-Token': csrfToken, 'Idempotency-Key': idempotencyKey },
-    body: input,
+    body,
   })
 }
