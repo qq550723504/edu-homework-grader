@@ -23,6 +23,7 @@ const jobs = ref<TeacherAiGenerationJob[]>([])
 const drafts = ref<TeacherAiDraft[]>([])
 const currentValidation = ref<TeacherAiValidationRun | null>(null)
 const currentValidationKey = ref('')
+const acceptedQuestionVersionIds = ref<Record<string, string>>({})
 const loading = ref(false)
 const refreshing = ref(false)
 const busyOperation = ref<'save' | 'reject' | 'accept' | null>(null)
@@ -45,6 +46,10 @@ const selectedValidation = computed(() => {
   return draft && currentValidationKey.value === validationKey(draft)
     ? currentValidation.value
     : null
+})
+const selectedAcceptedQuestionVersionId = computed(() => {
+  const draft = selectedDraft.value
+  return draft ? acceptedQuestionVersionIds.value[validationKey(draft)] ?? null : null
 })
 const writeControlsDisabled = computed(() => loading.value
   || busyOperation.value !== null
@@ -177,7 +182,7 @@ async function csrfToken(): Promise<string> {
 async function saveRevision(candidate: TeacherAiCandidate) {
   const draft = selectedDraft.value
   const jobId = selectedJobId.value
-  if (!jobId || !draft || writeControlsDisabled.value) return
+  if (!jobId || !draft || !isPendingReview(draft) || writeControlsDisabled.value) return
   await runWrite('save', jobId, draft, async (csrf, key) => {
     const result = await saveAiCandidateRevision(
       $fetch, csrf, draft.id, key, draft.revision_number, candidate,
@@ -189,7 +194,7 @@ async function saveRevision(candidate: TeacherAiCandidate) {
 async function rejectCandidate(reason: TeacherAiRejectReason, detail: string) {
   const draft = selectedDraft.value
   const jobId = selectedJobId.value
-  if (!jobId || !draft || writeControlsDisabled.value) return
+  if (!jobId || !draft || !isPendingReview(draft) || writeControlsDisabled.value) return
   await runWrite('reject', jobId, draft, async (csrf, key) => {
     const result = await rejectAiCandidate(
       $fetch, csrf, draft.id, key, draft.revision_number, reason, detail,
@@ -201,20 +206,32 @@ async function rejectCandidate(reason: TeacherAiRejectReason, detail: string) {
 async function acceptCandidate(input: { confirmWarnings: boolean }) {
   const draft = selectedDraft.value
   const jobId = selectedJobId.value
-  if (!jobId || !draft || writeControlsDisabled.value) return
+  if (!jobId || !draft || !isPendingReview(draft) || writeControlsDisabled.value) return
   await runWrite('accept', jobId, draft, async (csrf, key) => {
     const result = await acceptAiCandidate(
       $fetch, csrf, draft.id, key, draft.revision_number, input.confirmWarnings,
     )
-    return { message: '候选题已接受并创建草稿。', validation: result.validation_run }
+    return {
+      message: '候选题已接受并创建草稿。',
+      validation: result.validation_run,
+      acceptedQuestionVersionId: result.accepted_question_version_id,
+    }
   })
+}
+
+function isPendingReview(draft: TeacherAiDraft): boolean {
+  return draft.teacher_state === 'pending_review'
 }
 
 async function runWrite(
   operation: 'save' | 'reject' | 'accept',
   jobId: string,
   draft: TeacherAiDraft,
-  write: (csrf: string, key: string) => Promise<{ message: string; validation: TeacherAiValidationRun }>,
+  write: (csrf: string, key: string) => Promise<{
+    message: string
+    validation: TeacherAiValidationRun
+    acceptedQuestionVersionId?: string | null
+  }>,
 ) {
   busyOperation.value = operation
   notice.value = ''
@@ -228,6 +245,12 @@ async function runWrite(
     notice.value = result.message
     currentValidation.value = result.validation
     currentValidationKey.value = `${draft.id}:${result.validation.revision_number}`
+    if (result.acceptedQuestionVersionId) {
+      acceptedQuestionVersionIds.value = {
+        ...acceptedQuestionVersionIds.value,
+        [`${draft.id}:${result.validation.revision_number}`]: result.acceptedQuestionVersionId,
+      }
+    }
     try {
       const refresh = await refreshSelection(jobId, draft.id)
       if (refresh === 'updated') pendingRefresh.value = null
@@ -283,12 +306,12 @@ function requestMatches(jobId: string, draftId: string): boolean {
 }
 
 function isRevisionConflict(error: unknown): boolean {
-  if (!isRecord(error) || !isRecord(error.data) || !isRecord(error.data.detail)) return false
-  return error.data.detail.code === 'review_revision_conflict'
+  return errorCode(error) === 'review_revision_conflict'
 }
 
 function publicErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof MissingCsrfTokenError) return '登录会话已过期，请重新登录。'
+  if (errorCode(error) === 'rejection_detail_required') return '选择“其他”时，请填写拒绝详情。'
   const status = errorStatus(error)
   if (status === 401 || status === 403) return '登录会话已过期，请重新登录。'
   if (status === 404) return '未找到所选的 AI 出题批次或候选题。'
@@ -298,6 +321,11 @@ function publicErrorMessage(error: unknown, fallback: string): string {
   if (status === 422) return '提交内容不符合要求，请检查后重试。'
   if (error instanceof TypeError) return '网络连接异常，请检查网络后重试。'
   return fallback
+}
+
+function errorCode(error: unknown): string | null {
+  if (!isRecord(error) || !isRecord(error.data) || !isRecord(error.data.detail)) return null
+  return typeof error.data.detail.code === 'string' ? error.data.detail.code : null
 }
 
 function errorStatus(error: unknown): number | null {
@@ -367,6 +395,7 @@ watch(() => route.query, loadWorkspace)
           :draft="selectedDraft"
           :validation="selectedValidation"
           :busy="writeControlsDisabled"
+          :accepted-question-version-id="selectedAcceptedQuestionVersionId"
           @save-revision="saveRevision"
           @reject="rejectCandidate"
           @accept="acceptCandidate"

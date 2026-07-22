@@ -165,40 +165,67 @@ describe('teacher AI review rendering', () => {
     expect(wrapper.emitted('accept')).toEqual([[{ confirmWarnings: true }]])
   })
 
-  it('keeps blocked candidates from being accepted and emits rejection with reason and detail', async () => {
+  it('keeps blocked candidates from being accepted and emits a trimmed other rejection detail', async () => {
     const wrapper = mount(TeacherAiCandidateReview, {
       props: { draft: warningE4Draft, validation: { ...warningValidation, status: 'blocked' }, busy: false },
     })
 
     expect(wrapper.get('[data-testid="accept-candidate"]').attributes('disabled')).toBeDefined()
-    await wrapper.get('select[aria-label="拒绝原因"]').setValue('unclear_wording')
-    await wrapper.get('textarea[aria-label="拒绝详情"]').setValue('Question wording is ambiguous.')
+    expect(wrapper.find('textarea[aria-label="拒绝详情"]').exists()).toBe(false)
+    await wrapper.get('select[aria-label="拒绝原因"]').setValue('other')
+    await wrapper.get('textarea[aria-label="拒绝详情"]').setValue('  Question wording is ambiguous.  ')
     await wrapper.get('[data-testid="reject-candidate"]').trigger('click')
-    expect(wrapper.emitted('reject')).toEqual([['unclear_wording', 'Question wording is ambiguous.']])
+    expect(wrapper.emitted('reject')).toEqual([['other', 'Question wording is ambiguous.']])
   })
 
-  it('emits parsed editable candidate fields and an accepted-state notice', async () => {
+  it.each(['accepted', 'rejected'])('makes %s candidates read-only and prevents every write event', async (teacherState) => {
     const wrapper = mount(TeacherAiCandidateReview, {
-      props: { draft: { ...warningE4Draft, teacher_state: 'accepted' }, validation: warningValidation, busy: false },
+      props: {
+        draft: { ...warningE4Draft, teacher_state: teacherState },
+        validation: warningValidation,
+        busy: false,
+        acceptedQuestionVersionId: teacherState === 'accepted' ? 'version-1' : null,
+      },
     })
 
-    expect(wrapper.get('[data-testid="accepted-notice"]').text()).toContain('已接受')
-    await wrapper.get('textarea[aria-label="题目提示"]').setValue('Edited question')
-    await wrapper.get('textarea[aria-label="评分规则 JSON"]').setValue('{\n  "accepted_answers": ["flood"]\n}')
-    await wrapper.get('input[aria-label="难度"]').setValue('0.7')
-    await wrapper.get('textarea[aria-label="阅读材料"]').setValue('Edited material')
-    await wrapper.get('[data-testid="save-revision"]').trigger('click')
+    expect(wrapper.get(`input[aria-label="知识点"]`).attributes('disabled')).toBeDefined()
+    expect(wrapper.get('textarea[aria-label="题目提示"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('select[aria-label="拒绝原因"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="save-revision"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="reject-candidate"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="accept-candidate"]').attributes('disabled')).toBeDefined()
 
-    expect(wrapper.emitted('save-revision')).toEqual([[
-      expect.objectContaining({
-        prompt: 'Edited question',
-        rule_json: { accepted_answers: ['flood'] },
-        difficulty: 0.7,
-        reading_material: 'Edited material',
-        objective_revision_id: 'objective-1',
-        question_type: 'E4',
-      }),
-    ]])
+    await wrapper.get('[data-testid="save-revision"]').trigger('click')
+    await wrapper.get('[data-testid="reject-candidate"]').trigger('click')
+    await wrapper.get('[data-testid="accept-candidate"]').trigger('click')
+
+    expect(wrapper.emitted('save-revision')).toBeUndefined()
+    expect(wrapper.emitted('reject')).toBeUndefined()
+    expect(wrapper.emitted('accept')).toBeUndefined()
+
+    if (teacherState === 'accepted') {
+      expect(wrapper.get('[data-testid="accepted-notice"]').text()).toContain('已创建题库草稿')
+      expect(wrapper.get('[data-testid="accepted-question-version-id"]').text()).toContain('version-1')
+      expect(wrapper.get('[data-testid="question-bank-link"]').attributes('href')).toBe('/teacher#questions')
+    } else {
+      expect(wrapper.get('[data-testid="rejected-notice"]').text()).toContain('已拒绝')
+    }
+  })
+
+  it.each([
+    ['blank', '   ', '选择“其他”时，请填写拒绝详情。'],
+    ['overlong', 'x'.repeat(501), '拒绝详情不能超过 500 个字符。'],
+  ])('validates %s other rejection detail before emitting', async (_caseName, detail, message) => {
+    const wrapper = mount(TeacherAiCandidateReview, {
+      props: { draft: warningE4Draft, validation: warningValidation, busy: false },
+    })
+
+    await wrapper.get('select[aria-label="拒绝原因"]').setValue('other')
+    await wrapper.get('textarea[aria-label="拒绝详情"]').setValue(detail)
+    await wrapper.get('[data-testid="reject-candidate"]').trigger('click')
+
+    expect(wrapper.get('[data-testid="reject-detail-error"]').text()).toBe(message)
+    expect(wrapper.emitted('reject')).toBeUndefined()
   })
 
   it('keeps malformed rule JSON visible and does not emit a revision', async () => {
@@ -218,11 +245,13 @@ describe('teacher AI review rendering', () => {
       props: { draft: warningE4Draft, validation: warningValidation, busy: false },
     })
 
-    await wrapper.get('select[aria-label="拒绝原因"]').setValue('unclear_wording')
+    await wrapper.get('select[aria-label="拒绝原因"]').setValue('other')
     await wrapper.get('textarea[aria-label="拒绝详情"]').setValue('Question wording is ambiguous.')
     await wrapper.setProps({ draft: { ...warningE4Draft, id: 'draft-2' } })
 
     expect((wrapper.get('select[aria-label="拒绝原因"]').element as HTMLSelectElement).value).toBe('incorrect_answer')
+    expect(wrapper.find('textarea[aria-label="拒绝详情"]').exists()).toBe(false)
+    await wrapper.get('select[aria-label="拒绝原因"]').setValue('other')
     expect((wrapper.get('textarea[aria-label="拒绝详情"]').element as HTMLTextAreaElement).value).toBe('')
   })
 
@@ -259,6 +288,52 @@ describe('teacher AI review rendering', () => {
 
     expect(wrapper.get('[data-testid="validation-finding"]').text()).toContain('UNSAFE_CONTENT')
     expect(wrapper.get('[data-testid="accept-candidate"]').attributes('disabled')).toBeDefined()
+  })
+
+  it.each(['accepted', 'rejected'])('enforces pending review again in workspace handlers for %s drafts', async (teacherState) => {
+    mocks.fetchAiGenerationDrafts.mockResolvedValue([{ ...warningE4Draft, teacher_state: teacherState }])
+    const wrapper = await mountWorkspace()
+    const review = wrapper.getComponent(TeacherAiCandidateReview)
+
+    review.vm.$emit('save-revision', warningE4Draft.candidate)
+    review.vm.$emit('reject', 'duplicate', '')
+    review.vm.$emit('accept', { confirmWarnings: true })
+    await flushPromises()
+
+    expect(mocks.saveAiCandidateRevision).not.toHaveBeenCalled()
+    expect(mocks.rejectAiCandidate).not.toHaveBeenCalled()
+    expect(mocks.acceptAiCandidate).not.toHaveBeenCalled()
+    expect(crypto.randomUUID).not.toHaveBeenCalled()
+  })
+
+  it('preserves the accepted QuestionVersion id through refresh and links to the question bank', async () => {
+    mocks.fetchAiGenerationDrafts
+      .mockResolvedValueOnce([warningE4Draft])
+      .mockResolvedValueOnce([{ ...warningE4Draft, teacher_state: 'accepted' }])
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('input[aria-label="确认 warning 后接受"]').setValue(true)
+    await wrapper.get('[data-testid="accept-candidate"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.acceptAiCandidate).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-testid="accepted-notice"]').text()).toContain('已创建题库草稿')
+    expect(wrapper.get('[data-testid="accepted-question-version-id"]').text()).toContain('version-1')
+    expect(wrapper.get('[data-testid="question-bank-link"]').attributes('href')).toBe('/teacher#questions')
+  })
+
+  it('maps rejection_detail_required to an owned validation message instead of a conflict', async () => {
+    mocks.rejectAiCandidate.mockRejectedValue({
+      statusCode: 409,
+      data: { detail: { code: 'rejection_detail_required' } },
+    })
+    const wrapper = await mountWorkspace()
+
+    wrapper.getComponent(TeacherAiCandidateReview).vm.$emit('reject', 'other', '')
+    await flushPromises()
+
+    expect(wrapper.get('[role="alert"]').text()).toBe('选择“其他”时，请填写拒绝详情。')
+    expect(wrapper.text()).not.toContain('候选题状态已变更')
   })
 
   it('reloads the selected draft after a revision conflict instead of retaining stale edits', async () => {

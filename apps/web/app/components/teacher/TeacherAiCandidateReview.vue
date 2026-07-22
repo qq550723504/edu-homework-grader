@@ -14,9 +14,11 @@ const props = withDefaults(defineProps<{
   draft: TeacherAiDraft
   validation?: TeacherAiValidationRun | null
   busy?: boolean
+  acceptedQuestionVersionId?: string | null
 }>(), {
   validation: null,
   busy: false,
+  acceptedQuestionVersionId: null,
 })
 
 const emit = defineEmits<{
@@ -29,8 +31,11 @@ const candidate = reactive(structuredClone(toRaw(props.draft.candidate)))
 const warningConfirmed = ref(false)
 const rejectReason = ref<TeacherAiRejectReason>('incorrect_answer')
 const rejectDetail = ref('')
+const rejectError = ref('')
 const saveError = ref('')
 const ruleJson = ref(formatRuleJson(candidate.rule_json))
+const accepted = computed(() => props.draft.teacher_state === 'accepted' || Boolean(props.acceptedQuestionVersionId))
+const writeDisabled = computed(() => props.busy || accepted.value || props.draft.teacher_state !== 'pending_review')
 
 const canAccept = computed(() => canAcceptCandidate({
   teacher_state: props.draft.teacher_state,
@@ -44,10 +49,16 @@ watch(() => props.draft, (draft) => {
   warningConfirmed.value = false
   rejectReason.value = 'incorrect_answer'
   rejectDetail.value = ''
+  rejectError.value = ''
   saveError.value = ''
 })
 
+watch([rejectReason, rejectDetail], () => {
+  rejectError.value = ''
+})
+
 function saveRevision() {
+  if (writeDisabled.value) return
   try {
     const updatedCandidate = candidateEditInput(props.draft.candidate, {
       prompt: candidate.prompt,
@@ -79,17 +90,35 @@ function parseRuleJson(value: string): Record<string, unknown> {
 }
 
 function rejectCandidate() {
-  emit('reject', rejectReason.value, rejectDetail.value)
+  if (writeDisabled.value) return
+  const detail = rejectReason.value === 'other' ? rejectDetail.value.trim() : ''
+  if (rejectReason.value === 'other' && !detail) {
+    rejectError.value = '选择“其他”时，请填写拒绝详情。'
+    return
+  }
+  if (detail.length > 500) {
+    rejectError.value = '拒绝详情不能超过 500 个字符。'
+    return
+  }
+  rejectError.value = ''
+  emit('reject', rejectReason.value, detail)
 }
 
 function acceptCandidate() {
-  if (canAccept.value) emit('accept', { confirmWarnings: warningConfirmed.value })
+  if (!writeDisabled.value && canAccept.value) emit('accept', { confirmWarnings: warningConfirmed.value })
 }
 </script>
 
 <template>
   <section aria-label="AI 候选题审核">
-    <p v-if="draft.teacher_state === 'accepted'" data-testid="accepted-notice" role="status">该候选题已接受。</p>
+    <div v-if="accepted" data-testid="accepted-notice" role="status">
+      <p>该候选题已接受，已创建题库草稿。</p>
+      <p v-if="acceptedQuestionVersionId">
+        QuestionVersion：<code data-testid="accepted-question-version-id">{{ acceptedQuestionVersionId }}</code>
+      </p>
+      <a data-testid="question-bank-link" href="/teacher#questions">前往题库工作台</a>
+    </div>
+    <p v-else-if="draft.teacher_state === 'rejected'" data-testid="rejected-notice" role="status">该候选题已拒绝。</p>
 
     <fieldset>
       <legend>候选题信息</legend>
@@ -103,14 +132,14 @@ function acceptCandidate() {
       <p>{{ candidate.reading_material }}</p>
     </section>
 
-    <label>题目提示<textarea v-model="candidate.prompt" aria-label="题目提示" /></label>
-    <label>评分规则 JSON<textarea v-model="ruleJson" aria-label="评分规则 JSON" /></label>
-    <label>解析<textarea v-model="candidate.explanation" aria-label="解析" /></label>
-    <label>知识点<input v-model="candidate.knowledge_point" aria-label="知识点"></label>
-    <label>难度<input v-model.number="candidate.difficulty" aria-label="难度" max="1" min="0" step="0.1" type="number"></label>
-    <label v-if="candidate.question_type === 'E4'">阅读材料<textarea v-model="candidate.reading_material" aria-label="阅读材料" /></label>
+    <label>题目提示<textarea v-model="candidate.prompt" :disabled="writeDisabled" aria-label="题目提示" /></label>
+    <label>评分规则 JSON<textarea v-model="ruleJson" :disabled="writeDisabled" aria-label="评分规则 JSON" /></label>
+    <label>解析<textarea v-model="candidate.explanation" :disabled="writeDisabled" aria-label="解析" /></label>
+    <label>知识点<input v-model="candidate.knowledge_point" :disabled="writeDisabled" aria-label="知识点"></label>
+    <label>难度<input v-model.number="candidate.difficulty" :disabled="writeDisabled" aria-label="难度" max="1" min="0" step="0.1" type="number"></label>
+    <label v-if="candidate.question_type === 'E4'">阅读材料<textarea v-model="candidate.reading_material" :disabled="writeDisabled" aria-label="阅读材料" /></label>
     <p v-if="saveError" role="alert">{{ saveError }}</p>
-    <button :disabled="busy" data-testid="save-revision" type="button" @click="saveRevision">保存修订</button>
+    <button :disabled="writeDisabled" data-testid="save-revision" type="button" @click="saveRevision">保存修订</button>
 
     <section v-if="validation" aria-label="校验结果">
       <p>校验状态：{{ validation.status }}</p>
@@ -124,12 +153,12 @@ function acceptCandidate() {
     </section>
 
     <label v-if="validation?.status === 'warning'">
-      <input v-model="warningConfirmed" aria-label="确认 warning 后接受" type="checkbox"> 我已阅读 warning
+      <input v-model="warningConfirmed" :disabled="writeDisabled" aria-label="确认 warning 后接受" type="checkbox"> 我已阅读 warning
     </label>
-    <button :disabled="busy || !canAccept" data-testid="accept-candidate" type="button" @click="acceptCandidate">接受并创建草稿</button>
+    <button :disabled="writeDisabled || !canAccept" data-testid="accept-candidate" type="button" @click="acceptCandidate">接受并创建草稿</button>
 
     <label>拒绝原因
-      <select v-model="rejectReason" aria-label="拒绝原因">
+      <select v-model="rejectReason" :disabled="writeDisabled" aria-label="拒绝原因">
         <option value="incorrect_answer">答案错误</option>
         <option value="out_of_scope">超纲</option>
         <option value="unclear_wording">表述不清</option>
@@ -138,7 +167,8 @@ function acceptCandidate() {
         <option value="other">其他</option>
       </select>
     </label>
-    <label>拒绝详情<textarea v-model="rejectDetail" aria-label="拒绝详情" /></label>
-    <button :disabled="busy" data-testid="reject-candidate" type="button" @click="rejectCandidate">拒绝候选题</button>
+    <label v-if="rejectReason === 'other'">拒绝详情<textarea v-model="rejectDetail" :disabled="writeDisabled" aria-label="拒绝详情" maxlength="500" /></label>
+    <p v-if="rejectError" data-testid="reject-detail-error" role="alert">{{ rejectError }}</p>
+    <button :disabled="writeDisabled" data-testid="reject-candidate" type="button" @click="rejectCandidate">拒绝候选题</button>
   </section>
 </template>
