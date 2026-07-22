@@ -31,7 +31,7 @@ The idempotency key is unique within a tenant. Retrying the same request returns
 
 `GenerationProvider.generate(request) -> GenerationResult` returns only a platform `GeneratedCandidateEnvelope` whose top-level object forbids unknown fields. Each candidate requires objective revision reference, question type, policy version, prompt, rule JSON, explanation, knowledge point, and difficulty declaration. M1/M2/E1–E4 must match existing `GradingPolicy` schemas.
 
-The OpenAI adapter uses Responses API structured output. It sends one bounded developer instruction that declares the immutable schema, then passes curriculum and teacher constraint data in separate data fields. It performs bounded retries for transient network/rate-limit errors and schema-invalid/underfilled responses. The fake provider returns deterministic envelopes for tests.
+The OpenAI adapter uses Responses API structured output. It sends one bounded developer instruction that declares the immutable schema, then passes curriculum and teacher constraint data in separate data fields. Because strict structured outputs require closed objects, the model-facing `rule_json` field is a JSON string; the adapter parses it back to an object before platform validation and never changes the platform envelope contract. It performs bounded retries for transient network/rate-limit errors and schema-invalid/underfilled responses. The fake provider returns deterministic envelopes for tests.
 
 ## Processing Flow
 

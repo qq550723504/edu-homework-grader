@@ -144,6 +144,72 @@ def test_openai_provider_sends_strict_reading_material_schema(
     assert "default" not in candidate["properties"]["reading_material"]
 
 
+def test_openai_provider_encodes_rule_json_as_a_string_for_strict_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outgoing = _capture_openai_request(monkeypatch)
+
+    candidate = outgoing["text"]["format"]["schema"]["$defs"]["GeneratedCandidate"]
+
+    assert candidate["properties"]["rule_json"] == {"type": "string"}
+
+
+def test_openai_provider_decodes_json_encoded_rule_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    objective_revision_id = uuid4()
+    output_text = json.dumps(
+        {
+            "candidates": [
+                {
+                    "objective_revision_id": str(objective_revision_id),
+                    "question_type": "M1",
+                    "policy_version": "1",
+                    "prompt": "What is 2 + 2?",
+                    "rule_json": json.dumps({"expected": 4, "tolerance": 0}),
+                    "explanation": "Add the two numbers.",
+                    "knowledge_point": "addition",
+                    "difficulty": 0.1,
+                    "reading_material": None,
+                }
+            ]
+        }
+    )
+
+    class FakeResponses:
+        def create(self, **_kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(output_text=output_text)
+
+    monkeypatch.setattr(
+        openai,
+        "OpenAI",
+        lambda **_kwargs: SimpleNamespace(responses=FakeResponses()),
+    )
+    provider = OpenAIResponsesProvider(
+        api_key="test-key",
+        model="gpt-test-2025-08-07",
+        base_url="https://api.openai.com",
+        allowed_hosts=frozenset({"api.openai.com"}),
+    )
+
+    result = provider.generate(
+        GenerationRequest(
+            objective_revision_id=objective_revision_id,
+            objective_text="Use whole numbers under 100.",
+            difficulty_min=0,
+            difficulty_max=1,
+            grade="Grade 5",
+            subject="mathematics",
+            question_types=["M1"],
+            requested_count=1,
+            policy_version="1",
+            prompt_version="generator-v1",
+        )
+    )
+
+    assert result.candidates[0].rule_json == {"expected": 4, "tolerance": 0}
+
+
 def test_openai_provider_instructs_conditional_reading_material_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
