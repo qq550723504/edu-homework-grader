@@ -1,22 +1,40 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from hashlib import sha256
+import json
 from typing import Annotated, Literal
 from uuid import UUID
 
-from edu_generator.contracts import ProviderFailure
+from edu_generator.contracts import GeneratedCandidate, ProviderFailure
 from edu_generator.openai_provider import OpenAIResponsesProvider
 from edu_generator.providers import FakeGenerationProvider, GenerationProvider
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..audit import append_audit_event
 from ..auth import CurrentPrincipal
 from ..db import get_session
 from ..dependencies import require_any_role
-from ..models import GeneratedQuestionDraft, GenerationJob, Role, User
+from ..models import (
+    GeneratedQuestionDraft,
+    GeneratedQuestionDraftRevision,
+    GeneratedQuestionReviewDecision,
+    GenerationJob,
+    GenerationValidationRun,
+    Role,
+    User,
+)
+from ..services.ai_question_review import (
+    ReviewAccessError,
+    ReviewConflictError,
+    ReviewStateError,
+    accept_review_draft,
+    create_review_revision,
+    reject_review_draft,
+)
 from ..services.generation import (
     GenerationJobRequest,
     GenerationServiceError,
@@ -24,6 +42,7 @@ from ..services.generation import (
     create_or_get_job,
     run_generation_job,
 )
+from ..services.grader import HttpGraderClient
 from ..settings import settings
 
 
@@ -46,6 +65,29 @@ class CreateGenerationJobRequest(BaseModel):
 
 class RegenerateDraftRequest(BaseModel):
     teacher_constraint: str | None = Field(default=None, max_length=1_000)
+
+
+class CreateReviewRevisionRequest(BaseModel):
+    expected_revision_number: int = Field(ge=1)
+    candidate: GeneratedCandidate
+
+
+class RejectReviewDraftRequest(BaseModel):
+    expected_revision_number: int = Field(ge=1)
+    reason: Literal[
+        "incorrect_answer",
+        "out_of_scope",
+        "unclear_wording",
+        "duplicate",
+        "unsuitable_for_students",
+        "other",
+    ]
+    detail: str | None = Field(default=None, max_length=500)
+
+
+class AcceptReviewDraftRequest(BaseModel):
+    expected_revision_number: int = Field(ge=1)
+    confirm_warnings: bool = False
 
 
 @router.post("/jobs", status_code=status.HTTP_201_CREATED)
@@ -100,13 +142,48 @@ def create_generation_job_route(
     return _job_payload(job)
 
 
+@router.get("/jobs")
+def list_generation_jobs_route(
+    principal: Annotated[CurrentPrincipal, Depends(require_any_role(Role.ADMIN, Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+    limit: int = Query(default=20, ge=1, le=100),
+    after: UUID | None = None,
+) -> dict[str, object]:
+    actor = _actor(session, principal)
+    statement = select(GenerationJob).where(GenerationJob.tenant_id == actor.tenant_id)
+    if actor.role is Role.TEACHER:
+        statement = statement.where(GenerationJob.teacher_user_id == actor.id)
+    if after is not None:
+        after_job = _authorized_job(session, job_id=after, actor=actor)
+        statement = statement.where(
+            or_(
+                GenerationJob.created_at < after_job.created_at,
+                and_(
+                    GenerationJob.created_at == after_job.created_at,
+                    GenerationJob.id < after_job.id,
+                ),
+            )
+        )
+    jobs = session.scalars(
+        statement.order_by(GenerationJob.created_at.desc(), GenerationJob.id.desc()).limit(
+            limit + 1
+        )
+    ).all()
+    items = jobs[:limit]
+    return {
+        "items": [_job_payload(job) for job in items],
+        "next_after": str(items[-1].id) if len(jobs) > limit else None,
+    }
+
+
 @router.get("/jobs/{job_id}")
 def get_generation_job_route(
     job_id: UUID,
     principal: Annotated[CurrentPrincipal, Depends(require_any_role(Role.ADMIN, Role.TEACHER))],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, object]:
-    return _job_payload(_tenant_job(session, job_id=job_id, principal=principal))
+    actor = _actor(session, principal)
+    return _job_payload(_authorized_job(session, job_id=job_id, actor=actor))
 
 
 @router.get("/jobs/{job_id}/questions")
@@ -117,7 +194,8 @@ def list_generated_questions_route(
     limit: int = Query(default=20, ge=1, le=100),
     after: UUID | None = None,
 ) -> dict[str, object]:
-    job = _tenant_job(session, job_id=job_id, principal=principal)
+    actor = _actor(session, principal)
+    job = _authorized_job(session, job_id=job_id, actor=actor)
     statement = select(GeneratedQuestionDraft).where(GeneratedQuestionDraft.job_id == job.id)
     if after is not None:
         after_draft = session.get(GeneratedQuestionDraft, after)
@@ -140,7 +218,8 @@ def cancel_generation_job_route(
     principal: Annotated[CurrentPrincipal, Depends(require_any_role(Role.ADMIN, Role.TEACHER))],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, object]:
-    job = _tenant_job(session, job_id=job_id, principal=principal)
+    actor = _actor(session, principal)
+    job = _authorized_job(session, job_id=job_id, actor=actor)
     try:
         cancel_generation_job(session, job=job)
         session.commit()
@@ -161,13 +240,7 @@ def regenerate_draft_route(
     if not idempotency_key:
         raise _api_error(status.HTTP_422_UNPROCESSABLE_CONTENT, "idempotency_key_required")
     actor = _actor(session, principal)
-    draft = session.scalar(
-        select(GeneratedQuestionDraft)
-        .join(GenerationJob)
-        .where(GeneratedQuestionDraft.id == draft_id, GenerationJob.tenant_id == actor.tenant_id)
-    )
-    if draft is None:
-        raise _api_error(status.HTTP_404_NOT_FOUND, "generation_draft_not_found")
+    draft = _authorized_draft(session, draft_id=draft_id, actor=actor)
     original = draft.job
     question_type = draft.candidate_json.get("question_type")
     if not isinstance(question_type, str):
@@ -215,6 +288,121 @@ def regenerate_draft_route(
     return _job_payload(job)
 
 
+@draft_router.post("/{draft_id}/revisions", status_code=status.HTTP_201_CREATED)
+def create_review_revision_route(
+    draft_id: UUID,
+    body: CreateReviewRevisionRequest,
+    principal: Annotated[CurrentPrincipal, Depends(require_any_role(Role.ADMIN, Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict[str, object]:
+    key = _required_idempotency_key(idempotency_key)
+    actor = _actor(session, principal)
+    draft = _authorized_draft(session, draft_id=draft_id, actor=actor)
+    digest = _request_digest("revision", body)
+    replay = _replayed_revision(
+        session,
+        draft=draft,
+        idempotency_key=key,
+        request_digest=digest,
+    )
+    if replay is not None:
+        return replay
+    try:
+        result = create_review_revision(
+            session,
+            draft,
+            actor,
+            body.expected_revision_number,
+            body.candidate.model_dump(mode="json"),
+            HttpGraderClient(settings.grader_base_url),
+            idempotency_key=key,
+            request_digest=digest,
+        )
+        session.commit()
+    except (ReviewConflictError, ReviewStateError, ReviewAccessError) as exc:
+        session.rollback()
+        raise _review_error(exc) from exc
+    return _revision_payload(result.revision, result.validation_run)
+
+
+@draft_router.post("/{draft_id}/reject")
+def reject_review_draft_route(
+    draft_id: UUID,
+    body: RejectReviewDraftRequest,
+    principal: Annotated[CurrentPrincipal, Depends(require_any_role(Role.ADMIN, Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict[str, object]:
+    key = _required_idempotency_key(idempotency_key)
+    actor = _actor(session, principal)
+    draft = _authorized_draft(session, draft_id=draft_id, actor=actor)
+    digest = _request_digest("reject", body)
+    replay = _replayed_decision(
+        session,
+        draft=draft,
+        action="reject",
+        idempotency_key=key,
+        request_digest=digest,
+    )
+    if replay is not None:
+        return replay
+    try:
+        decision = reject_review_draft(
+            session,
+            draft,
+            actor,
+            body.expected_revision_number,
+            body.reason,
+            body.detail,
+            idempotency_key=key,
+            request_digest=digest,
+        )
+        session.commit()
+    except (ReviewConflictError, ReviewStateError, ReviewAccessError) as exc:
+        session.rollback()
+        raise _review_error(exc) from exc
+    return _decision_payload(decision)
+
+
+@draft_router.post("/{draft_id}/accept")
+def accept_review_draft_route(
+    draft_id: UUID,
+    body: AcceptReviewDraftRequest,
+    principal: Annotated[CurrentPrincipal, Depends(require_any_role(Role.ADMIN, Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict[str, object]:
+    key = _required_idempotency_key(idempotency_key)
+    actor = _actor(session, principal)
+    draft = _authorized_draft(session, draft_id=draft_id, actor=actor)
+    digest = _request_digest("accept", body)
+    replay = _replayed_decision(
+        session,
+        draft=draft,
+        action="accept",
+        idempotency_key=key,
+        request_digest=digest,
+    )
+    if replay is not None:
+        return replay
+    try:
+        result = accept_review_draft(
+            session,
+            draft,
+            actor,
+            body.expected_revision_number,
+            body.confirm_warnings,
+            idempotency_key=key,
+            request_digest=digest,
+        )
+        session.commit()
+    except (ReviewConflictError, ReviewStateError, ReviewAccessError) as exc:
+        session.rollback()
+        raise _review_error(exc) from exc
+    return _decision_payload(result.decision)
+
+
 def _generation_provider() -> GenerationProvider:
     if settings.generation_provider == "fake":
         return FakeGenerationProvider(seed=0)
@@ -240,27 +428,132 @@ def _actor(session: Session, principal: CurrentPrincipal) -> User:
     return actor
 
 
-def _tenant_job(session: Session, *, job_id: UUID, principal: CurrentPrincipal) -> GenerationJob:
-    job = session.scalar(
-        select(GenerationJob).where(
-            GenerationJob.id == job_id,
-            GenerationJob.tenant_id == UUID(principal.tenant_id),
-        )
+def _authorized_job(session: Session, *, job_id: UUID, actor: User) -> GenerationJob:
+    statement = select(GenerationJob).where(
+        GenerationJob.id == job_id,
+        GenerationJob.tenant_id == actor.tenant_id,
     )
+    if actor.role is Role.TEACHER:
+        statement = statement.where(GenerationJob.teacher_user_id == actor.id)
+    job = session.scalar(statement)
     if job is None:
         raise _api_error(status.HTTP_404_NOT_FOUND, "generation_job_not_found")
     return job
 
 
+def _authorized_draft(session: Session, *, draft_id: UUID, actor: User) -> GeneratedQuestionDraft:
+    statement = (
+        select(GeneratedQuestionDraft)
+        .join(GenerationJob, GeneratedQuestionDraft.job_id == GenerationJob.id)
+        .where(
+            GeneratedQuestionDraft.id == draft_id,
+            GenerationJob.tenant_id == actor.tenant_id,
+        )
+    )
+    if actor.role is Role.TEACHER:
+        statement = statement.where(GenerationJob.teacher_user_id == actor.id)
+    draft = session.scalar(statement)
+    if draft is None:
+        raise _api_error(status.HTTP_404_NOT_FOUND, "generation_draft_not_found")
+    return draft
+
+
 def _find_job_by_idempotency(
     session: Session, *, actor: User, idempotency_key: str
 ) -> GenerationJob | None:
-    return session.scalar(
+    job = session.scalar(
         select(GenerationJob).where(
             GenerationJob.tenant_id == actor.tenant_id,
             GenerationJob.idempotency_key == idempotency_key,
         )
     )
+    if job is not None and job.teacher_user_id != actor.id:
+        raise _api_error(status.HTTP_409_CONFLICT, "idempotency_key_conflict")
+    return job
+
+
+def _required_idempotency_key(value: str | None) -> str:
+    if value is None or not value.strip() or len(value) > 128:
+        raise _api_error(status.HTTP_422_UNPROCESSABLE_CONTENT, "idempotency_key_required")
+    return value
+
+
+def _request_digest(action: str, body: BaseModel) -> str:
+    serialized = json.dumps(
+        {"action": action, "body": body.model_dump(mode="json")},
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return sha256(serialized.encode()).hexdigest()
+
+
+def _replayed_revision(
+    session: Session,
+    *,
+    draft: GeneratedQuestionDraft,
+    idempotency_key: str,
+    request_digest: str,
+) -> dict[str, object] | None:
+    conflicting_decision = session.scalar(
+        select(GeneratedQuestionReviewDecision).where(
+            GeneratedQuestionReviewDecision.generated_question_draft_id == draft.id,
+            GeneratedQuestionReviewDecision.idempotency_key == idempotency_key,
+        )
+    )
+    if conflicting_decision is not None:
+        raise _api_error(status.HTTP_409_CONFLICT, "idempotency_key_conflict")
+    revision = session.scalar(
+        select(GeneratedQuestionDraftRevision).where(
+            GeneratedQuestionDraftRevision.generated_question_draft_id == draft.id,
+            GeneratedQuestionDraftRevision.idempotency_key == idempotency_key,
+        )
+    )
+    if revision is None:
+        return None
+    if revision.request_digest != request_digest:
+        raise _api_error(status.HTTP_409_CONFLICT, "idempotency_key_conflict")
+    validation_run = session.scalar(
+        select(GenerationValidationRun)
+        .where(
+            GenerationValidationRun.generated_question_draft_id == draft.id,
+            GenerationValidationRun.draft_revision_id == revision.id,
+        )
+        .order_by(GenerationValidationRun.run_number.desc())
+        .limit(1)
+    )
+    if validation_run is None:
+        raise _api_error(status.HTTP_409_CONFLICT, "idempotency_replay_unavailable")
+    return _revision_payload(revision, validation_run)
+
+
+def _replayed_decision(
+    session: Session,
+    *,
+    draft: GeneratedQuestionDraft,
+    action: str,
+    idempotency_key: str,
+    request_digest: str,
+) -> dict[str, object] | None:
+    conflicting_revision = session.scalar(
+        select(GeneratedQuestionDraftRevision).where(
+            GeneratedQuestionDraftRevision.generated_question_draft_id == draft.id,
+            GeneratedQuestionDraftRevision.idempotency_key == idempotency_key,
+        )
+    )
+    if conflicting_revision is not None:
+        raise _api_error(status.HTTP_409_CONFLICT, "idempotency_key_conflict")
+    decision = session.scalar(
+        select(GeneratedQuestionReviewDecision).where(
+            GeneratedQuestionReviewDecision.generated_question_draft_id == draft.id,
+            GeneratedQuestionReviewDecision.idempotency_key == idempotency_key,
+        )
+    )
+    if decision is None:
+        return None
+    if decision.action != action or decision.request_digest != request_digest:
+        raise _api_error(status.HTTP_409_CONFLICT, "idempotency_key_conflict")
+    return _decision_payload(decision)
 
 
 def _enforce_generation_quota(session: Session, *, actor: User, requested_count: int) -> None:
@@ -299,6 +592,44 @@ def _draft_payload(draft: GeneratedQuestionDraft) -> dict[str, object]:
         "candidate": draft.candidate_json,
         "validation_errors": draft.validation_errors_json or [],
     }
+
+
+def _revision_payload(
+    revision: GeneratedQuestionDraftRevision,
+    validation_run: GenerationValidationRun,
+) -> dict[str, object]:
+    return {
+        "draft_id": str(revision.generated_question_draft_id),
+        "revision_number": revision.revision_number,
+        "validation_run": _public_validation_run_payload(validation_run),
+    }
+
+
+def _decision_payload(decision: GeneratedQuestionReviewDecision) -> dict[str, object]:
+    return {
+        "draft_id": str(decision.generated_question_draft_id),
+        "action": decision.action,
+        "revision_number": decision.draft_revision.revision_number,
+        "validation_run": _public_validation_run_payload(decision.validation_run),
+        "accepted_question_version_id": (
+            str(decision.accepted_question_version_id)
+            if decision.accepted_question_version_id is not None
+            else None
+        ),
+    }
+
+
+def _public_validation_run_payload(run: GenerationValidationRun) -> dict[str, object]:
+    # Imported lazily to keep the authorization dependency one-way while sharing one safe projection.
+    from .ai_question_validation import _run_payload
+
+    return _run_payload(run)
+
+
+def _review_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, ReviewAccessError):
+        return _api_error(status.HTTP_404_NOT_FOUND, "generation_draft_not_found")
+    return _api_error(status.HTTP_409_CONFLICT, str(exc))
 
 
 def _api_error(status_code: int, code: str) -> HTTPException:

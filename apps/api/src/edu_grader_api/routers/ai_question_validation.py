@@ -12,13 +12,11 @@ from ..auth import CurrentPrincipal
 from ..db import get_session
 from ..dependencies import require_any_role
 from ..models import (
-    GeneratedQuestionDraft,
     GeneratedQuestionDraftRevision,
-    GenerationJob,
     GenerationValidationRun,
     Role,
-    User,
 )
+from .ai_question_generation import _actor, _authorized_draft, _authorized_job
 from ..services.grader import HttpGraderClient
 from ..services.question_verification import run_candidate_verification
 from ..settings import settings
@@ -55,7 +53,7 @@ def create_validation_run_route(
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, object]:
     actor = _actor(session, principal)
-    draft = _tenant_draft(session, draft_id=draft_id, tenant_id=actor.tenant_id)
+    draft = _authorized_draft(session, draft_id=draft_id, actor=actor)
     revision = session.get(GeneratedQuestionDraftRevision, draft.current_revision_id)
     if revision is None or revision.generated_question_draft_id != draft.id:
         raise RuntimeError("current candidate revision is unavailable")
@@ -90,7 +88,7 @@ def list_validation_runs_route(
     limit: int = Query(default=20, ge=1, le=100),
 ) -> dict[str, object]:
     actor = _actor(session, principal)
-    draft = _tenant_draft(session, draft_id=draft_id, tenant_id=actor.tenant_id)
+    draft = _authorized_draft(session, draft_id=draft_id, actor=actor)
     runs = session.scalars(
         select(GenerationValidationRun)
         .where(GenerationValidationRun.generated_question_draft_id == draft.id)
@@ -107,32 +105,11 @@ def get_validation_run_route(
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, object]:
     actor = _actor(session, principal)
-    run = session.scalar(
-        select(GenerationValidationRun)
-        .join(GenerationJob, GenerationValidationRun.generation_job_id == GenerationJob.id)
-        .where(GenerationValidationRun.id == run_id, GenerationJob.tenant_id == actor.tenant_id)
-    )
+    run = session.get(GenerationValidationRun, run_id)
     if run is None:
         raise _api_error(status.HTTP_404_NOT_FOUND, "validation_run_not_found")
+    _authorized_job(session, job_id=run.generation_job_id, actor=actor)
     return _run_payload(run)
-
-
-def _actor(session: Session, principal: CurrentPrincipal) -> User:
-    actor = session.get(User, UUID(principal.user_id))
-    if actor is None:
-        raise _api_error(status.HTTP_404_NOT_FOUND, "validation_actor_not_found")
-    return actor
-
-
-def _tenant_draft(session: Session, *, draft_id: UUID, tenant_id: UUID) -> GeneratedQuestionDraft:
-    draft = session.scalar(
-        select(GeneratedQuestionDraft)
-        .join(GenerationJob, GeneratedQuestionDraft.job_id == GenerationJob.id)
-        .where(GeneratedQuestionDraft.id == draft_id, GenerationJob.tenant_id == tenant_id)
-    )
-    if draft is None:
-        raise _api_error(status.HTTP_404_NOT_FOUND, "generation_draft_not_found")
-    return draft
 
 
 def _run_payload(run: GenerationValidationRun) -> dict[str, object]:
