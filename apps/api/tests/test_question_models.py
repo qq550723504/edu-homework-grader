@@ -1,5 +1,8 @@
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
+
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import Text, create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -14,6 +17,44 @@ from edu_grader_api.models import (
     VersionStatus,
 )
 from edu_grader_api.services.question_fingerprints import fingerprint_prompt
+
+
+def test_question_version_reading_material_is_nullable_unbounded_text() -> None:
+    column = QuestionVersion.__table__.c.reading_material
+
+    assert column.nullable is True
+    assert isinstance(column.type, Text)
+
+
+def test_reading_material_migration_follows_ai_review_migration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "0020_question_version_reading_material.py"
+    )
+    spec = spec_from_file_location("migration_0020_reading_material", migration_path)
+    assert spec is not None and spec.loader is not None
+    migration = module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    added: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        migration.op,
+        "add_column",
+        lambda table_name, column: added.append((table_name, column)),
+    )
+
+    migration.upgrade()
+
+    assert migration.down_revision == "0019_ai_generated_question_reviews"
+    assert len(added) == 1
+    table_name, column = added[0]
+    assert table_name == "question_versions"
+    assert column.name == "reading_material"
+    assert column.nullable is True
+    assert isinstance(column.type, Text)
 
 
 def test_question_version_number_is_unique_per_question() -> None:

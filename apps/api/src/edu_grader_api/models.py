@@ -16,6 +16,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     text,
 )
@@ -1022,6 +1023,7 @@ class QuestionVersion(Base):
         nullable=False,
     )
     prompt: Mapped[str] = mapped_column(String(10_000))
+    reading_material: Mapped[str | None] = mapped_column(Text)
     fingerprint_version: Mapped[str] = mapped_column(String(100), nullable=False)
     exact_prompt_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     normalized_prompt_hash: Mapped[str] = mapped_column(String(64), nullable=False)

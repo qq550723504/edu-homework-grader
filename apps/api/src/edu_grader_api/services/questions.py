@@ -110,11 +110,8 @@ def create_question(
         question_id=question.id,
         version_number=1,
         status=VersionStatus.DRAFT,
-        prompt=_stored_question_prompt(
-            question_type=question_type,
-            prompt=prompt,
-            reading_material=reading_material,
-        ),
+        prompt=prompt,
+        reading_material=reading_material,
         question_type=question_type,
         grading_policy_id=policy.id,
         rule_json=rule_json,
@@ -131,14 +128,6 @@ def create_question(
         metadata={"version_number": 1},
     )
     return version
-
-
-def _stored_question_prompt(
-    *, question_type: str, prompt: str, reading_material: str | None
-) -> str:
-    if question_type != "E4" or reading_material is None:
-        return prompt
-    return f"{reading_material.strip()}\n\n{prompt.strip()}"
 
 
 def create_successor_draft(
@@ -163,6 +152,7 @@ def create_successor_draft(
         version_number=(latest_version_number or 0) + 1,
         status=VersionStatus.DRAFT,
         prompt=published_version.prompt,
+        reading_material=published_version.reading_material,
         question_type=published_version.question_type,
         grading_policy_id=published_version.grading_policy_id,
         rule_json=published_version.rule_json.copy(),

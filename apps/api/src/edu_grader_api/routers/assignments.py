@@ -395,6 +395,7 @@ def get_student_assignment_route(
                 "id": str(item.id),
                 "question_version_id": str(item.question_version_id),
                 "prompt": item.question_version.prompt,
+                "reading_material": item.question_version.reading_material,
                 "position": item.position,
                 "input": _item_input(item),
                 "answer": answers[item.id].answer_json if item.id in answers else None,

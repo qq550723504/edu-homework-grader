@@ -7,7 +7,6 @@ import pytest
 from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.orm import Session
 
-from edu_grader_api.auth import CurrentPrincipal
 from edu_grader_api.models import (
     AuditLog,
     Base,
@@ -34,6 +33,7 @@ from edu_grader_api.models import (
     ValidationRunStatus,
     VersionStatus,
 )
+from edu_grader_api.services.question_fingerprints import fingerprint_prompt
 from edu_grader_api.services.ai_question_review import (
     ReviewAccessError,
     ReviewConflictError,
@@ -43,7 +43,6 @@ from edu_grader_api.services.ai_question_review import (
     reject_review_draft,
 )
 from edu_grader_api.services.questions import GradeResult
-from edu_grader_api.routers.questions import list_question_versions_route
 
 
 class PassingGrader:
@@ -84,8 +83,12 @@ def session() -> Session:
         yield session
 
 
-@pytest.fixture
-def review_draft(session: Session) -> tuple[GeneratedQuestionDraft, User]:
+def _make_review_draft(
+    session: Session,
+    *,
+    question_type: str = "M1",
+    prompt: str = "What is 2 + 2?",
+) -> tuple[GeneratedQuestionDraft, User]:
     tenant = Tenant(slug=f"pilot-{uuid4()}", name="Pilot")
     actor = User(
         tenant=tenant,
@@ -128,7 +131,7 @@ def review_draft(session: Session) -> tuple[GeneratedQuestionDraft, User]:
         revision_number=1,
         text="Use whole numbers under 100.",
         source_locator="section 1",
-        allowed_question_types=["M1"],
+        allowed_question_types=[question_type],
         difficulty_min=0,
         difficulty_max=1,
         activity_type=CurriculumActivityType.SCORED_QUESTION,
@@ -143,7 +146,7 @@ def review_draft(session: Session) -> tuple[GeneratedQuestionDraft, User]:
         curriculum_objective_revision_id=objective_revision.id,
         grade="Grade 5",
         subject="mathematics",
-        distribution_json={"question_types": ["M1"]},
+        distribution_json={"question_types": [question_type]},
         idempotency_key=str(uuid4()),
         status=GenerationJobStatus.READY_FOR_REVIEW,
         requested_count=1,
@@ -160,16 +163,38 @@ def review_draft(session: Session) -> tuple[GeneratedQuestionDraft, User]:
     )
     session.add(attempt)
     session.flush()
-    candidate = {
-        "objective_revision_id": str(objective_revision.id),
-        "question_type": "M1",
-        "policy_version": "1",
-        "prompt": "What is 2 + 2?",
-        "rule_json": {"expected": 4, "tolerance": 0},
-        "explanation": "Add the two whole numbers.",
-        "knowledge_point": "whole-number addition",
-        "difficulty": 0.2,
-    }
+    if question_type == "E4":
+        candidate = {
+            "objective_revision_id": str(objective_revision.id),
+            "question_type": "E4",
+            "policy_version": "2",
+            "prompt": "Why did the students arrive late?",
+            "reading_material": ("Because the bridge was closed, the students arrived late."),
+            "rule_json": {
+                "scoring_points": [
+                    {
+                        "id": "cause",
+                        "evidence_phrases": ["because the bridge was closed"],
+                        "score": 1,
+                    }
+                ],
+                "max_score": 1,
+            },
+            "explanation": "Identify the cause from the passage.",
+            "knowledge_point": "reading comprehension",
+            "difficulty": 0.4,
+        }
+    else:
+        candidate = {
+            "objective_revision_id": str(objective_revision.id),
+            "question_type": "M1",
+            "policy_version": "1",
+            "prompt": prompt,
+            "rule_json": {"expected": 4, "tolerance": 0},
+            "explanation": "Add the two whole numbers.",
+            "knowledge_point": "whole-number addition",
+            "difficulty": 0.2,
+        }
     draft = GeneratedQuestionDraft(
         job_id=job.id,
         generation_attempt_id=attempt.id,
@@ -191,6 +216,16 @@ def review_draft(session: Session) -> tuple[GeneratedQuestionDraft, User]:
     )
     session.flush()
     return draft, actor
+
+
+@pytest.fixture
+def review_draft(session: Session) -> tuple[GeneratedQuestionDraft, User]:
+    return _make_review_draft(session)
+
+
+@pytest.fixture
+def e4_review_draft(session: Session) -> tuple[GeneratedQuestionDraft, User]:
+    return _make_review_draft(session, question_type="E4")
 
 
 def _add_validation_run(
@@ -218,21 +253,6 @@ def _add_validation_run(
     session.add(run)
     session.flush()
     return run
-
-
-def _replace_current_candidate(
-    session: Session,
-    draft: GeneratedQuestionDraft,
-    candidate: dict[str, object],
-) -> GeneratedQuestionDraftRevision:
-    revision = session.get(GeneratedQuestionDraftRevision, draft.current_revision_id)
-    assert revision is not None
-    draft.candidate_json = candidate
-    revision.candidate_json = candidate
-    draft.content_hash = "e" * 64
-    revision.content_hash = draft.content_hash
-    session.flush()
-    return revision
 
 
 def test_create_revision_is_append_only_and_validates_the_new_revision(
@@ -366,11 +386,10 @@ def test_warning_confirmation_creates_exactly_one_draft(
 
 
 def test_accept_preserves_non_e4_prompt_byte_for_byte(
-    session: Session, review_draft: tuple[GeneratedQuestionDraft, User]
+    session: Session,
 ) -> None:
-    draft, actor = review_draft
     prompt = "  What is 2 + 2?\n"
-    _replace_current_candidate(session, draft, {**draft.candidate_json, "prompt": prompt})
+    draft, actor = _make_review_draft(session, prompt=prompt)
     _add_validation_run(session, draft, ValidationRunStatus.PASSED)
 
     result = accept_review_draft(session, draft, actor, 1, confirm_warnings=False)
@@ -378,55 +397,23 @@ def test_accept_preserves_non_e4_prompt_byte_for_byte(
     assert result.question_version.prompt == prompt
 
 
-def test_accept_e4_projects_reading_material_into_question_version_and_visible_payload(
-    session: Session, review_draft: tuple[GeneratedQuestionDraft, User]
+def test_accept_e4_persists_reading_material_separately_without_changing_prompt_fingerprint(
+    session: Session, e4_review_draft: tuple[GeneratedQuestionDraft, User]
 ) -> None:
-    draft, actor = review_draft
-    objective_revision_id = draft.candidate_json["objective_revision_id"]
-    candidate = {
-        "objective_revision_id": objective_revision_id,
-        "question_type": "E4",
-        "policy_version": "2",
-        "prompt": "  Why did the students arrive late?  ",
-        "reading_material": "  Because the bridge was closed, the students arrived late.\n  ",
-        "rule_json": {
-            "scoring_points": [
-                {
-                    "id": "cause",
-                    "evidence_phrases": ["because the bridge was closed"],
-                    "score": 1,
-                }
-            ],
-            "max_score": 1,
-        },
-        "explanation": "Identify the cause from the passage.",
-        "knowledge_point": "reading comprehension",
-        "difficulty": 0.4,
-    }
-    source_revision = _replace_current_candidate(session, draft, candidate)
+    draft, actor = e4_review_draft
+    source_revision = session.get(GeneratedQuestionDraftRevision, draft.current_revision_id)
+    assert source_revision is not None
     _add_validation_run(session, draft, ValidationRunStatus.PASSED)
 
     result = accept_review_draft(session, draft, actor, 1, confirm_warnings=False)
-    expected_prompt = (
-        "Because the bridge was closed, the students arrived late."
-        "\n\nWhy did the students arrive late?"
-    )
-    visible = list_question_versions_route(
-        CurrentPrincipal(
-            user_id=str(actor.id),
-            tenant_id=str(actor.tenant_id),
-            role=Role.TEACHER,
-            school_id=None,
-            display_name=actor.display_name,
-        ),
-        session,
-        query=None,
-        question_type="E4",
-        status=VersionStatus.DRAFT,
-    )
+    expected_fingerprint = fingerprint_prompt("Why did the students arrive late?")
 
-    assert result.question_version.prompt == expected_prompt
-    assert visible["question_versions"][0]["prompt"] == expected_prompt
+    assert result.question_version.prompt == "Why did the students arrive late?"
+    assert result.question_version.reading_material == (
+        "Because the bridge was closed, the students arrived late."
+    )
+    assert result.question_version.exact_prompt_hash == expected_fingerprint.exact_hash
+    assert result.question_version.normalized_prompt_hash == expected_fingerprint.normalized_hash
     assert result.decision.draft_revision_id == source_revision.id
 
 

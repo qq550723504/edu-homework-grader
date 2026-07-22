@@ -460,6 +460,27 @@ def test_enrolled_student_lists_pending_and_opens_frozen_assignment(
     assert detail.status_code == 200
     assert detail.json()["items"][0]["question_version_id"] == str(published.id)
     assert detail.json()["items"][0]["prompt"] == "What is 2 + 3?"
+    assert detail.json()["items"][0]["reading_material"] is None
+
+
+def test_student_assignment_projects_e4_reading_material_separately(
+    client: TestClient, session: Session
+) -> None:
+    student, _, assignment, _, published = published_assignment_for_student(session)
+    published.question_type = "E4"
+    published.prompt = "Why did the students arrive late?"
+    published.reading_material = "Because the bridge was closed, the students arrived late."
+    session.commit()
+
+    detail = client.get(
+        f"/v1/student/assignments/{assignment.id}", headers=authorize(client, student)
+    )
+
+    assert detail.status_code == 200
+    assert detail.json()["items"][0]["prompt"] == "Why did the students arrive late?"
+    assert detail.json()["items"][0]["reading_material"] == (
+        "Because the bridge was closed, the students arrived late."
+    )
 
 
 def test_submitted_unpublished_assignment_remains_pending_review(
