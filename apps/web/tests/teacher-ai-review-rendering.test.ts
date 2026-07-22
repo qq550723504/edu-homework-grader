@@ -112,4 +112,29 @@ describe('teacher AI review rendering', () => {
       }),
     ]])
   })
+
+  it('keeps malformed rule JSON visible and does not emit a revision', async () => {
+    const wrapper = mount(TeacherAiCandidateReview, {
+      props: { draft: warningE4Draft, validation: warningValidation, busy: false },
+    })
+
+    await wrapper.get('textarea[aria-label="评分规则 JSON"]').setValue('{not valid JSON')
+    await wrapper.get('[data-testid="save-revision"]').trigger('click')
+
+    expect(wrapper.get('[role="alert"]').text()).toContain('有效的 JSON 对象')
+    expect(wrapper.emitted('save-revision')).toBeUndefined()
+  })
+
+  it('resets rejection controls when the selected draft changes', async () => {
+    const wrapper = mount(TeacherAiCandidateReview, {
+      props: { draft: warningE4Draft, validation: warningValidation, busy: false },
+    })
+
+    await wrapper.get('select[aria-label="拒绝原因"]').setValue('unclear_wording')
+    await wrapper.get('textarea[aria-label="拒绝详情"]').setValue('Question wording is ambiguous.')
+    await wrapper.setProps({ draft: { ...warningE4Draft, id: 'draft-2' } })
+
+    expect((wrapper.get('select[aria-label="拒绝原因"]').element as HTMLSelectElement).value).toBe('incorrect_answer')
+    expect((wrapper.get('textarea[aria-label="拒绝详情"]').element as HTMLTextAreaElement).value).toBe('')
+  })
 })

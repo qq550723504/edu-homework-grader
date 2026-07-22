@@ -30,20 +30,7 @@ const warningConfirmed = ref(false)
 const rejectReason = ref<TeacherAiRejectReason>('incorrect_answer')
 const rejectDetail = ref('')
 const saveError = ref('')
-
-const ruleJson = computed({
-  get: () => JSON.stringify(candidate.rule_json, null, 2),
-  set: (value: string) => {
-    try {
-      const parsed: unknown = JSON.parse(value)
-      if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error()
-      candidate.rule_json = parsed as Record<string, unknown>
-      saveError.value = ''
-    } catch {
-      saveError.value = '评分规则必须是有效的 JSON 对象'
-    }
-  },
-})
+const ruleJson = ref(formatRuleJson(candidate.rule_json))
 
 const canAccept = computed(() => canAcceptCandidate({
   teacher_state: props.draft.teacher_state,
@@ -53,7 +40,9 @@ const canAccept = computed(() => canAcceptCandidate({
 
 watch(() => props.draft, (draft) => {
   Object.assign(candidate, structuredClone(toRaw(draft.candidate)))
+  ruleJson.value = formatRuleJson(candidate.rule_json)
   warningConfirmed.value = false
+  rejectReason.value = 'incorrect_answer'
   rejectDetail.value = ''
   saveError.value = ''
 })
@@ -62,7 +51,7 @@ function saveRevision() {
   try {
     const updatedCandidate = candidateEditInput(props.draft.candidate, {
       prompt: candidate.prompt,
-      rule_json: candidate.rule_json,
+      rule_json: parseRuleJson(ruleJson.value),
       explanation: candidate.explanation,
       knowledge_point: candidate.knowledge_point,
       difficulty: candidate.difficulty,
@@ -72,6 +61,20 @@ function saveRevision() {
     emit('save-revision', updatedCandidate)
   } catch (error) {
     saveError.value = error instanceof Error ? error.message : '无法保存修订'
+  }
+}
+
+function formatRuleJson(value: Record<string, unknown>): string {
+  return JSON.stringify(value, null, 2)
+}
+
+function parseRuleJson(value: string): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(value)
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error()
+    return parsed as Record<string, unknown>
+  } catch {
+    throw new Error('评分规则必须是有效的 JSON 对象')
   }
 }
 
