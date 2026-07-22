@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,6 +20,7 @@ from edu_grader_api.models import (
     CurriculumProfileStatus,
     CurriculumRevisionStatus,
     CurriculumSourceRecord,
+    GenerationJob,
     QuestionVersion,
     Role,
     Tenant,
@@ -26,6 +28,7 @@ from edu_grader_api.models import (
 )
 from edu_grader_api.settings import settings
 import edu_grader_api.routers.ai_question_validation as validation_router
+from edu_generator.prompt_templates import resolve_prompt_template
 
 
 ISSUER = "http://localhost:8080/realms/edu-grader"
@@ -178,6 +181,48 @@ def test_teacher_job_request_is_idempotent_and_never_publishes(
     assert questions.status_code == 200
     assert questions.json()["items"][0]["teacher_state"] == "pending_review"
     assert session.scalars(select(QuestionVersion)).all() == []
+
+
+def test_generation_job_and_draft_payloads_do_not_expose_system_prompt(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    headers = authorize(client, teacher) | {"Idempotency-Key": "prompt-not-exposed"}
+    teacher_constraint = "teacher-constraint-secret"
+    created = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=headers,
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "grade": "Grade 5",
+            "subject": "mathematics",
+            "question_types": ["M1"],
+            "requested_count": 1,
+            "policy_catalog_version": "2026.07",
+            "prompt_version": "generator-v1",
+            "teacher_constraint": teacher_constraint,
+        },
+    )
+    job = client.get(f"/v1/ai-question-generation/jobs/{created.json()['id']}", headers=headers)
+    drafts = client.get(
+        f"/v1/ai-question-generation/jobs/{created.json()['id']}/questions", headers=headers
+    )
+    system_instructions = resolve_prompt_template("generator-v1", ["M1"]).system_instructions
+
+    assert created.status_code == 201
+    assert job.status_code == 200
+    assert drafts.status_code == 200
+    assert system_instructions not in str(created.json())
+    assert system_instructions not in str(job.json())
+    assert system_instructions not in str(drafts.json())
+    assert teacher_constraint not in str(created.json())
+    assert teacher_constraint not in str(job.json())
+    assert teacher_constraint not in str(drafts.json())
+    persisted_job = session.scalar(
+        select(GenerationJob).where(GenerationJob.id == UUID(created.json()["id"]))
+    )
+    assert persisted_job is not None
+    assert teacher_constraint not in str(persisted_job.attempts[0].request_summary)
 
 
 def test_teacher_question_list_returns_e4_reading_material(

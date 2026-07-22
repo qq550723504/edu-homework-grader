@@ -1,10 +1,13 @@
+from types import MappingProxyType
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+import edu_generator.prompt_templates as prompt_templates
 from edu_generator.contracts import GeneratedCandidateEnvelope, GenerationRequest, ProviderFailure
+from edu_generator.prompt_templates import PromptTemplate, resolve_prompt_template
 from edu_generator.providers import FakeGenerationProvider
 from edu_grader_api.models import (
     Base,
@@ -16,6 +19,7 @@ from edu_grader_api.models import (
     CurriculumProfileStatus,
     CurriculumRevisionStatus,
     CurriculumSourceRecord,
+    GenerationJob,
     GenerationJobStatus,
     Role,
     Tenant,
@@ -26,6 +30,7 @@ from edu_grader_api.services.generation import (
     GenerationJobRequest,
     GenerationServiceError,
     _content_hash,
+    _request_digest,
     create_or_get_job,
     run_generation_job,
 )
@@ -178,6 +183,18 @@ class CapturingProvider:
         return self.result
 
 
+class FailIfCalledProvider:
+    provider_name = "fake"
+    model_version = "fake-v1"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate(self, request: GenerationRequest) -> GeneratedCandidateEnvelope:
+        self.calls += 1
+        raise AssertionError("unavailable prompt templates must not call the provider")
+
+
 class CancellingProvider:
     provider_name = "fake"
     model_version = "fake-v1"
@@ -243,6 +260,98 @@ def test_creation_rejects_an_inactive_objective_revision(session: Session) -> No
         create_or_get_job(session, request=generation_request(revision), actor=teacher)
 
 
+def test_creation_rejects_an_unknown_prompt_template_before_persisting_a_job(
+    session: Session,
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    request = generation_request(revision).model_copy(
+        update={"prompt_version": "teacher-supplied-template"}
+    )
+
+    with pytest.raises(GenerationServiceError) as exc_info:
+        create_or_get_job(session, request=request, actor=teacher)
+
+    assert str(exc_info.value) == "prompt template is not available for this request"
+    assert request.prompt_version not in str(exc_info.value)
+    assert session.scalars(select(GenerationJob)).all() == []
+
+
+def test_creation_defensively_rejects_invalid_question_types_before_persisting_a_job(
+    session: Session,
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    request = generation_request(revision).model_copy(update={"question_types": ["X1"]})
+
+    with pytest.raises(GenerationServiceError) as exc_info:
+        create_or_get_job(session, request=request, actor=teacher)
+
+    assert str(exc_info.value) == "requested question types are not allowed by the objective"
+    assert session.scalars(select(GenerationJob)).all() == []
+
+
+def test_creation_rejects_a_normal_request_outside_the_catalog_template_scope(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    revision.allowed_question_types = ["E1"]
+    request_data = generation_request(revision).model_dump()
+    request_data["question_types"] = ["E1"]
+    request = GenerationJobRequest.model_validate(request_data)
+    template = resolve_prompt_template("generator-v1", ["M1"])
+    monkeypatch.setattr(
+        prompt_templates,
+        "PROMPT_TEMPLATE_CATALOG",
+        MappingProxyType(
+            {
+                template.version: PromptTemplate(
+                    version=template.version,
+                    system_instructions=template.system_instructions,
+                    schema_version=template.schema_version,
+                    allowed_question_types=frozenset({"M1"}),
+                    profile_scope=template.profile_scope,
+                )
+            }
+        ),
+    )
+
+    with pytest.raises(GenerationServiceError) as exc_info:
+        create_or_get_job(session, request=request, actor=teacher)
+
+    assert str(exc_info.value) == "prompt template is not available for this request"
+    assert session.scalars(select(GenerationJob)).all() == []
+
+
+def test_matching_idempotency_replay_survives_a_historical_prompt_template(
+    session: Session,
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    request = generation_request(revision)
+    job = create_or_get_job(session, request=request, actor=teacher)
+    historical_request = request.model_copy(update={"prompt_version": "historical-template-v0"})
+    job.prompt_version = historical_request.prompt_version
+    job.request_digest = _request_digest(historical_request)
+    session.flush()
+
+    replay = create_or_get_job(session, request=historical_request, actor=teacher)
+
+    assert replay.id == job.id
+
+
+def test_idempotency_conflict_precedes_prompt_template_validation(
+    session: Session,
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    create_or_get_job(session, request=generation_request(revision), actor=teacher)
+    conflicting_request = generation_request(revision).model_copy(
+        update={"prompt_version": "unknown-template"}
+    )
+
+    with pytest.raises(GenerationServiceError) as exc_info:
+        create_or_get_job(session, request=conflicting_request, actor=teacher)
+
+    assert str(exc_info.value) == "idempotency key belongs to another generation request"
+
+
 def test_idempotency_key_rejects_a_changed_teacher_constraint(session: Session) -> None:
     teacher, revision = teacher_and_objective(session)
     create_or_get_job(
@@ -271,6 +380,57 @@ def test_provider_receives_active_objective_context_and_requested_count(session:
     assert provider.request.difficulty_min == revision.difficulty_min
     assert provider.request.difficulty_max == revision.difficulty_max
     assert provider.request.requested_count == job.requested_count
+
+
+def test_successful_attempt_records_template_audit_metadata_without_prompt_body(
+    session: Session,
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    teacher_constraint = "teacher-constraint-secret"
+    job = create_or_get_job(
+        session,
+        request=generation_request(revision, teacher_constraint=teacher_constraint),
+        actor=teacher,
+    )
+
+    run_generation_job(
+        session,
+        job=job,
+        provider=FakeGenerationProvider(seed=7),
+        teacher_constraint=teacher_constraint,
+    )
+
+    template = resolve_prompt_template("generator-v1", ["M1"])
+    summary = job.attempts[0].request_summary
+    assert summary is not None
+    assert summary["prompt_template"] == {
+        "version": template.version,
+        "schema_version": template.schema_version,
+        "profile_scope": template.profile_scope,
+        "allowed_question_types": sorted(template.allowed_question_types),
+        "fingerprint": template.fingerprint,
+    }
+    assert template.system_instructions not in str(summary)
+    assert "teacher_constraint" not in summary
+    assert teacher_constraint not in str(summary)
+
+
+def test_historical_job_with_unavailable_template_fails_without_creating_an_attempt(
+    session: Session,
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    job = create_or_get_job(session, request=generation_request(revision), actor=teacher)
+    job.prompt_version = "historical-template-v0"
+    session.flush()
+
+    provider = FailIfCalledProvider()
+    run_generation_job(session, job=job, provider=provider)
+
+    assert job.status is GenerationJobStatus.FAILED
+    assert job.failure_code == "prompt_template_unavailable"
+    assert job.failed_count == job.requested_count
+    assert job.attempts == []
+    assert provider.calls == 0
 
 
 def test_cancellation_after_provider_returns_does_not_persist_a_draft(session: Session) -> None:

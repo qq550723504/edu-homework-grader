@@ -7,6 +7,7 @@ from typing import Literal
 from uuid import UUID
 
 from edu_generator.contracts import GeneratedCandidate, GenerationRequest, ProviderFailure
+from edu_generator.prompt_templates import PromptTemplate, resolve_prompt_template
 from edu_generator.providers import GenerationProvider
 from edu_grader_processor_policy import assert_deidentified_payload
 from pydantic import BaseModel, ConfigDict, Field
@@ -86,6 +87,10 @@ def create_or_get_job(
         raise GenerationServiceError("curriculum objective revision must be active")
     if not set(request.question_types).issubset(set(revision.allowed_question_types)):
         raise GenerationServiceError("requested question types are not allowed by the objective")
+    try:
+        resolve_prompt_template(request.prompt_version, request.question_types)
+    except ValueError as exc:
+        raise GenerationServiceError("prompt template is not available for this request") from exc
 
     job = GenerationJob(
         tenant_id=actor.tenant_id,
@@ -128,6 +133,15 @@ def run_generation_job(
         return job
 
     request = _provider_request(session, job, teacher_constraint=teacher_constraint)
+    try:
+        template = resolve_prompt_template(request.prompt_version, request.question_types)
+    except ValueError:
+        job.status = GenerationJobStatus.FAILED
+        job.failure_code = "prompt_template_unavailable"
+        job.failed_count = max(job.requested_count - job.succeeded_count, 0)
+        job.finished_at = utc_now()
+        session.flush()
+        return job
     job.status = GenerationJobStatus.GENERATING
     job.started_at = job.started_at or utc_now()
     session.commit()
@@ -140,7 +154,9 @@ def run_generation_job(
             model_version=str(getattr(provider, "model_version", "unknown")),
             prompt_version=job.prompt_version or "unknown",
             status="running",
-            request_summary=_request_summary(request, requested_count=job.requested_count),
+            request_summary=_request_summary(
+                request, requested_count=job.requested_count, template=template
+            ),
         )
         job.attempts.append(attempt)
         session.flush()
@@ -266,7 +282,9 @@ def _request_digest(request: GenerationJobRequest) -> str:
     return _content_hash(content)
 
 
-def _request_summary(request: GenerationRequest, *, requested_count: int) -> dict[str, object]:
+def _request_summary(
+    request: GenerationRequest, *, requested_count: int, template: PromptTemplate
+) -> dict[str, object]:
     return {
         "objective_revision_id": str(request.objective_revision_id),
         "grade": request.grade,
@@ -274,6 +292,13 @@ def _request_summary(request: GenerationRequest, *, requested_count: int) -> dic
         "question_types": request.question_types,
         "policy_version": request.policy_version,
         "prompt_version": request.prompt_version,
+        "prompt_template": {
+            "version": template.version,
+            "schema_version": template.schema_version,
+            "profile_scope": template.profile_scope,
+            "allowed_question_types": sorted(template.allowed_question_types),
+            "fingerprint": template.fingerprint,
+        },
         "requested_count": requested_count,
     }
 
