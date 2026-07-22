@@ -68,4 +68,3 @@ GET jobs -> 选择 job -> GET job questions -> 选择 draft
 - DOM 测试：渲染 E4 材料、验证证据、拒绝原因输入和接受后的题库草稿提示；验证编辑后的返回运行替换原证据。
 - Playwright：使用测试 Provider 已产生的候选，教师打开批次、编辑标准答案、观察新验证、拒绝另一题并接受通过题，确认题目只作为 draft 出现在现有题库流程。
 - 所有现有 Web 测试和 Nuxt 构建继续通过；页面不包含任何 Provider 密钥、Prompt 或私有验证字段。
-

@@ -305,3 +305,12 @@ git commit -m "docs: record AI review workspace verification"
 - **Spec coverage:** Task 1 覆盖受限 API/幂等与导航；Task 2 覆盖候选字段、E4、证据与审核门禁；Task 3 覆盖深链、刷新、错误和响应式布局；Task 4 覆盖真实浏览器垂直切片；Task 5 覆盖质量门与交付记录。
 - **Placeholder scan:** 本计划没有未定义动作或待补充步骤；每个任务列出路径、接口、失败测试、实现边界、命令和提交。
 - **Type consistency:** 所有组件都消费 Task 1 的 `TeacherAi*` 投影；所有写事件统一使用 `expected_revision_number`、CSRF 和 `Idempotency-Key`。
+
+## Delivery verification — 2026-07-22
+
+- `cd apps/web && npm test -- --run tests/teacher-ai-review.test.ts tests/teacher-ai-review-rendering.test.ts tests/teacher-workbench.test.ts`: PASS（exit 0）；3 个测试文件、41 个测试全部通过。
+- `cd apps/web && npm test && npm run build`: PASS（exit 0）；Vitest 16 个测试文件、83 个测试全部通过，Nuxt 4.4.8 client、SSR 和 Nitro production build 完成。构建继续报告 module-preload sourcemap、超过 500 kB chunk 和 Node trailing-slash exports deprecation 警告。
+- PowerShell 等价执行：`$env:PYTHONPATH = 'apps/api/src;services/generator/src;packages/processor-policy/src'; python -m pytest apps/api/tests/test_ai_question_generation_api.py apps/api/tests/test_ai_question_review.py -q`: PASS（exit 0）；37 个测试全部通过。
+- `cd apps/web && npm run test:e2e -- --grep "AI candidates"`: PASS（exit 0）；E2E runtime supervisor 3/3 通过，Chromium 中教师编辑、同步重验、拒绝并接受 AI 候选的真实浏览器垂直切片 1/1 通过。
+- `git diff --check origin/main...HEAD`: PASS（exit 0），无输出；首次检查发现 `docs/superpowers/specs/2026-07-22-teacher-ai-review-ui-design.md` EOF 多余空行，删除该精确空行并 amend 后复检通过。
+- `git status --short`: 验证记录提交前仅本计划文件被修改，另有按要求未暂存、未提交的 `.superpowers/` 报告目录；为使范围 diff clean，随后仅额外修正并提交上述设计文档 EOF 空行，未发现其他意外文件。
