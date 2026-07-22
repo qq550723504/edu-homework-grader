@@ -700,6 +700,15 @@ class GeneratedQuestionDraft(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    current_revision_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "generated_question_draft_revisions.id",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=False,
+        default=uuid4,
+    )
     job_id: Mapped[UUID] = mapped_column(ForeignKey("generation_jobs.id"), nullable=False)
     generation_attempt_id: Mapped[UUID] = mapped_column(
         ForeignKey("generation_attempts.id"), nullable=False
@@ -729,6 +738,18 @@ class GeneratedQuestionDraft(Base):
 
     job: Mapped[GenerationJob] = relationship(back_populates="drafts")
     generation_attempt: Mapped[GenerationAttempt] = relationship(back_populates="drafts")
+    current_revision: Mapped[GeneratedQuestionDraftRevision] = relationship(
+        foreign_keys=[current_revision_id], post_update=True
+    )
+    revisions: Mapped[list[GeneratedQuestionDraftRevision]] = relationship(
+        back_populates="draft",
+        foreign_keys="GeneratedQuestionDraftRevision.generated_question_draft_id",
+        order_by="GeneratedQuestionDraftRevision.revision_number",
+    )
+    review_decisions: Mapped[list[GeneratedQuestionReviewDecision]] = relationship(
+        back_populates="draft",
+        order_by="GeneratedQuestionReviewDecision.created_at",
+    )
     validation_runs: Mapped[list[GenerationValidationRun]] = relationship(
         back_populates="draft",
         order_by="GenerationValidationRun.run_number",
@@ -742,6 +763,80 @@ class GeneratedQuestionDraft(Base):
         self.exact_prompt_hash = fingerprints.exact_hash
         self.normalized_prompt_hash = fingerprints.normalized_hash
         return candidate_json
+
+
+class GeneratedQuestionDraftRevision(Base):
+    __tablename__ = "generated_question_draft_revisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "generated_question_draft_id",
+            "revision_number",
+            name="uq_generated_question_draft_revision_number",
+        ),
+        UniqueConstraint(
+            "generated_question_draft_id",
+            "idempotency_key",
+            name="uq_generated_question_draft_revision_idempotency",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    generated_question_draft_id: Mapped[UUID] = mapped_column(
+        ForeignKey("generated_question_drafts.id"), nullable=False
+    )
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    candidate_json: Mapped[dict[str, object]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False
+    )
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    editor_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    request_digest: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    draft: Mapped[GeneratedQuestionDraft] = relationship(
+        back_populates="revisions", foreign_keys=[generated_question_draft_id]
+    )
+    editor: Mapped[User | None] = relationship(foreign_keys=[editor_user_id])
+
+
+class GeneratedQuestionReviewDecision(Base):
+    __tablename__ = "generated_question_review_decisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "generated_question_draft_id",
+            "action",
+            "idempotency_key",
+            name="uq_generated_question_review_decision_idempotency",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    generated_question_draft_id: Mapped[UUID] = mapped_column(
+        ForeignKey("generated_question_drafts.id"), nullable=False
+    )
+    draft_revision_id: Mapped[UUID] = mapped_column(
+        ForeignKey("generated_question_draft_revisions.id"), nullable=False
+    )
+    action: Mapped[str] = mapped_column(String(50), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(4_000))
+    warning_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    actor_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    accepted_question_version_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("question_versions.id")
+    )
+    idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    request_digest: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    draft: Mapped[GeneratedQuestionDraft] = relationship(back_populates="review_decisions")
+    draft_revision: Mapped[GeneratedQuestionDraftRevision] = relationship(
+        foreign_keys=[draft_revision_id]
+    )
+    actor: Mapped[User] = relationship(foreign_keys=[actor_user_id])
+    accepted_question_version: Mapped[QuestionVersion | None] = relationship(
+        foreign_keys=[accepted_question_version_id]
+    )
 
 
 class GenerationValidationRun(Base):
@@ -764,6 +859,9 @@ class GenerationValidationRun(Base):
     generated_question_draft_id: Mapped[UUID] = mapped_column(
         ForeignKey("generated_question_drafts.id"), nullable=False
     )
+    draft_revision_id: Mapped[UUID] = mapped_column(
+        ForeignKey("generated_question_draft_revisions.id"), nullable=False
+    )
     generation_job_id: Mapped[UUID] = mapped_column(
         ForeignKey("generation_jobs.id"), nullable=False
     )
@@ -784,6 +882,9 @@ class GenerationValidationRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     draft: Mapped[GeneratedQuestionDraft] = relationship(back_populates="validation_runs")
+    draft_revision: Mapped[GeneratedQuestionDraftRevision] = relationship(
+        foreign_keys=[draft_revision_id]
+    )
     job: Mapped[GenerationJob] = relationship(back_populates="validation_runs")
     findings: Mapped[list[ValidationFinding]] = relationship(
         back_populates="validation_run",

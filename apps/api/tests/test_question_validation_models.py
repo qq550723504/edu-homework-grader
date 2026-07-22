@@ -12,6 +12,7 @@ from edu_grader_api.models import (
     GenerationJob,
     GenerationJobStatus,
     GeneratedQuestionDraft,
+    GeneratedQuestionDraftRevision,
     Role,
     Tenant,
     User,
@@ -95,10 +96,21 @@ def test_validation_runs_keep_findings_for_each_draft_rerun(session: Session) ->
     )
     session.add(draft)
     session.flush()
+    session.add(
+        GeneratedQuestionDraftRevision(
+            id=draft.current_revision_id,
+            generated_question_draft_id=draft.id,
+            revision_number=1,
+            candidate_json=draft.candidate_json,
+            content_hash=draft.content_hash,
+        )
+    )
+    session.flush()
 
     first = validation_run_type(
         generated_question_draft_id=draft.id,
         generation_job_id=job.id,
+        draft_revision_id=draft.current_revision_id,
         run_number=1,
         validator_version="verification-v1",
         ruleset_version="rules-v1",
@@ -108,6 +120,7 @@ def test_validation_runs_keep_findings_for_each_draft_rerun(session: Session) ->
     second = validation_run_type(
         generated_question_draft_id=draft.id,
         generation_job_id=job.id,
+        draft_revision_id=draft.current_revision_id,
         run_number=2,
         validator_version="verification-v1",
         ruleset_version="rules-v1",
@@ -130,6 +143,7 @@ def test_validation_runs_keep_findings_for_each_draft_rerun(session: Session) ->
     duplicate_run = validation_run_type(
         generated_question_draft_id=draft.id,
         generation_job_id=job.id,
+        draft_revision_id=draft.current_revision_id,
         run_number=2,
         validator_version="verification-v1",
         ruleset_version="rules-v1",

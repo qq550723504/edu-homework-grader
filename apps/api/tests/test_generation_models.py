@@ -5,16 +5,20 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from edu_generator.contracts import GeneratedCandidate
 from edu_grader_api.models import (
     Base,
     GeneratedQuestionDraft,
+    GenerationValidationRun,
     GenerationAttempt,
     GenerationJob,
     GenerationJobStatus,
     Role,
     Tenant,
     User,
+    ValidationRunStatus,
 )
+from edu_grader_api.services.generation import _persist_valid_candidates
 from edu_grader_api.services.question_fingerprints import fingerprint_prompt
 
 
@@ -24,6 +28,84 @@ def session() -> Session:
     Base.metadata.create_all(engine)
     with Session(engine) as session:
         yield session
+
+
+def persist_generated_draft(session: Session) -> GeneratedQuestionDraft:
+    tenant = Tenant(slug="pilot", name="Pilot")
+    teacher = User(
+        tenant=tenant,
+        role=Role.TEACHER,
+        oidc_issuer="https://issuer.example.test",
+        oidc_subject="teacher-subject",
+        display_name="Teacher",
+        work_email="teacher@example.test",
+    )
+    job = GenerationJob(
+        tenant=tenant,
+        teacher=teacher,
+        curriculum_objective_revision_id=uuid4(),
+        distribution_json={"question_types": ["M1"]},
+        idempotency_key="initial-review-revision",
+        status=GenerationJobStatus.READY_FOR_REVIEW,
+        requested_count=1,
+    )
+    attempt = GenerationAttempt(
+        job=job,
+        attempt_number=1,
+        provider_name="fake",
+        model_version="fake-v1",
+        prompt_version="generator-v1",
+        status="succeeded",
+    )
+    session.add_all([job, attempt])
+    session.flush()
+
+    created = _persist_valid_candidates(
+        session,
+        job=job,
+        attempt=attempt,
+        candidates=[
+            GeneratedCandidate(
+                objective_revision_id=job.curriculum_objective_revision_id,
+                question_type="M1",
+                policy_version="1",
+                prompt="What is 2 + 2?",
+                rule_json={"expected": 4},
+                explanation="Add the two numbers.",
+                knowledge_point="addition",
+                difficulty=0.2,
+            )
+        ],
+    )
+    assert created == 1
+    session.flush()
+    return job.drafts[0]
+
+
+def test_generated_draft_creates_an_immutable_initial_review_revision(session: Session) -> None:
+    draft = persist_generated_draft(session)
+
+    assert draft.current_revision.revision_number == 1
+    assert draft.current_revision.candidate_json == draft.candidate_json
+    assert draft.current_revision.content_hash == draft.content_hash
+
+
+def test_validation_run_references_the_review_revision(session: Session) -> None:
+    draft = persist_generated_draft(session)
+    run = GenerationValidationRun(
+        generated_question_draft_id=draft.id,
+        generation_job_id=draft.job_id,
+        draft_revision_id=draft.current_revision_id,
+        run_number=1,
+        validator_version="verification-v1",
+        ruleset_version="rules-v1",
+        status=ValidationRunStatus.PASSED,
+        feature_summary_json={},
+    )
+    session.add(run)
+    session.flush()
+
+    assert run.draft_revision_id == run.draft.current_revision_id
 
 
 def test_generation_job_is_unique_per_tenant_idempotency_key(session: Session) -> None:

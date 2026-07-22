@@ -1340,6 +1340,7 @@ def _persist_run(
     run = GenerationValidationRun(
         generated_question_draft_id=draft.id,
         generation_job_id=draft.job_id,
+        draft_revision_id=draft.current_revision_id,
         run_number=(latest_run_number or 0) + 1,
         validator_version=VALIDATOR_VERSION,
         ruleset_version=RULESET_VERSION,
