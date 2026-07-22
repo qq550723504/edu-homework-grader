@@ -1,4 +1,5 @@
 import json
+from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -12,7 +13,50 @@ from edu_generator.contracts import (
     ProviderCandidatePayload,
 )
 from edu_generator.openai_provider import OpenAIResponsesProvider
+from edu_generator.prompt_templates import (
+    ALL_ACTIVE_CURRICULUM_PROFILES,
+    GENERATED_QUESTION_CANDIDATES_SCHEMA_V1,
+    resolve_prompt_template,
+)
 from edu_generator.providers import FakeGenerationProvider, ProviderFailure
+
+
+def test_generator_v1_template_exposes_current_generation_contract_metadata() -> None:
+    template = resolve_prompt_template("generator-v1", ["E4", "M1"])
+
+    assert template.version == "generator-v1"
+    assert template.schema_version == GENERATED_QUESTION_CANDIDATES_SCHEMA_V1
+    assert template.profile_scope == ALL_ACTIVE_CURRICULUM_PROFILES
+    assert template.allowed_question_types == frozenset(
+        {"M1", "M2", "E1", "E2", "E3", "E4"}
+    )
+    assert template.system_instructions == (
+        "Generate de-identified candidate homework questions. "
+        "E4 must return a nonblank generated reading_material containing every E4 "
+        "evidence phrase; all other types must return reading_material null. "
+        "Return only JSON conforming to the supplied schema."
+    )
+    assert len(template.fingerprint) == 64
+    assert set(template.fingerprint) <= set("0123456789abcdef")
+    with pytest.raises(FrozenInstanceError):
+        template.version = "other"  # type: ignore[misc]
+
+
+def test_template_fingerprint_is_stable_across_question_type_order() -> None:
+    first = resolve_prompt_template("generator-v1", ["E4", "M1"])
+    second = resolve_prompt_template("generator-v1", ["M1", "E4"])
+
+    assert first.fingerprint == second.fingerprint
+
+
+def test_template_resolver_rejects_unknown_versions() -> None:
+    with pytest.raises(ValueError, match="unknown prompt template version"):
+        resolve_prompt_template("generator-v2", ["M1"])
+
+
+def test_template_resolver_rejects_question_types_outside_template_scope() -> None:
+    with pytest.raises(ValueError, match="not allowed by prompt template"):
+        resolve_prompt_template("generator-v1", ["M1", "X1"])
 
 
 def test_fake_provider_returns_stable_m1_m2_e1_e4_envelopes() -> None:
