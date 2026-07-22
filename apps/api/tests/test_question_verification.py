@@ -827,7 +827,9 @@ def test_semantic_published_question_is_blocked_without_raw_comparator(
         "threshold_band": "at_or_above",
     }
     assert "What is 2 + 2?" not in str(finding.evidence_json)
-    assert run.feature_summary_json == {
+    assert {
+        key: value for key, value in run.feature_summary_json.items() if key != "difficulty_signal"
+    } == {
         "finding_count": len(run.findings),
         "content_policy_version": "minor-content-policy-v1",
         "fingerprint_version": "question-fingerprint-v1",
@@ -844,6 +846,16 @@ def test_semantic_published_question_is_blocked_without_raw_comparator(
             "digest": "sha256:test",
         },
     }
+    assert run.feature_summary_json[
+        "difficulty_signal"
+    ] == verification._rule_based_difficulty_signal(
+        target_difficulty=0.2,
+        curriculum_range=(0, 1),
+        prompt="Calculate two plus two.",
+        question_type="M1",
+        rule_json={"expected": 4, "tolerance": 0},
+        normalized_m2_ast=None,
+    )
 
 
 def test_semantic_same_batch_candidate_is_blocked(session: Session) -> None:
@@ -923,7 +935,9 @@ def test_duplicate_feature_summary_uses_the_gate_snapshot(
     )
 
     assert run.status is ValidationRunStatus.PASSED
-    assert run.feature_summary_json == {
+    assert {
+        key: value for key, value in run.feature_summary_json.items() if key != "difficulty_signal"
+    } == {
         "finding_count": 0,
         "content_policy_version": "minor-content-policy-v1",
         "fingerprint_version": "question-fingerprint-v1",
@@ -940,6 +954,16 @@ def test_duplicate_feature_summary_uses_the_gate_snapshot(
             "digest": "sha256:test",
         },
     }
+    assert run.feature_summary_json[
+        "difficulty_signal"
+    ] == verification._rule_based_difficulty_signal(
+        target_difficulty=0.2,
+        curriculum_range=(0, 1),
+        prompt="Calculate two plus two.",
+        question_type="M1",
+        rule_json={"expected": 4, "tolerance": 0},
+        normalized_m2_ast=None,
+    )
 
 
 def test_normalized_comparators_are_deduplicated_across_sources_with_published_precedence(
@@ -2417,6 +2441,268 @@ def test_m2_safe_ast_contract_matches_grader_normalizer() -> None:
     assert verification._m2_complexity_metrics(ast) == (Decimal("1"), 1)
 
 
+def test_rule_based_difficulty_signal_uses_safe_m1_numeric_and_text_metrics() -> None:
+    lower_numeric = verification._rule_based_difficulty_signal(
+        target_difficulty=0.4,
+        curriculum_range=(0, 1),
+        prompt="One two three four five.",
+        question_type="M1",
+        rule_json={"expected": 9, "tolerance": 0},
+        normalized_m2_ast=None,
+    )
+    higher_numeric = verification._rule_based_difficulty_signal(
+        target_difficulty=0.4,
+        curriculum_range=(0, 1),
+        prompt="One two three four five.",
+        question_type="M1",
+        rule_json={"expected": 999, "tolerance": 0},
+        normalized_m2_ast=None,
+    )
+
+    assert higher_numeric == {
+        "version": "rule-based-difficulty-v1",
+        "availability": "available",
+        "reason": None,
+        "target": 0.4,
+        "estimated": 0.329,
+        "deviation": 0.071,
+        "curriculum_range": {"min": 0.0, "max": 1.0},
+        "features": [
+            {"type": "question_type_baseline", "value": 0.2, "contribution": 0.2},
+            {"type": "prompt_units", "value": 5, "contribution": 0.009},
+            {"type": "sentence_units", "value": 5, "contribution": 0.02},
+            {"type": "numeric_magnitude", "value": 0.5, "contribution": 0.1},
+        ],
+    }
+    assert higher_numeric["estimated"] > lower_numeric["estimated"]
+
+
+def test_rule_based_difficulty_signal_uses_only_verified_m2_ast_metrics() -> None:
+    simple = verification._rule_based_difficulty_signal(
+        target_difficulty=0.5,
+        curriculum_range=(0, 1),
+        prompt="Simplify the expression.",
+        question_type="M2",
+        rule_json={"expected": ["Add", "secret", 999999]},
+        normalized_m2_ast={"type": "number", "value": "1"},
+    )
+    more_complex = verification._rule_based_difficulty_signal(
+        target_difficulty=0.5,
+        curriculum_range=(0, 1),
+        prompt="Simplify the expression.",
+        question_type="M2",
+        rule_json={"expected": ["Add", "secret", 999999]},
+        normalized_m2_ast={
+            "type": "add",
+            "args": [
+                {"type": "number", "value": "1000"},
+                {
+                    "type": "mul",
+                    "args": [
+                        {"type": "number", "value": "10"},
+                        {"type": "symbol", "name": "x"},
+                    ],
+                },
+            ],
+        },
+    )
+
+    assert more_complex["estimated"] > simple["estimated"]
+    assert simple["availability"] == "available"
+    assert more_complex["availability"] == "available"
+    assert {feature["type"] for feature in more_complex["features"]} >= {
+        "numeric_magnitude",
+        "m2_operation_nodes",
+    }
+    assert all(
+        set(feature) == {"type", "value", "contribution"}
+        and isinstance(feature["type"], str)
+        and all(isinstance(feature[key], int | float) for key in ("value", "contribution"))
+        for feature in more_complex["features"]
+    )
+
+
+def test_rule_based_difficulty_signal_is_stable_and_does_not_echo_candidate_body() -> None:
+    prompt = "Do not persist this private prompt value."
+    rule_json = {"expected": 12345, "teacher_note": "private rule value"}
+
+    first = verification._rule_based_difficulty_signal(
+        target_difficulty=0.2,
+        curriculum_range=(0, 0.7),
+        prompt=prompt,
+        question_type="M1",
+        rule_json=rule_json,
+        normalized_m2_ast=None,
+    )
+    second = verification._rule_based_difficulty_signal(
+        target_difficulty=0.2,
+        curriculum_range=(0, 0.7),
+        prompt=prompt,
+        question_type="M1",
+        rule_json=rule_json,
+        normalized_m2_ast=None,
+    )
+
+    assert first == second
+    assert first["availability"] == "available"
+    assert prompt not in str(first)
+    assert "private rule value" not in str(first)
+    assert 0 <= first["estimated"] <= 1
+
+
+def test_rule_based_difficulty_signal_omits_m2_math_metrics_without_a_safe_ast() -> None:
+    signal = verification._rule_based_difficulty_signal(
+        target_difficulty=float("nan"),
+        curriculum_range=(0, 1),
+        prompt="Simplify.",
+        question_type="M2",
+        rule_json={"expected": ["Add", "unsafe", 99]},
+        normalized_m2_ast=None,
+    )
+
+    assert signal["target"] is None
+    assert signal["deviation"] is None
+    assert signal["availability"] == "available"
+    assert {feature["type"] for feature in signal["features"]}.isdisjoint(
+        {"numeric_magnitude", "m2_operation_nodes"}
+    )
+
+
+@pytest.mark.parametrize(
+    ("target_difficulty", "expected_target"),
+    [
+        (2, None),
+        (1e308, None),
+        (10**1000, None),
+        (Decimal("0.4"), 0.4),
+        (float("nan"), None),
+    ],
+)
+def test_rule_based_difficulty_signal_accepts_only_bounded_finite_targets(
+    target_difficulty: object, expected_target: float | None
+) -> None:
+    signal = verification._rule_based_difficulty_signal(
+        target_difficulty=target_difficulty,
+        curriculum_range=(0, 1),
+        prompt="Find the answer.",
+        question_type="M1",
+        rule_json={"expected": 4, "tolerance": 0},
+        normalized_m2_ast=None,
+    )
+
+    assert signal["target"] == expected_target
+    if expected_target is None:
+        assert signal["deviation"] is None
+    else:
+        assert isinstance(signal["deviation"], float)
+        assert -1 <= signal["deviation"] <= 1
+
+
+def test_rule_based_difficulty_signal_does_not_read_raw_m2_rules() -> None:
+    safe_ast = {
+        "type": "add",
+        "args": [
+            {"type": "number", "value": "1000"},
+            {"type": "symbol", "name": "x"},
+        ],
+    }
+    common = {
+        "target_difficulty": 0.5,
+        "curriculum_range": (0, 1),
+        "prompt": "Simplify the expression.",
+        "question_type": "M2",
+        "normalized_m2_ast": safe_ast,
+    }
+
+    first = verification._rule_based_difficulty_signal(
+        **common,
+        rule_json={"expected": ["Add", "private", 1]},
+    )
+    second = verification._rule_based_difficulty_signal(
+        **common,
+        rule_json={
+            "expected": ["Add", "private", 10**1000],
+            "teacher_note": "do not persist this private rule",
+        },
+    )
+
+    assert first == second
+    assert "private" not in str(first)
+    assert "do not persist" not in str(first)
+
+
+def test_grade_complexity_observations_preserve_m1_and_m2_warning_evidence() -> None:
+    m1_findings = verification._grade_complexity_findings(
+        rules={"max_prompt_units": 3, "max_numeric_absolute_value": 10},
+        grade_level="G5",
+        prompt="One two three four.",
+        question_type="M1",
+        rule_json={"expected": 11, "tolerance": 0},
+        normalized_m2_ast=None,
+    )
+    m2_findings = verification._grade_complexity_findings(
+        rules={"max_numeric_absolute_value": 10, "max_math_operation_nodes": 1},
+        grade_level="G5",
+        prompt="Simplify.",
+        question_type="M2",
+        rule_json={"expected": ["Add", "private", 10**1000]},
+        normalized_m2_ast={
+            "type": "add",
+            "args": [
+                {"type": "number", "value": "11"},
+                {
+                    "type": "mul",
+                    "args": [
+                        {"type": "number", "value": "2"},
+                        {"type": "symbol", "name": "x"},
+                    ],
+                },
+            ],
+        },
+    )
+
+    assert [(item.code, item.evidence) for item in m1_findings] == [
+        (
+            "grade_complexity_warning",
+            {
+                "grade_level": "G5",
+                "metric": "max_prompt_units",
+                "observed": 4,
+                "limit": 3,
+            },
+        ),
+        (
+            "grade_complexity_warning",
+            {
+                "grade_level": "G5",
+                "metric": "max_numeric_absolute_value",
+                "observed": 11,
+                "limit": 10,
+            },
+        ),
+    ]
+    assert [(item.code, item.evidence) for item in m2_findings] == [
+        (
+            "grade_complexity_warning",
+            {
+                "grade_level": "G5",
+                "metric": "max_numeric_absolute_value",
+                "observed": 11,
+                "limit": 10,
+            },
+        ),
+        (
+            "grade_complexity_warning",
+            {
+                "grade_level": "G5",
+                "metric": "max_math_operation_nodes",
+                "observed": 2,
+                "limit": 1,
+            },
+        ),
+    ]
+
+
 def test_invalid_m2_schema_preserves_policy_finding(session: Session) -> None:
     candidate = valid_m2_candidate()
     candidate["rule_json"] = {"variables": ["x"], "max_score": 4}
@@ -2464,6 +2750,84 @@ def test_candidate_difficulty_outside_objective_range_is_blocked(session: Sessio
 
     assert run.status is ValidationRunStatus.BLOCKED
     assert "difficulty_out_of_range" in finding_codes(run)
+
+
+def test_validation_run_persists_safe_rule_based_difficulty_signal(session: Session) -> None:
+    prompt = "Teacher-only prompt sentinel: calculate 45 plus 55."
+    rule_note = "Teacher-only rule sentinel"
+    candidate = valid_m1_candidate(prompt)
+    candidate["rule_json"] = {"expected": 100, "tolerance": 0, "teacher_note": rule_note}
+    candidate["difficulty"] = 0.6
+    draft = generation_draft(session, candidate_json=candidate)
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=PassingGrader()
+    )
+
+    assert run.feature_summary_json["difficulty_signal"] == {
+        "version": "rule-based-difficulty-v1",
+        "availability": "available",
+        "reason": None,
+        "target": 0.6,
+        "estimated": 0.346,
+        "deviation": 0.254,
+        "curriculum_range": {"min": 0.0, "max": 1.0},
+        "features": [
+            {"type": "question_type_baseline", "value": 0.2, "contribution": 0.2},
+            {"type": "prompt_units", "value": 8, "contribution": 0.014},
+            {"type": "sentence_units", "value": 8, "contribution": 0.032},
+            {"type": "numeric_magnitude", "value": 0.5, "contribution": 0.1},
+        ],
+    }
+    assert run.feature_summary_json["finding_count"] == len(run.findings)
+    assert run.feature_summary_json["content_policy_version"] == "minor-content-policy-v1"
+    assert prompt not in str(run.feature_summary_json)
+    assert rule_note not in str(run.feature_summary_json)
+
+
+def test_invalid_difficulty_persists_null_target_without_changing_blocked_result(
+    session: Session,
+) -> None:
+    draft = generation_draft(session)
+    draft.candidate_json["difficulty"] = "not-a-number"
+
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=PassingGrader()
+    )
+
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert "difficulty_out_of_range" in finding_codes(run)
+    assert run.feature_summary_json["difficulty_signal"]["target"] is None
+    assert run.feature_summary_json["difficulty_signal"]["deviation"] is None
+    assert run.feature_summary_json["difficulty_signal"]["availability"] == "available"
+
+
+def test_validator_exception_persists_safe_fallback_difficulty_signal(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prompt = "Teacher-only fallback prompt sentinel"
+    draft = generation_draft(session, candidate_json=valid_m1_candidate(prompt))
+
+    def raise_internal_error(*args: object, **kwargs: object) -> list[object]:
+        raise RuntimeError("internal secret diagnostic")
+
+    monkeypatch.setattr(verification, "_evaluate_candidate", raise_internal_error)
+    run = verification.run_candidate_verification(
+        session, draft=draft, grader_client=PassingGrader()
+    )
+
+    assert run.feature_summary_json["difficulty_signal"] == {
+        "version": "rule-based-difficulty-v1",
+        "availability": "unavailable",
+        "target": None,
+        "estimated": None,
+        "deviation": None,
+        "curriculum_range": {"min": None, "max": None},
+        "features": [],
+        "reason": "validator_unavailable",
+    }
+    assert prompt not in str(run.feature_summary_json)
+    assert "secret" not in str(run.feature_summary_json)
 
 
 def test_disallowed_type_and_invalid_policy_are_blocked(session: Session) -> None:
