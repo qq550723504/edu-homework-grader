@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 
 import {
   createAiGenerationJob,
@@ -12,6 +12,7 @@ import {
   type CurriculumGradeMapping,
   type CurriculumObjective,
   type CurriculumProfile,
+  type CreateAiGenerationJobInput,
   type GenerationLimits,
   type TeacherAiQuestionType,
 } from '../../lib/teacher-ai-generation'
@@ -32,6 +33,7 @@ const catalogLoading = ref(false)
 const limitsLoading = ref(false)
 const submitting = ref(false)
 const errorMessage = ref('')
+const pendingGenerationRequest = ref<{ intent: string, idempotencyKey: string } | null>(null)
 let catalogGeneration = 0
 
 const selectedObjective = computed(() => objectives.value.find(
@@ -75,6 +77,7 @@ onMounted(async () => {
 async function selectProfile() {
   const profile = selectedProfile.value
   const generation = ++catalogGeneration
+  clearPendingGenerationRequest()
   selectedGrade.value = ''
   selectedSubject.value = ''
   selectedObjectiveRevisionId.value = ''
@@ -102,6 +105,7 @@ async function selectGrade() {
   const profile = selectedProfile.value
   const grade = selectedGrade.value
   const generation = ++catalogGeneration
+  clearPendingGenerationRequest()
   selectedSubject.value = ''
   selectedObjectiveRevisionId.value = ''
   subjects.value = []
@@ -129,6 +133,7 @@ async function selectSubject() {
   const grade = selectedGrade.value
   const subject = selectedSubject.value
   const generation = ++catalogGeneration
+  clearPendingGenerationRequest()
   selectedObjectiveRevisionId.value = ''
   objectives.value = []
   resetCounts()
@@ -154,6 +159,7 @@ async function selectSubject() {
 }
 
 function selectObjective() {
+  clearPendingGenerationRequest()
   resetCounts()
 }
 
@@ -165,30 +171,54 @@ function updateCount(type: TeacherAiQuestionType, amount: number) {
   if (!allowedTypes.value.includes(type)) return
   const next = Math.max(0, (counts.value[type] ?? 0) + amount)
   if (amount > 0 && requestedCount.value >= maximumCount.value) return
+  if (next === (counts.value[type] ?? 0)) return
+  clearPendingGenerationRequest()
   counts.value = { ...counts.value, [type]: next }
 }
+
+watch(teacherConstraint, clearPendingGenerationRequest)
 
 async function submit() {
   if (createDisabled.value || !selectedObjective.value) return
   submitting.value = true
   errorMessage.value = ''
-  const idempotencyKey = crypto.randomUUID()
+  const input = generationInput()
+  const idempotencyKey = idempotencyKeyFor(input)
   try {
     const principal = await fetchCurrentPrincipal($fetch)
     if (!principal.csrf_token) throw new MissingCsrfTokenError()
-    const constraint = teacherConstraint.value.trim()
-    const result = await createAiGenerationJob($fetch, principal.csrf_token, idempotencyKey, {
-      curriculum_objective_revision_id: selectedObjective.value.revision.id,
-      question_types: requestedTypes.value,
-      requested_count: requestedCount.value,
-      ...(constraint ? { teacher_constraint: constraint } : {}),
-    })
+    const result = await createAiGenerationJob($fetch, principal.csrf_token, idempotencyKey, input)
+    clearPendingGenerationRequest()
     await navigateTo(`/teacher/ai-questions?job=${encodeURIComponent(result.id)}`)
   } catch (error: unknown) {
     errorMessage.value = publicErrorMessage(error, '暂时无法创建 AI 出题批次，请稍后重试。')
   } finally {
     submitting.value = false
   }
+}
+
+function generationInput(): CreateAiGenerationJobInput {
+  const constraint = teacherConstraint.value.trim()
+  return {
+    curriculum_objective_revision_id: selectedObjective.value!.revision.id,
+    question_types: requestedTypes.value,
+    requested_count: requestedCount.value,
+    ...(constraint ? { teacher_constraint: constraint } : {}),
+  }
+}
+
+function idempotencyKeyFor(input: CreateAiGenerationJobInput): string {
+  const intent = JSON.stringify(input)
+  if (pendingGenerationRequest.value?.intent === intent) {
+    return pendingGenerationRequest.value.idempotencyKey
+  }
+  const idempotencyKey = crypto.randomUUID()
+  pendingGenerationRequest.value = { intent, idempotencyKey }
+  return idempotencyKey
+}
+
+function clearPendingGenerationRequest() {
+  pendingGenerationRequest.value = null
 }
 
 function publicErrorMessage(error: unknown, fallback: string): string {

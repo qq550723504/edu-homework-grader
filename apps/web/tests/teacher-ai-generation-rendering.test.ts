@@ -129,6 +129,36 @@ describe('teacher AI generation request rendering', () => {
     expect(JSON.stringify(navigateTo.mock.calls)).not.toContain('teacher_constraint')
   })
 
+  it('reuses the idempotency key after a network failure until the request intent changes', async () => {
+    mocks.createAiGenerationJob
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce({ id: 'job-1' })
+    const randomUUID = vi.mocked(crypto.randomUUID)
+    randomUUID.mockReset()
+    randomUUID.mockReturnValueOnce('request-key-1').mockReturnValueOnce('request-key-2')
+    const wrapper = await mountForm()
+    await selectObjective(wrapper)
+    await wrapper.get('[data-testid="question-type-M1-increment"]').trigger('click')
+
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(mocks.createAiGenerationJob.mock.calls.map((call) => call[2])).toEqual([
+      'request-key-1', 'request-key-1',
+    ])
+
+    await wrapper.get('textarea[aria-label="教师补充要求"]').setValue('加入课堂词汇。')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(mocks.createAiGenerationJob.mock.calls.map((call) => call[2])).toEqual([
+      'request-key-1', 'request-key-1', 'request-key-2',
+    ])
+  })
+
   it('keeps a stale objective response from overwriting a newer subject selection', async () => {
     let resolveOld!: (value: ReturnType<typeof objective>[]) => void
     mocks.fetchCurriculumObjectives
