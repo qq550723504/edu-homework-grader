@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import TypeAdapter
 
 from edu_grader_api.settings import Settings
 
@@ -128,6 +129,176 @@ def test_openai_provider_default_uses_the_versioned_api_endpoint() -> None:
     settings = Settings()
 
     assert settings.generator_openai_base_url == "https://api.openai.com/v1"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-5-2025-08-07",
+        "gpt-4-0613",
+        "gpt-3.5-turbo-0125",
+        "ft:gpt-4o-mini:acemeco:suffix:abc123",
+    ],
+)
+def test_production_openai_settings_accept_an_immutable_model_id(model: str) -> None:
+    settings = Settings(
+        app_env="production",
+        audit_hmac_key="x" * 32,
+        database_url="postgresql://edu_grader:secure-password@db.example/edu_grader",
+        oidc_issuer="https://identity.example/realms/edu-grader",
+        processor_allowed_hosts="grader",
+        grader_base_url="http://grader:8010",
+        generation_provider="openai",
+        openai_api_key="test-key",
+        generator_openai_model=model,
+        generator_provider_allowed_hosts="api.openai.com",
+    )
+
+    assert settings.generator_openai_model == model
+
+
+def test_production_openai_settings_require_an_explicit_model() -> None:
+    with pytest.raises(ValueError, match="GENERATOR_OPENAI_MODEL is required"):
+        Settings(
+            app_env="production",
+            audit_hmac_key="x" * 32,
+            database_url="postgresql://edu_grader:secure-password@db.example/edu_grader",
+            oidc_issuer="https://identity.example/realms/edu-grader",
+            processor_allowed_hosts="grader",
+            grader_base_url="http://grader:8010",
+            generation_provider="openai",
+            openai_api_key="test-key",
+            generator_provider_allowed_hosts="api.openai.com",
+        )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-5",
+        "latest",
+        "gpt-5-2025-02-30",
+        "gpt-4-0230",
+        "gpt-4-1332",
+        "ft:gpt-4o-mini:acemeco:suffix",
+        "ft:gpt-4o-mini:acemeco::abc123",
+        " -2025-08-07",
+        "gpt\u200b-2025-08-07",
+        "gpt-5-2025-08-07 ",
+        "gpt-5-2025-08-07\n",
+    ],
+)
+def test_production_openai_settings_reject_unpinned_model_without_echoing_it(model: str) -> None:
+    with pytest.raises(ValueError, match="OpenAI model must use an immutable model ID") as error:
+        Settings(
+            app_env="production",
+            audit_hmac_key="x" * 32,
+            database_url="postgresql://edu_grader:secure-password@db.example/edu_grader",
+            oidc_issuer="https://identity.example/realms/edu-grader",
+            processor_allowed_hosts="grader",
+            grader_base_url="http://grader:8010",
+            generation_provider="openai",
+            openai_api_key="secret-key-that-must-not-appear",
+            generator_openai_model=model,
+            generator_provider_allowed_hosts="api.openai.com",
+        )
+
+    assert model not in str(error.value)
+    assert "secret-key-that-must-not-appear" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "entrypoint", ["constructor", "mapping", "json", "strings", "type_adapter"]
+)
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("generator_openai_model", "gpt-5", "OpenAI model must use an immutable model ID"),
+        ("grader_base_url", "http://external.example:8010", "GRADER_BASE_URL"),
+    ],
+)
+def test_production_security_errors_do_not_wrap_settings_input(
+    entrypoint: str, field: str, value: str, message: str
+) -> None:
+    secret = "secret-key-that-must-not-appear"
+    options = {
+        "app_env": "production",
+        "audit_hmac_key": "x" * 32,
+        "database_url": "postgresql://edu_grader:secure-password@db.example/edu_grader",
+        "oidc_issuer": "https://identity.example/realms/edu-grader",
+        "processor_allowed_hosts": "grader",
+        "grader_base_url": "http://grader:8010",
+        "generation_provider": "openai",
+        "openai_api_key": secret,
+        "generator_openai_model": "gpt-5-2025-08-07",
+        "generator_provider_allowed_hosts": "api.openai.com",
+    }
+    options[field] = value
+
+    with pytest.raises(ValueError, match=message) as error:
+        if entrypoint == "constructor":
+            Settings(**options)
+        elif entrypoint == "mapping":
+            Settings.model_validate(options)
+        elif entrypoint == "strings":
+            Settings.model_validate_strings(options)
+        elif entrypoint == "type_adapter":
+            TypeAdapter(Settings).validate_python(options)
+        else:
+            Settings.model_validate_json(json.dumps(options))
+
+    assert secret not in str(error.value)
+    assert secret not in repr(error.value)
+    if hasattr(error.value, "errors"):
+        errors = error.value.errors()
+        assert errors[0]["loc"] == ("ai_duplicate_similarity_threshold",)
+        assert errors[0]["input"] == 0.92
+        assert secret not in repr(errors)
+        assert secret not in error.value.json()
+
+
+@pytest.mark.parametrize(
+    "entrypoint", ["constructor", "mapping", "json", "strings", "type_adapter"]
+)
+def test_invalid_threshold_prevents_production_security_cross_field_validation(
+    entrypoint: str,
+) -> None:
+    secret = "secret-key-that-must-not-appear"
+    options = {
+        "app_env": "production",
+        "audit_hmac_key": "x" * 32,
+        "database_url": "postgresql://edu_grader:secure-password@db.example/edu_grader",
+        "oidc_issuer": "https://identity.example/realms/edu-grader",
+        "processor_allowed_hosts": "grader",
+        "grader_base_url": "http://grader:8010",
+        "generation_provider": "openai",
+        "openai_api_key": secret,
+        "generator_openai_model": "gpt-5",
+        "generator_provider_allowed_hosts": "api.openai.com",
+        "ai_duplicate_similarity_threshold": "not-a-number",
+    }
+
+    with pytest.raises(ValueError) as error:
+        if entrypoint == "constructor":
+            Settings(**options)
+        elif entrypoint == "mapping":
+            Settings.model_validate(options)
+        elif entrypoint == "strings":
+            Settings.model_validate_strings(options)
+        elif entrypoint == "type_adapter":
+            TypeAdapter(Settings).validate_python(options)
+        else:
+            Settings.model_validate_json(json.dumps(options))
+
+    assert "immutable model" not in str(error.value)
+    assert secret not in str(error.value)
+    assert secret not in repr(error.value)
+    errors = error.value.errors()
+    assert len(errors) == 1
+    assert errors[0]["loc"] == ("ai_duplicate_similarity_threshold",)
+    assert errors[0]["input"] == "not-a-number"
+    assert secret not in repr(errors)
+    assert secret not in error.value.json()
 
 
 def test_ai_duplicate_similarity_threshold_defaults_to_conservative_value(

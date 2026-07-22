@@ -157,10 +157,64 @@ def test_openai_provider_requires_an_explicit_model_and_allowlisted_endpoint() -
     with pytest.raises(ProviderFailure, match="allowlisted"):
         OpenAIResponsesProvider(
             api_key="test-key",
-            model="gpt-test-snapshot",
+            model="gpt-test-2025-08-07",
             base_url="https://api.openai.com",
             allowed_hosts=frozenset({"other.example"}),
         )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-5",
+        "latest",
+        "gpt-5-latest",
+        "gpt-5-2025-02-30",
+        "gpt-4-0230",
+        "gpt-4-1332",
+        "ft:gpt-4o-mini:acemeco:suffix",
+        "ft:gpt-4o-mini:acemeco::abc123",
+        " -2025-08-07",
+        "\t-2025-08-07",
+        "gpt\u200b-2025-08-07",
+        "gpt-5-2025-08-07 ",
+        "gpt-5-2025-08-07\n",
+        "gpt-5-2025-08-07-preview",
+    ],
+)
+def test_openai_provider_rejects_non_snapshot_models_without_echoing_configuration(
+    model: str,
+) -> None:
+    with pytest.raises(ProviderFailure) as exc_info:
+        OpenAIResponsesProvider(
+            api_key="test-key",
+            model=model,
+            base_url="https://api.openai.com",
+            allowed_hosts=frozenset({"api.openai.com"}),
+        )
+
+    assert exc_info.value.code == "provider_model_not_pinned"
+    assert model not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-5.1-mini-2025-08-07",
+        "gpt-4-0613",
+        "gpt-3.5-turbo-0125",
+        "ft:gpt-4o-mini:acemeco:suffix:abc123",
+    ],
+)
+def test_openai_provider_preserves_a_valid_immutable_model_id(model: str) -> None:
+    provider = OpenAIResponsesProvider(
+        api_key="test-key",
+        model=model,
+        base_url="https://api.openai.com",
+        allowed_hosts=frozenset({"api.openai.com"}),
+    )
+
+    assert provider.model_version == model
 
 
 def _capture_openai_request(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
@@ -196,7 +250,7 @@ def _capture_openai_request(monkeypatch: pytest.MonkeyPatch) -> dict[str, object
     )
     provider = OpenAIResponsesProvider(
         api_key="test-key",
-        model="gpt-test-snapshot",
+        model="gpt-test-2025-08-07",
         base_url="https://api.openai.com",
         allowed_hosts=frozenset({"api.openai.com"}),
     )
