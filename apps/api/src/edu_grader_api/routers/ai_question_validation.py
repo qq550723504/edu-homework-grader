@@ -13,6 +13,7 @@ from ..db import get_session
 from ..dependencies import require_any_role
 from ..models import (
     GeneratedQuestionDraft,
+    GeneratedQuestionDraftRevision,
     GenerationJob,
     GenerationValidationRun,
     Role,
@@ -37,9 +38,13 @@ def create_validation_run_route(
 ) -> dict[str, object]:
     actor = _actor(session, principal)
     draft = _tenant_draft(session, draft_id=draft_id, tenant_id=actor.tenant_id)
+    revision = session.get(GeneratedQuestionDraftRevision, draft.current_revision_id)
+    if revision is None or revision.generated_question_draft_id != draft.id:
+        raise RuntimeError("current candidate revision is unavailable")
     run = run_candidate_verification(
         session,
         draft=draft,
+        revision=revision,
         grader_client=HttpGraderClient(settings.grader_base_url),
     )
     append_audit_event(
@@ -116,6 +121,7 @@ def _run_payload(run: GenerationValidationRun) -> dict[str, object]:
     return {
         "id": str(run.id),
         "draft_id": str(run.generated_question_draft_id),
+        "revision_number": run.draft_revision.revision_number,
         "run_number": run.run_number,
         "validator_version": run.validator_version,
         "ruleset_version": run.ruleset_version,

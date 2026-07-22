@@ -21,6 +21,8 @@ from edu_grader_api.models import (
     CurriculumRevisionStatus,
     CurriculumSourceRecord,
     GenerationJob,
+    GeneratedQuestionDraft,
+    GeneratedQuestionDraftRevision,
     QuestionVersion,
     Role,
     Tenant,
@@ -259,7 +261,7 @@ def test_generation_job_rejects_a_batch_over_the_configured_limit(
     assert response.json()["detail"]["code"] == "generation_batch_limit_exceeded"
 
 
-def test_teacher_can_create_and_read_immutable_validation_runs(
+def test_old_validation_run_is_not_current_after_edit(
     client: TestClient, session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     teacher, revision = teacher_and_objective(session)
@@ -285,12 +287,31 @@ def test_teacher_can_create_and_read_immutable_validation_runs(
     created_run = client.post(
         f"/v1/ai-generated-questions/{draft_id}/validation-runs", headers=headers
     )
+
+    draft = session.get(GeneratedQuestionDraft, UUID(draft_id))
+    assert draft is not None
+    edited_revision = GeneratedQuestionDraftRevision(
+        generated_question_draft_id=draft.id,
+        revision_number=2,
+        candidate_json={**draft.candidate_json, "prompt": "What is 9 + 9?"},
+        content_hash="2" * 64,
+    )
+    session.add(edited_revision)
+    session.flush()
+    draft.current_revision_id = edited_revision.id
+    session.flush()
+
+    current_run = client.post(
+        f"/v1/ai-generated-questions/{draft_id}/validation-runs", headers=headers
+    )
     history = client.get(f"/v1/ai-generated-questions/{draft_id}/validation-runs", headers=headers)
     fetched = client.get(
         f"/v1/ai-question-validation-runs/{created_run.json()['id']}", headers=headers
     )
 
     assert created_run.status_code == 201
+    assert created_run.json()["revision_number"] == 1
+    assert "draft_revision_id" not in created_run.json()
     assert created_run.json()["status"] == "passed"
     difficulty_signal = created_run.json()["feature_summary"]["difficulty_signal"]
     assert difficulty_signal["version"] == "rule-based-difficulty-v1"
@@ -305,7 +326,10 @@ def test_teacher_can_create_and_read_immutable_validation_runs(
     }
     assert "What is 2 + 2?" not in str(difficulty_signal)
     assert "teacher-only" not in str(difficulty_signal)
-    assert history.json()["items"][0]["id"] == created_run.json()["id"]
+    assert current_run.status_code == 201
+    assert current_run.json()["revision_number"] == 2
+    assert [item["revision_number"] for item in history.json()["items"]] == [2, 1]
+    assert fetched.json()["revision_number"] == 1
     assert fetched.json()["findings"] == []
 
 
