@@ -14,7 +14,7 @@ from .contracts import (
     ProviderCandidatePayload,
     ProviderFailure,
 )
-from .model_snapshots import validate_immutable_openai_model_snapshot
+from .model_snapshots import validate_immutable_openai_model_id
 
 
 class OpenAIResponsesProvider:
@@ -40,10 +40,11 @@ class OpenAIResponsesProvider:
                 "provider_not_configured", "GENERATOR_OPENAI_MODEL is required"
             )
         try:
-            model = validate_immutable_openai_model_snapshot(model)
+            model = validate_immutable_openai_model_id(model)
         except ValueError as exc:
             raise ProviderFailure(
-                "provider_model_not_pinned", "OpenAI model must use a dated snapshot"
+                "provider_model_not_pinned",
+                "OpenAI model must use an immutable model ID",
             ) from exc
         try:
             assert_allowed_processor_url(base_url, allowed_hosts)
