@@ -183,6 +183,18 @@ class CapturingProvider:
         return self.result
 
 
+class FailIfCalledProvider:
+    provider_name = "fake"
+    model_version = "fake-v1"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate(self, request: GenerationRequest) -> GeneratedCandidateEnvelope:
+        self.calls += 1
+        raise AssertionError("unavailable prompt templates must not call the provider")
+
+
 class CancellingProvider:
     provider_name = "fake"
     model_version = "fake-v1"
@@ -368,6 +380,57 @@ def test_provider_receives_active_objective_context_and_requested_count(session:
     assert provider.request.difficulty_min == revision.difficulty_min
     assert provider.request.difficulty_max == revision.difficulty_max
     assert provider.request.requested_count == job.requested_count
+
+
+def test_successful_attempt_records_template_audit_metadata_without_prompt_body(
+    session: Session,
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    teacher_constraint = "teacher-constraint-secret"
+    job = create_or_get_job(
+        session,
+        request=generation_request(revision, teacher_constraint=teacher_constraint),
+        actor=teacher,
+    )
+
+    run_generation_job(
+        session,
+        job=job,
+        provider=FakeGenerationProvider(seed=7),
+        teacher_constraint=teacher_constraint,
+    )
+
+    template = resolve_prompt_template("generator-v1", ["M1"])
+    summary = job.attempts[0].request_summary
+    assert summary is not None
+    assert summary["prompt_template"] == {
+        "version": template.version,
+        "schema_version": template.schema_version,
+        "profile_scope": template.profile_scope,
+        "allowed_question_types": sorted(template.allowed_question_types),
+        "fingerprint": template.fingerprint,
+    }
+    assert template.system_instructions not in str(summary)
+    assert "teacher_constraint" not in summary
+    assert teacher_constraint not in str(summary)
+
+
+def test_historical_job_with_unavailable_template_fails_without_creating_an_attempt(
+    session: Session,
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    job = create_or_get_job(session, request=generation_request(revision), actor=teacher)
+    job.prompt_version = "historical-template-v0"
+    session.flush()
+
+    provider = FailIfCalledProvider()
+    run_generation_job(session, job=job, provider=provider)
+
+    assert job.status is GenerationJobStatus.FAILED
+    assert job.failure_code == "prompt_template_unavailable"
+    assert job.failed_count == job.requested_count
+    assert job.attempts == []
+    assert provider.calls == 0
 
 
 def test_cancellation_after_provider_returns_does_not_persist_a_draft(session: Session) -> None:
