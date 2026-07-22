@@ -25,6 +25,17 @@ from ..settings import settings
 
 
 router = APIRouter(prefix="/v1", tags=["AI question validation"])
+_PUBLIC_FEATURE_SUMMARY_KEYS = frozenset(
+    {
+        "comparison_counts",
+        "content_policy_version",
+        "difficulty_signal",
+        "embedding_dependency",
+        "finding_count",
+        "similarity_threshold",
+    }
+)
+_PRIVATE_FEATURE_KEY_PARTS = ("digest", "fingerprint", "hash")
 
 
 @router.post(
@@ -126,7 +137,7 @@ def _run_payload(run: GenerationValidationRun) -> dict[str, object]:
         "validator_version": run.validator_version,
         "ruleset_version": run.ruleset_version,
         "status": run.status.value,
-        "feature_summary": run.feature_summary_json,
+        "feature_summary": _public_feature_summary(run.feature_summary_json),
         "created_at": run.created_at.isoformat(),
         "findings": [
             {
@@ -138,6 +149,26 @@ def _run_payload(run: GenerationValidationRun) -> dict[str, object]:
             for finding in run.findings
         ],
     }
+
+
+def _public_feature_summary(summary: dict[str, object]) -> dict[str, object]:
+    return {
+        key: _without_private_feature_keys(value)
+        for key, value in summary.items()
+        if key in _PUBLIC_FEATURE_SUMMARY_KEYS
+    }
+
+
+def _without_private_feature_keys(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            key: _without_private_feature_keys(child)
+            for key, child in value.items()
+            if not any(part in str(key).casefold() for part in _PRIVATE_FEATURE_KEY_PARTS)
+        }
+    if isinstance(value, list):
+        return [_without_private_feature_keys(child) for child in value]
+    return value
 
 
 def _api_error(status_code: int, code: str) -> HTTPException:

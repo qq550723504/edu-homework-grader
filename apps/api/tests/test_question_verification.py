@@ -1,4 +1,5 @@
 import importlib.util
+from copy import deepcopy
 from decimal import Decimal
 from uuid import uuid4
 
@@ -866,6 +867,50 @@ def test_validation_uses_selected_revision_not_provider_original(session: Sessio
         "exact_hash": expected.exact_hash,
         "normalized_hash": expected.normalized_hash,
     }
+
+
+def test_nested_grader_mutation_does_not_change_revision_or_provider_original(
+    session: Session,
+) -> None:
+    draft = generation_draft(
+        session,
+        allowed_question_types=["E4"],
+        candidate_json=valid_e4_candidate(),
+    )
+    revision = current_review_revision(session, draft)
+    revision_before = deepcopy(revision.candidate_json)
+    provider_original_before = deepcopy(draft.candidate_json)
+
+    class NestedRuleMutatingGrader(PassingE4Grader):
+        mutated = False
+
+        def grade(
+            self,
+            question_type: str,
+            rule_json: dict[str, object],
+            answer_json: dict[str, object],
+            *,
+            policy_version: str | None = None,
+        ) -> GradeResult:
+            scoring_points = rule_json.get("scoring_points")
+            assert isinstance(scoring_points, list)
+            first_point = scoring_points[0]
+            assert isinstance(first_point, dict)
+            first_point["id"] = "mutated-by-grader"
+            self.mutated = True
+            return super().grade(
+                question_type,
+                rule_json,
+                answer_json,
+                policy_version=policy_version,
+            )
+
+    grader = NestedRuleMutatingGrader()
+    verify_current_revision(session, draft=draft, grader_client=grader)
+
+    assert grader.mutated is True
+    assert revision.candidate_json == revision_before
+    assert draft.candidate_json == provider_original_before
 
 
 def test_batch_duplicate_uses_peer_current_revision_not_provider_original(

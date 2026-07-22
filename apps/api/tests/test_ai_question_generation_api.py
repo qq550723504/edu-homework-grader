@@ -23,6 +23,7 @@ from edu_grader_api.models import (
     GenerationJob,
     GeneratedQuestionDraft,
     GeneratedQuestionDraftRevision,
+    GenerationValidationRun,
     QuestionVersion,
     Role,
     Tenant,
@@ -73,6 +74,58 @@ def authorize(client: TestClient, user: User) -> dict[str, str]:
         VerifiedIdentity(issuer=ISSUER, subject=user.oidc_subject or "", school_id=user.school_id)
     )
     return {"Authorization": "Bearer test-token"}
+
+
+def assert_public_validation_payload_is_sanitized(
+    payload: object,
+    *,
+    forbidden_values: tuple[str, ...],
+) -> None:
+    string_values: list[str] = []
+
+    def visit(value: object) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                normalized_key = str(key).casefold()
+                assert "hash" not in normalized_key
+                assert "fingerprint" not in normalized_key
+                assert "digest" not in normalized_key
+                assert not normalized_key.endswith("revision_id")
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+        elif isinstance(value, str):
+            string_values.append(value)
+
+    visit(payload)
+    for forbidden in forbidden_values:
+        assert all(forbidden not in value for value in string_values)
+
+
+def test_public_validation_feature_summary_uses_recursive_allowlist() -> None:
+    summary = validation_router._public_feature_summary(
+        {
+            "finding_count": 1,
+            "difficulty_signal": {
+                "availability": "available",
+                "nested": {
+                    "content_hash": "private-content-hash",
+                    "safe_value": "public-value",
+                },
+            },
+            "candidate_prompt_fingerprint": {"exact_hash": "private-prompt-hash"},
+            "future_unreviewed_field": "private-by-default",
+        }
+    )
+
+    assert summary == {
+        "finding_count": 1,
+        "difficulty_signal": {
+            "availability": "available",
+            "nested": {"safe_value": "public-value"},
+        },
+    }
 
 
 def teacher_and_objective(session: Session) -> tuple[User, CurriculumObjectiveRevision]:
@@ -266,6 +319,7 @@ def test_old_validation_run_is_not_current_after_edit(
 ) -> None:
     teacher, revision = teacher_and_objective(session)
     headers = authorize(client, teacher) | {"Idempotency-Key": "validation-run"}
+    teacher_constraint = "private teacher validation constraint"
     created = client.post(
         "/v1/ai-question-generation/jobs",
         headers=headers,
@@ -277,6 +331,7 @@ def test_old_validation_run_is_not_current_after_edit(
             "requested_count": 1,
             "policy_catalog_version": "2026.07",
             "prompt_version": "generator-v1",
+            "teacher_constraint": teacher_constraint,
         },
     )
     draft_id = client.get(
@@ -290,6 +345,7 @@ def test_old_validation_run_is_not_current_after_edit(
 
     draft = session.get(GeneratedQuestionDraft, UUID(draft_id))
     assert draft is not None
+    initial_revision_id = draft.current_revision_id
     edited_revision = GeneratedQuestionDraftRevision(
         generated_question_draft_id=draft.id,
         revision_number=2,
@@ -331,6 +387,38 @@ def test_old_validation_run_is_not_current_after_edit(
     assert [item["revision_number"] for item in history.json()["items"]] == [2, 1]
     assert fetched.json()["revision_number"] == 1
     assert fetched.json()["findings"] == []
+
+    persisted_runs = [
+        session.get(GenerationValidationRun, UUID(response.json()["id"]))
+        for response in (created_run, current_run)
+    ]
+    assert all(run is not None for run in persisted_runs)
+    internal_hashes = tuple(
+        hash_value
+        for run in persisted_runs
+        if run is not None
+        for hash_value in run.feature_summary_json["candidate_prompt_fingerprint"].values()
+        if isinstance(hash_value, str)
+    )
+    assert internal_hashes
+    system_prompt = resolve_prompt_template("generator-v1", ["M1"]).system_instructions
+    forbidden_values = (
+        str(initial_revision_id),
+        str(edited_revision.id),
+        "What is 2 + 2?",
+        "What is 9 + 9?",
+        teacher_constraint,
+        system_prompt,
+        *internal_hashes,
+    )
+    assert_public_validation_payload_is_sanitized(
+        created_run.json(), forbidden_values=forbidden_values
+    )
+    assert_public_validation_payload_is_sanitized(
+        current_run.json(), forbidden_values=forbidden_values
+    )
+    assert_public_validation_payload_is_sanitized(history.json(), forbidden_values=forbidden_values)
+    assert_public_validation_payload_is_sanitized(fetched.json(), forbidden_values=forbidden_values)
 
 
 def test_validation_run_route_exposes_unavailable_difficulty_signal_without_diagnostics(
