@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Do not add database columns, migrations, question types, automatic acceptance, automatic publication, #42 quality thresholds, or #43 governance controls.
-- M1/M2 assertions are required for newly generated or edited candidates. Missing, malformed, or unsupported assertions are blocked with stable sanitized findings.
+- `generator-v3` M1/M2 candidates require assertions. Missing, malformed, or unsupported v3 assertions are blocked with stable sanitized findings; earlier Prompt versions keep their historical validation contract.
 - `final_answer_text` is bounded text; `final_answer_mathjson` is a bounded JSON string so the provider's strict schema never needs an arbitrary object field.
 - An M1 explanation must end with the exact normalized suffix `Final answer: <final_answer_text>`; M2 must do the same and its MathJSON assertion must normalize to the same safe AST as the rule expectation.
 - Findings reveal only field names, question type, score presence, and rule/assertion versions; never values, MathJSON, prompt content, provider responses, or exceptions.
@@ -33,7 +33,7 @@
 **Interfaces:**
 
 - Produces `VerificationAssertions(final_answer_text, final_answer_mathjson, declared_max_score)` and `GeneratedCandidate.verification_assertions`.
-- `GeneratedCandidate.model_validate()` is used by provider ingestion, draft persistence, teacher edits, and acceptance; no separate API DTO is introduced.
+- `GeneratedCandidate.model_validate()` carries assertions through provider ingestion, draft persistence, teacher edits, and acceptance; the verifier applies the missing-assertion gate only to `generator-v3` drafts, so no separate API DTO is introduced.
 - Produces `generator-v3` / `generated_question_candidates-v2`; new generation jobs use that cataloged prompt version.
 
 - [ ] **Step 1: Write failing contract tests.**
@@ -74,7 +74,7 @@ class VerificationAssertions(BaseModel):
     declared_max_score: float = Field(gt=0, le=100)
 ```
 
-Add `verification_assertions: VerificationAssertions | None = None` to `GeneratedCandidate`. Extend its model validator so M1/M2 require a non-null object; M1 requires null MathJSON, M2 requires non-null MathJSON; E1-E4 require null. Update `FakeGenerationProvider` to create the required M1/M2 values, including `json.dumps(rule["expected"], separators=(",", ":"))` for M2. Add a v3 prompt template with a v2 schema identifier and final-answer instructions; make `GENERATION_PROMPT_VERSION` select v3.
+Add `verification_assertions: VerificationAssertions | None = None` to `GeneratedCandidate`. When assertions are present, its model validator requires null MathJSON for M1, non-null MathJSON for M2, and null assertions for E1-E4. The v3 strict Responses schema and prompt make the field required for active M1/M2 generation; the verifier, not the parser, blocks a missing v3 assertion so legacy drafts remain readable. Update `FakeGenerationProvider` to create the M1/M2 values, including `json.dumps(rule["expected"], separators=(",", ":"))` for M2. Add a v3 prompt template with a v2 schema identifier and final-answer instructions; make `GENERATION_PROMPT_VERSION` select v3.
 
 - [ ] **Step 4: Run the focused contract tests.**
 
@@ -105,7 +105,7 @@ git commit -m "feat: require structured candidate assertions"
 **Interfaces:**
 
 - Produces stable blocked findings: `answer_explanation_inconsistent`, `score_total_inconsistent`, and `unsupported_consistency_structure`.
-- Consumes `candidate["verification_assertions"]`, existing M1 `expected`/`tolerance`, existing M2 normalizer, and effective maximum score (`rule_json["max_score"]` or `1`).
+- Consumes `candidate["verification_assertions"]`, generation-job prompt version, existing M1 `expected`/`tolerance`, existing M2 normalizer, and effective maximum score (`rule_json["max_score"]` or `1`).
 - The public finding allowlist gains only the assertion evidence keys; serialized API findings remain sanitized.
 
 - [ ] **Step 1: Write failing M1/M2 service tests.**
@@ -133,12 +133,10 @@ Expected: FAIL because the verifier currently ignores `verification_assertions`.
 
 - [ ] **Step 3: Implement minimal assertion helpers.**
 
-Add `_consistency_findings()` and call it only after policy validation and before type-specific Grader probes. It must:
+Add narrow M1/M2 consistency helpers and call them after policy validation and before their type-specific Grader probes. They must gate missing assertions only when the job uses `generator-v3`:
 
 ```python
-if question_type not in {"M1", "M2"}:
-    return []
-if not isinstance(assertions, dict):
+if job.prompt_version == "generator-v3" and not isinstance(assertions, dict):
     return [_blocked("unsupported_consistency_structure", {"question_type": question_type, "field": "verification_assertions"}, remediation)]
 ```
 
@@ -274,3 +272,9 @@ git add docs/superpowers/plans/2026-07-23-verification-hardening-consistency.md
 git commit -m "docs: record verification hardening evidence"
 ```
 
+## Delivery verification — 2026-07-23
+
+- Explicit-source pytest bundle covering generator contracts, generation, review, verification, and corpus tests: exit 0; 338 passed.
+- `make verification-regression` with the same source paths: exit 0; M1 total=5 passed=5 failed=0 and M2 total=5 passed=5 failed=0.
+- `python -m ruff check services/generator apps/api` and `python -m ruff format --check services/generator apps/api`: exit 0.
+- `git diff --check`: exit 0; the slice adds no migration and does not change E3/E4 acceptance paths.

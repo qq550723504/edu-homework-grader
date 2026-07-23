@@ -60,13 +60,16 @@ strict, JSON-schema-visible `verification_assertions` object:
   for M1;
 - `declared_max_score`: the candidate's explicit total score.
 
-M1 and M2 require this object. The generator prompt requires the explanation
+The active `generator-v3` M1 and M2 contract requires this object. The generator prompt requires the explanation
 to end with `Final answer: <final_answer_text>`, and M2 requires the encoded
 MathJSON assertion to normalize to the same safe AST as `rule_json.expected`.
 M1 requires the final-answer text to parse as the same finite Decimal as
 `rule_json.expected`; both types require `declared_max_score` to agree with the
 policy's effective maximum score. E1-E4 keep the field null in this PR; their
 typed assertion contract is introduced only in their own regression slice.
+Earlier Prompt versions retain their historical validation behavior so their
+immutable drafts remain readable and auditable; only v3 candidates are blocked
+for a missing assertion object.
 
 The verification service adds narrow helpers that operate only on these
 supported shapes. Every helper returns an existing finding value object, so the
@@ -92,7 +95,9 @@ provider responses, or raw exceptions.
 The helpers deliberately do not infer mathematical or linguistic meaning from
 free-form prose. They compare only the structured assertion, the required
 explanation suffix, and explicit policy values. Ambiguous structures receive
-`unsupported_consistency_structure` rather than a false pass.
+`unsupported_consistency_structure` rather than a false pass. For v3 M1/M2,
+missing assertions are an unsupported structure; legacy prompt versions are not
+silently reinterpreted as v3 candidates.
 
 ### M1/M2 regression corpus
 
