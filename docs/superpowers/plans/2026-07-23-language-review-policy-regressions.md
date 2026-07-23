@@ -56,3 +56,11 @@
   ```
 
   Expected: every type reports `total=20`, E3/E4 remain `pending_review`, and all commands exit 0.
+
+## Delivery verification — 2026-07-23
+
+- Red test: extending the type loop to E1–E4 failed because `e1.json` did not exist.
+- `make verification-regression` with explicit package source paths: exit 0; M1, M2, E1, E2, E3, and E4 each report `total=20 passed=20 failed=0` with stable Finding Code summaries.
+- The E3/E4 corpus records require and observed `pending_review` after every validation run; no corpus path accepts or publishes a draft.
+- `python -m pytest apps/api/tests/test_question_verification.py apps/api/tests/test_ai_question_review.py apps/api/tests/test_verification_corpus.py -q`: exit 0; 236 passed.
+- `python -m ruff check apps/api/tests/test_verification_corpus.py`, `python -m ruff format --check apps/api/tests/test_verification_corpus.py`, and `git diff --check`: exit 0.
