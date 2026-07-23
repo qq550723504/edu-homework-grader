@@ -1,3 +1,5 @@
+"""Resolve tenant and global AI-generation controls with fail-closed precedence."""
+
 from __future__ import annotations
 
 from uuid import UUID
