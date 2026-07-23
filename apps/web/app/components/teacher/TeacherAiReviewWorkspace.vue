@@ -49,6 +49,15 @@ const pendingRefresh = ref<{
   minimumRevisionNumber?: number
   expectedTeacherStates?: Record<string, string>
 } | null>(null)
+const pendingBatchRefresh = ref<{
+  jobId: string
+  idempotencyKey: string
+  expectedTeacherStates: Record<string, string>
+} | null>(null)
+const confirmedBatchTeacherStates = ref<{
+  jobId: string
+  states: Record<string, string>
+} | null>(null)
 let routeLoadGeneration = 0
 let selectionRefreshGeneration = 0
 
@@ -108,6 +117,7 @@ const batchSelectionReady = computed(() => batchItems.value.length > 0
 const writeControlsDisabled = computed(() => loading.value
   || busyOperation.value !== null
   || refreshing.value
+  || pendingBatchRefresh.value?.jobId === selectedJobId.value
   || (pendingRefresh.value !== null
     && requestMatches(pendingRefresh.value.jobId, pendingRefresh.value.draftId)))
 
@@ -124,14 +134,15 @@ async function loadWorkspace() {
     pendingRefresh.value.jobId, pendingRefresh.value.draftId,
   )) {
     pendingRefresh.value = null
-    syncWarning.value = ''
+    if (pendingBatchRefresh.value?.jobId !== requestedJobId) syncWarning.value = ''
   }
   loading.value = true
   errorMessage.value = ''
   try {
     const nextJobs = await fetchAiGenerationJobs($fetch)
     const jobId = nextJobs.some((job) => job.id === requestedJobId) ? requestedJobId : nextJobs[0]?.id ?? null
-    const nextDrafts = jobId ? await fetchAiGenerationDrafts($fetch, jobId) : []
+    const fetchedDrafts = jobId ? await fetchAiGenerationDrafts($fetch, jobId) : []
+    const nextDrafts = jobId ? preserveConfirmedBatchStates(jobId, fetchedDrafts) : []
     if (!requestIsCurrent(generation, requestedJobId, requestedDraftId)) return
 
     const draftId = nextDrafts.some((draft) => draft.id === requestedDraftId)
@@ -154,7 +165,7 @@ async function loadWorkspace() {
     drafts.value = nextDrafts
     pruneBatchIntent(nextDrafts)
     setCurrentValidation(draft, validation)
-    syncWarning.value = ''
+    if (pendingBatchRefresh.value?.jobId !== jobId) syncWarning.value = ''
     pendingRefresh.value = null
   } catch (error: unknown) {
     if (requestIsCurrent(generation, requestedJobId, requestedDraftId)) {
@@ -327,6 +338,22 @@ function resetBatchIntent() {
   batchSelectionRevisions.value = {}
   batchValidationStates.value = {}
   batchIdempotency.value = null
+  pendingBatchRefresh.value = null
+  confirmedBatchTeacherStates.value = null
+  if (pendingRefresh.value === null) syncWarning.value = ''
+}
+
+function preserveConfirmedBatchStates(jobId: string, nextDrafts: TeacherAiDraft[]): TeacherAiDraft[] {
+  const confirmed = confirmedBatchTeacherStates.value
+  if (!confirmed || confirmed.jobId !== jobId) return nextDrafts
+  return nextDrafts.map((draft) => {
+    const expectedState = confirmed.states[draft.id]
+    if (!expectedState || draft.teacher_state === expectedState) return draft
+    const patchedDraft = drafts.value.find(item => (
+      item.id === draft.id && item.teacher_state === expectedState
+    ))
+    return patchedDraft ?? { ...draft, teacher_state: expectedState }
+  })
 }
 
 function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
@@ -429,16 +456,26 @@ async function acceptBatch() {
       }
       removeBatchDraft(decision.draft_id)
     }
+    rememberConfirmedBatchStates(jobId, expectedTeacherStates)
+    pendingBatchRefresh.value = {
+      jobId,
+      idempotencyKey,
+      expectedTeacherStates,
+    }
     notice.value = `已批量接受 ${result.items.length} 道候选题并创建草稿。`
     try {
-      const refresh = await refreshSelection(jobId, draft.id, undefined, expectedTeacherStates)
-      if (refresh === 'updated') pendingRefresh.value = null
+      const refresh = await refreshBatchJob(jobId, expectedTeacherStates)
+      if (refresh === 'updated'
+        && pendingBatchRefresh.value?.idempotencyKey === idempotencyKey) {
+        pendingBatchRefresh.value = null
+        syncWarning.value = ''
+      }
       if (refresh === 'behind') {
-        deferRefresh(jobId, draft.id, idempotencyKey, undefined, expectedTeacherStates)
+        deferBatchRefresh(jobId, idempotencyKey, expectedTeacherStates)
       }
     } catch {
       if (selectedJobId.value === jobId) {
-        deferRefresh(jobId, draft.id, idempotencyKey, undefined, expectedTeacherStates)
+        deferBatchRefresh(jobId, idempotencyKey, expectedTeacherStates)
       }
     }
   } catch (error: unknown) {
@@ -449,6 +486,41 @@ async function acceptBatch() {
   } finally {
     busyOperation.value = null
   }
+}
+
+function rememberConfirmedBatchStates(jobId: string, states: Record<string, string>) {
+  const existingStates = confirmedBatchTeacherStates.value?.jobId === jobId
+    ? confirmedBatchTeacherStates.value.states
+    : {}
+  confirmedBatchTeacherStates.value = {
+    jobId,
+    states: { ...existingStates, ...states },
+  }
+}
+
+async function refreshBatchJob(
+  jobId: string,
+  expectedTeacherStates: Record<string, string>,
+): Promise<'updated' | 'stale' | 'behind'> {
+  const nextDrafts = await fetchAiGenerationDrafts($fetch, jobId)
+  if (selectedJobId.value !== jobId) return 'stale'
+  if (Object.entries(expectedTeacherStates).some(([draftId, teacherState]) => (
+    nextDrafts.find(item => item.id === draftId)?.teacher_state !== teacherState
+  ))) {
+    return 'behind'
+  }
+  drafts.value = preserveConfirmedBatchStates(jobId, nextDrafts)
+  pruneBatchIntent(drafts.value)
+  return 'updated'
+}
+
+function deferBatchRefresh(
+  jobId: string,
+  idempotencyKey: string,
+  expectedTeacherStates: Record<string, string>,
+) {
+  pendingBatchRefresh.value = { jobId, idempotencyKey, expectedTeacherStates }
+  syncWarning.value = '操作已成功，但最新审核状态暂时无法刷新。请重试刷新。'
 }
 
 function batchIdempotencyKey(items: TeacherAiBatchAcceptItem[]): string {
@@ -608,6 +680,29 @@ function deferRefresh(
 }
 
 async function retryRefresh() {
+  const pendingBatch = pendingBatchRefresh.value
+  if (pendingBatch?.jobId === selectedJobId.value) {
+    const operationIdentity = pendingBatch.idempotencyKey
+    refreshing.value = true
+    try {
+      const refresh = await refreshBatchJob(
+        pendingBatch.jobId,
+        pendingBatch.expectedTeacherStates,
+      )
+      if (refresh === 'updated'
+        && pendingBatchRefresh.value?.idempotencyKey === operationIdentity) {
+        pendingBatchRefresh.value = null
+        syncWarning.value = ''
+      }
+    } catch {
+      if (pendingBatchRefresh.value?.idempotencyKey === operationIdentity) {
+        syncWarning.value = '操作已成功，但最新审核状态暂时无法刷新。请重试刷新。'
+      }
+    } finally {
+      refreshing.value = false
+    }
+    return
+  }
   const pending = pendingRefresh.value
   if (!pending || !requestMatches(pending.jobId, pending.draftId)) return
   const operationIdentity = pending.idempotencyKey

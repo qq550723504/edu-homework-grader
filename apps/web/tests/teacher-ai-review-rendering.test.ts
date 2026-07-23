@@ -382,6 +382,69 @@ describe('teacher AI review rendering', () => {
     expect(wrapper.get('[data-testid="accepted-question-version-id"]').text()).toContain('version-batch-1')
   })
 
+  it('keeps confirmed batch success and retry recovery across same-job draft navigation', async () => {
+    const secondDraft = {
+      ...warningE4Draft,
+      id: 'draft-2',
+      ordinal: 2,
+      candidate: { ...warningE4Draft.candidate, prompt: 'Second prompt' },
+    }
+    let resolveBulk!: (result: {
+      items: Array<{
+        draft_id: string
+        action: 'accept'
+        reason: null
+        revision_number: number
+        validation_run: TeacherAiValidationRun
+        accepted_question_version_id: string
+      }>
+    }) => void
+    let resolveNavigationDrafts!: (drafts: TeacherAiDraft[]) => void
+    let draftFetchCount = 0
+    mocks.bulkAcceptAiCandidates.mockReturnValue(new Promise((resolve) => { resolveBulk = resolve }))
+    mocks.fetchAiGenerationDrafts.mockImplementation(() => {
+      draftFetchCount += 1
+      if (draftFetchCount === 1) return Promise.resolve([warningE4Draft, secondDraft])
+      if (draftFetchCount === 2) {
+        return new Promise((resolve) => { resolveNavigationDrafts = resolve })
+      }
+      return Promise.resolve([warningE4Draft, secondDraft])
+    })
+    mocks.fetchAiValidationRuns.mockImplementation((_request, draftId: string) => Promise.resolve([{
+      ...warningValidation,
+      draft_id: draftId,
+    }]))
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="batch-select-draft-1"]').setValue(true)
+    await wrapper.get('[data-testid="batch-warning-draft-1"]').setValue(true)
+    await wrapper.get('[data-testid="bulk-accept-candidates"]').trigger('click')
+    await wrapper.get('[data-testid="generation-draft-draft-2"]').trigger('click')
+    await flushPromises()
+
+    resolveBulk({
+      items: [{
+        draft_id: 'draft-1',
+        action: 'accept',
+        reason: null,
+        revision_number: 1,
+        validation_run: warningValidation,
+        accepted_question_version_id: 'version-batch-1',
+      }],
+    })
+    await flushPromises()
+    resolveNavigationDrafts([warningE4Draft, secondDraft])
+    await flushPromises()
+
+    await wrapper.get('[data-testid="generation-draft-draft-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="accepted-notice"]').text()).toContain('已创建题库草稿')
+    expect(wrapper.get('[data-testid="accepted-question-version-id"]').text()).toContain('version-batch-1')
+    expect(wrapper.find('[data-testid="regenerate-candidate"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="retry-refresh"]').exists()).toBe(true)
+  })
+
   it('reuses the batch idempotency key while selection, revision, and confirmation intent is unchanged', async () => {
     vi.mocked(crypto.randomUUID)
       .mockReturnValueOnce('batch-key-1')
