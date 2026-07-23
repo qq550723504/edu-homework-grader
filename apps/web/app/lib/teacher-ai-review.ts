@@ -146,20 +146,23 @@ export function candidateEditInput(
     ? synchronizeExplanation(rawExplanation, verificationAssertions.final_answer_text)
     : rawExplanation
 
-  return {
+  const updated: TeacherAiCandidate = {
     ...current,
     prompt: edits.prompt ?? current.prompt,
     rule_json: ruleJson,
     explanation,
     knowledge_point: edits.knowledge_point ?? current.knowledge_point,
     difficulty,
-    verification_assertions: verificationAssertions,
     reading_material: readingMaterial,
     // These fields belong to the candidate already persisted on the server.
     objective_revision_id: current.objective_revision_id,
     question_type: current.question_type,
     policy_version: current.policy_version,
   }
+  if (verificationAssertions !== null || current.verification_assertions !== undefined) {
+    updated.verification_assertions = verificationAssertions
+  }
+  return updated
 }
 
 export function saveAiCandidateRevision(
