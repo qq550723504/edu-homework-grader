@@ -1,5 +1,5 @@
 from types import MappingProxyType
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -25,6 +25,9 @@ from edu_grader_api.models import (
     CurriculumProfileStatus,
     CurriculumRevisionStatus,
     CurriculumSourceRecord,
+    GenerationControlState,
+    GenerationGovernanceEntry,
+    GenerationGovernanceTargetType,
     GenerationJob,
     GenerationJobStatus,
     Role,
@@ -132,6 +135,28 @@ def teacher_and_e4_objective(session: Session) -> tuple[User, CurriculumObjectiv
     teacher, revision = teacher_and_objective(session)
     revision.allowed_question_types = ["E4"]
     return teacher, revision
+
+
+def add_governance_entry(
+    session: Session,
+    *,
+    tenant_id: UUID | None,
+    target_type: GenerationGovernanceTargetType,
+    target_key: str,
+    control_state: GenerationControlState,
+    is_global: bool = False,
+    created_by_user_id: UUID | None = None,
+) -> None:
+    session.add(
+        GenerationGovernanceEntry(
+            tenant_id=tenant_id if not is_global else None,
+            target_type=target_type,
+            target_key=target_key,
+            control_state=control_state,
+            is_global=is_global,
+            created_by_user_id=created_by_user_id,
+        )
+    )
 
 
 def e4_generation_request(revision: CurriculumObjectiveRevision) -> GenerationJobRequest:
@@ -691,3 +716,87 @@ def test_timeout_retries_once_then_records_partial_failure_without_identity_data
         and "display_name" not in (attempt.request_summary or {})
         for attempt in job.attempts
     )
+
+
+@pytest.mark.parametrize(
+    "state",
+    [GenerationControlState.CANARY, GenerationControlState.PAUSED, GenerationControlState.RETIRED],
+)
+def test_generation_pipeline_blocks_prompt_control_state(
+    session: Session, state: GenerationControlState
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    job = create_or_get_job(session, request=generation_request(revision), actor=teacher)
+    add_governance_entry(
+        session,
+        tenant_id=teacher.tenant_id,
+        target_type=GenerationGovernanceTargetType.PROMPT_VERSION,
+        target_key="generator-v2",
+        control_state=state,
+        is_global=True,
+    )
+
+    provider = FailIfCalledProvider()
+    run_generation_job(session, job=job, provider=provider)
+
+    assert job.status is GenerationJobStatus.FAILED
+    assert job.failure_code == "prompt_version_control_blocked"
+    assert provider.calls == 0
+
+
+def test_generation_pipeline_allows_tenant_canary_to_override_global_prompt_canary(
+    session: Session,
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    add_governance_entry(
+        session,
+        tenant_id=teacher.tenant_id,
+        target_type=GenerationGovernanceTargetType.PROMPT_VERSION,
+        target_key="generator-v2",
+        control_state=GenerationControlState.CANARY,
+        is_global=True,
+    )
+    add_governance_entry(
+        session,
+        tenant_id=teacher.tenant_id,
+        target_type=GenerationGovernanceTargetType.PROMPT_VERSION,
+        target_key="generator-v2",
+        control_state=GenerationControlState.CANARY,
+        is_global=False,
+    )
+
+    job = create_or_get_job(session, request=generation_request(revision), actor=teacher)
+    run_generation_job(session, job=job, provider=FakeGenerationProvider(seed=7))
+
+    assert job.status is GenerationJobStatus.READY_FOR_REVIEW
+    assert len(job.drafts) == 2
+
+
+def test_generation_pipeline_blocks_provider_and_model_for_governed_entries(
+    session: Session,
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    add_governance_entry(
+        session,
+        tenant_id=teacher.tenant_id,
+        target_type=GenerationGovernanceTargetType.PROVIDER,
+        target_key="fake",
+        control_state=GenerationControlState.PAUSED,
+        is_global=True,
+    )
+    add_governance_entry(
+        session,
+        tenant_id=teacher.tenant_id,
+        target_type=GenerationGovernanceTargetType.MODEL,
+        target_key="fake-v1",
+        control_state=GenerationControlState.PAUSED,
+        is_global=True,
+    )
+
+    job = create_or_get_job(session, request=generation_request(revision), actor=teacher)
+    provider = FailIfCalledProvider()
+    run_generation_job(session, job=job, provider=provider)
+
+    assert job.status is GenerationJobStatus.FAILED
+    assert job.failure_code in {"provider_control_blocked", "model_control_blocked"}
+    assert provider.calls == 0
