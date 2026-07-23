@@ -139,9 +139,11 @@ def assert_generation_pipeline_allowed(
     )
 
 
-def allowed_controls_for_target(
+def controls_for_target(
     session: Session, *, tenant_id: UUID, target_type: TargetType, target_key: str
 ) -> tuple[GenerationControlState | None, GenerationControlState | None]:
+    """Return tenant and global states without allowing one scope to hide the other."""
+
     tenant_entry = _find_scope_entry(
         session,
         tenant_id=tenant_id,
@@ -149,9 +151,6 @@ def allowed_controls_for_target(
         target_key=target_key,
         is_global=False,
     )
-    if tenant_entry is not None:
-        return tenant_entry.control_state, None
-
     global_entry = _find_scope_entry(
         session,
         tenant_id=None,
@@ -159,9 +158,23 @@ def allowed_controls_for_target(
         target_key=target_key,
         is_global=True,
     )
-    if global_entry is None:
-        return None, None
-    return None, global_entry.control_state
+    return (
+        tenant_entry.control_state if tenant_entry is not None else None,
+        global_entry.control_state if global_entry is not None else None,
+    )
+
+
+def allowed_controls_for_target(
+    session: Session, *, tenant_id: UUID, target_type: TargetType, target_key: str
+) -> tuple[GenerationControlState | None, GenerationControlState | None]:
+    """Backward-compatible alias for callers and tests."""
+
+    return controls_for_target(
+        session,
+        tenant_id=tenant_id,
+        target_type=target_type,
+        target_key=target_key,
+    )
 
 
 def _assert_component_allowed(
@@ -172,25 +185,28 @@ def _assert_component_allowed(
     target_key: str,
     blocked_code: str | None = None,
 ) -> None:
-    tenant_entry, global_entry = allowed_controls_for_target(
+    tenant_state, global_state = controls_for_target(
         session, tenant_id=tenant_id, target_type=target_type, target_key=target_key
     )
+    failure_code = blocked_code or "generation_control_blocked"
 
-    if tenant_entry is not None:
-        if _is_blocked(tenant_entry):
-            raise GenerationGovernanceError(blocked_code or "generation_control_blocked")
+    # A global pause or retirement is an emergency kill switch and can never be
+    # weakened by a tenant-scoped record.
+    if global_state in {GenerationControlState.PAUSED, GenerationControlState.RETIRED}:
+        raise GenerationGovernanceError(failure_code)
+
+    # Global canary means deny by default. Only an explicitly enrolled tenant
+    # canary may use the component; tenant ACTIVE is not an enrollment signal.
+    if global_state is GenerationControlState.CANARY:
+        if tenant_state is not GenerationControlState.CANARY:
+            raise GenerationGovernanceError(failure_code)
         return
 
-    if global_entry is not None and _is_blocked(global_entry, allow_canary=False):
-        raise GenerationGovernanceError(blocked_code or "generation_control_blocked")
-
-
-def _is_blocked(state: GenerationControlState, *, allow_canary: bool = True) -> bool:
-    if state in {GenerationControlState.PAUSED, GenerationControlState.RETIRED}:
-        return True
-    if not allow_canary and state is GenerationControlState.CANARY:
-        return True
-    return False
+    # With a globally active (or unspecified) component, tenants may only
+    # tighten access. Tenant canary remains allowed because the scope is already
+    # explicit and no global canary gate is active.
+    if tenant_state in {GenerationControlState.PAUSED, GenerationControlState.RETIRED}:
+        raise GenerationGovernanceError(failure_code)
 
 
 def _find_scope_entry(
@@ -204,15 +220,12 @@ def _find_scope_entry(
     statement = select(GenerationGovernanceEntry).where(
         GenerationGovernanceEntry.target_type == target_type,
         GenerationGovernanceEntry.target_key == target_key,
-        GenerationGovernanceEntry.is_global == is_global,
+        GenerationGovernanceEntry.is_global.is_(is_global),
     )
     if is_global:
         statement = statement.where(GenerationGovernanceEntry.tenant_id.is_(None))
     else:
-        statement = statement.where(
-            GenerationGovernanceEntry.tenant_id == tenant_id,
-            GenerationGovernanceEntry.is_global == False,  # noqa: E712
-        )
+        statement = statement.where(GenerationGovernanceEntry.tenant_id == tenant_id)
     return session.scalar(statement.order_by(GenerationGovernanceEntry.updated_at.desc()).limit(1))
 
 
