@@ -86,6 +86,7 @@ describe('teacher AI review API', () => {
       explanation: 'Edited explanation',
       knowledge_point: 'Edited knowledge point',
       difficulty: 0.7,
+      verification_assertions: null,
       reading_material: 'Edited passage.',
     })
     expect(() => candidateEditInput(candidate, { rule_json: '{' })).toThrow('valid JSON')
