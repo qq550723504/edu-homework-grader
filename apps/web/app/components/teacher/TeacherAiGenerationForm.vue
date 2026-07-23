@@ -20,6 +20,11 @@ import {
 } from '../../lib/teacher-ai-generation'
 import { fetchCurrentPrincipal } from '../../lib/student-api'
 
+const difficultyBandLabels: Record<TeacherAiDifficultyBand, string> = {
+  foundation: '基础',
+  standard: '标准',
+  stretch: '提高',
+}
 const profiles = ref<CurriculumProfile[]>([])
 const grades = ref<CurriculumGradeMapping[]>([])
 const objectives = ref<CurriculumObjective[]>([])
@@ -303,17 +308,17 @@ class MissingCsrfTokenError extends Error {}
           <fieldset v-for="type in allowedTypes" :key="type" class="ai-generation-form__type-group">
             <legend>{{ type }} 题</legend>
             <div v-for="difficultyBand in teacherAiDifficultyBands" :key="difficultyBand" class="ai-generation-form__count-control">
-              <span>{{ difficultyBand }}</span>
+              <span>{{ difficultyBandLabels[difficultyBand] }}</span>
               <button
-                :aria-label="`减少 ${type} ${difficultyBand} 难度题数量`"
+                :aria-label="`减少 ${type} ${difficultyBandLabels[difficultyBand]} 难度题数量`"
                 :data-testid="`question-type-${type}-${difficultyBand}-decrement`"
                 :disabled="submitting || !(counts[type]?.[difficultyBand] ?? 0)"
                 type="button"
                 @click="updateCount(type, difficultyBand, -1)"
               >−</button>
-              <output :aria-label="`${type} ${difficultyBand} 难度题数量`">{{ counts[type]?.[difficultyBand] ?? 0 }}</output>
+              <output :aria-label="`${type} ${difficultyBandLabels[difficultyBand]} 难度题数量`">{{ counts[type]?.[difficultyBand] ?? 0 }}</output>
               <button
-                :aria-label="`增加 ${type} ${difficultyBand} 难度题数量`"
+                :aria-label="`增加 ${type} ${difficultyBandLabels[difficultyBand]} 难度题数量`"
                 :data-testid="`question-type-${type}-${difficultyBand}-increment`"
                 :disabled="submitting || requestedCount >= maximumCount"
                 type="button"

@@ -549,9 +549,13 @@ async function regenerateCandidate() {
     const regeneratedJob = await regenerateAiCandidate(
       $fetch, csrf, draft.id, idempotencyKey,
     )
+    regenerationKeys.value = omitKey(regenerationKeys.value, draft.id)
     if (!requestMatches(jobId, draft.id)) return
     await navigateTo({ query: { job: regeneratedJob.id } })
   } catch (error: unknown) {
+    if (!regenerationOutcomeUnknown(error)) {
+      regenerationKeys.value = omitKey(regenerationKeys.value, draft.id)
+    }
     if (!requestMatches(jobId, draft.id)) return
     errorMessage.value = publicErrorMessage(
       error, '暂时无法重新生成 AI 候选题，请稍后重试。',
@@ -563,6 +567,10 @@ async function regenerateCandidate() {
 
 function isPendingReview(draft: TeacherAiDraft): boolean {
   return draft.teacher_state === 'pending_review'
+}
+
+function regenerationOutcomeUnknown(error: unknown): boolean {
+  return !(error instanceof MissingCsrfTokenError) && errorStatus(error) === null
 }
 
 async function runWrite(

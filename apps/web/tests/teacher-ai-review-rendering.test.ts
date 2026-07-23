@@ -488,6 +488,62 @@ describe('teacher AI review rendering', () => {
     expect(terminal.find('[data-testid="regenerate-candidate"]').exists()).toBe(false)
   })
 
+  it('uses a fresh regeneration key after returning to the source draft from a successful job', async () => {
+    vi.mocked(crypto.randomUUID)
+      .mockReturnValueOnce('regeneration-key-1')
+      .mockReturnValueOnce('regeneration-key-2')
+    mocks.fetchAiGenerationJobs.mockResolvedValue([
+      { id: 'job-1', status: 'completed', succeeded_count: 1, failed_count: 0 },
+      { id: 'job-regenerated-1', status: 'completed', succeeded_count: 0, failed_count: 0 },
+      { id: 'job-regenerated-2', status: 'completed', succeeded_count: 0, failed_count: 0 },
+    ])
+    mocks.fetchAiGenerationDrafts.mockImplementation((_request, jobId) => (
+      jobId === 'job-1' ? Promise.resolve([warningE4Draft]) : Promise.resolve([])
+    ))
+    mocks.regenerateAiCandidate
+      .mockResolvedValueOnce({ id: 'job-regenerated-1', status: 'ready_for_review' })
+      .mockResolvedValueOnce({ id: 'job-regenerated-2', status: 'ready_for_review' })
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="regenerate-candidate"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="generation-job-job-1"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="regenerate-candidate"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.regenerateAiCandidate.mock.calls.map(call => [call[2], call[3]])).toEqual([
+      ['draft-1', 'regeneration-key-1'],
+      ['draft-1', 'regeneration-key-2'],
+    ])
+    expect(navigateTo).toHaveBeenCalledWith({ query: { job: 'job-regenerated-1' } })
+    expect(navigateTo).toHaveBeenCalledWith({ query: { job: 'job-regenerated-2' } })
+  })
+
+  it('retains a regeneration key only while the request outcome is unknown', async () => {
+    vi.mocked(crypto.randomUUID)
+      .mockReturnValueOnce('regeneration-key-1')
+      .mockReturnValueOnce('regeneration-key-2')
+    mocks.regenerateAiCandidate
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockRejectedValueOnce({ statusCode: 409 })
+      .mockResolvedValueOnce({ id: 'job-regenerated', status: 'ready_for_review' })
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="regenerate-candidate"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="regenerate-candidate"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="regenerate-candidate"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.regenerateAiCandidate.mock.calls.map(call => call[3])).toEqual([
+      'regeneration-key-1',
+      'regeneration-key-1',
+      'regeneration-key-2',
+    ])
+  })
+
   it.each(['accepted', 'rejected'])('enforces pending review again in workspace handlers for %s drafts', async (teacherState) => {
     mocks.fetchAiGenerationDrafts.mockResolvedValue([{ ...warningE4Draft, teacher_state: teacherState }])
     const wrapper = await mountWorkspace()

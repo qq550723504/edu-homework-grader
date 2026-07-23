@@ -331,7 +331,7 @@ def test_creation_derives_course_and_versions_from_active_objective(session: Ses
     assert job.grade == revision.objective.grade_mapping.internal_level
     assert job.subject == revision.objective.subject
     assert job.policy_version == "2026.07"
-    assert job.prompt_version == "generator-v1"
+    assert job.prompt_version == "generator-v2"
 
 
 def test_creation_persists_server_owned_difficulty_plan(session: Session) -> None:
@@ -464,7 +464,7 @@ def test_creation_rejects_a_normal_request_outside_the_catalog_template_scope(
     ]
     request_data["requested_count"] = 1
     request = GenerationJobRequest.model_validate(request_data)
-    template = resolve_prompt_template("generator-v1", ["M1"])
+    template = resolve_prompt_template("generator-v2", ["M1"])
     monkeypatch.setattr(
         prompt_templates,
         "PROMPT_TEMPLATE_CATALOG",
@@ -627,7 +627,7 @@ def test_successful_attempt_records_template_audit_metadata_without_prompt_body(
         teacher_constraint=teacher_constraint,
     )
 
-    template = resolve_prompt_template("generator-v1", ["M1"])
+    template = resolve_prompt_template("generator-v2", ["M1"])
     summary = job.attempts[0].request_summary
     assert summary is not None
     assert summary["prompt_template"] == {

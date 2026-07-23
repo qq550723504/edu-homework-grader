@@ -52,9 +52,27 @@ def test_template_fingerprint_is_stable_across_question_type_order() -> None:
     assert first.fingerprint == second.fingerprint
 
 
+def test_generator_v2_requires_ordered_candidate_for_each_plan_item() -> None:
+    template = resolve_prompt_template("generator-v2", ["M2", "M1"])
+
+    assert template.version == "generator-v2"
+    assert template.schema_version == GENERATED_QUESTION_CANDIDATES_SCHEMA_V1
+    assert (
+        "exactly one candidate for each ordered input item"
+        in template.system_instructions
+    )
+    assert "same order" in template.system_instructions
+    assert "same question_type" in template.system_instructions
+    assert "requested target_difficulty" in template.system_instructions
+    assert (
+        template.fingerprint
+        != resolve_prompt_template("generator-v1", ["M2", "M1"]).fingerprint
+    )
+
+
 def test_template_resolver_rejects_unknown_versions() -> None:
     with pytest.raises(ValueError, match="unknown prompt template version"):
-        resolve_prompt_template("generator-v2", ["M1"])
+        resolve_prompt_template("generator-v3", ["M1"])
 
 
 def test_template_resolver_rejects_question_types_outside_template_scope() -> None:
@@ -235,6 +253,47 @@ def test_openai_provider_instructs_conditional_reading_material_output(
     )
     # Responses accepts the JSON Schema itself, not a separate schema-version parameter.
     assert outgoing["text"]["format"]["name"] == "generated_question_candidates"
+
+
+def test_openai_provider_sends_v2_ordered_generation_plan_and_matching_instructions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    items = [
+        GenerationPlanItem(
+            question_type="M2",
+            difficulty_band="foundation",
+            target_difficulty=0.24,
+        ),
+        GenerationPlanItem(
+            question_type="M1",
+            difficulty_band="stretch",
+            target_difficulty=0.72,
+        ),
+    ]
+
+    outgoing = _capture_openai_request(
+        monkeypatch,
+        prompt_version="generator-v2",
+        items=items,
+    )
+    template = resolve_prompt_template("generator-v2", ["M2", "M1"])
+    model_input = json.loads(outgoing["input"])
+
+    assert outgoing["instructions"] == template.system_instructions
+    assert model_input["prompt_version"] == "generator-v2"
+    assert model_input["items"] == [
+        {
+            "question_type": "M2",
+            "difficulty_band": "foundation",
+            "target_difficulty": 0.24,
+        },
+        {
+            "question_type": "M1",
+            "difficulty_band": "stretch",
+            "target_difficulty": 0.72,
+        },
+    ]
+    assert model_input["requested_count"] == 2
 
 
 @pytest.mark.parametrize(
@@ -482,23 +541,36 @@ def test_openai_provider_preserves_a_valid_immutable_model_id(model: str) -> Non
     assert provider.model_version == model
 
 
-def _capture_openai_request(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+def _capture_openai_request(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    prompt_version: str = "generator-v1",
+    items: list[GenerationPlanItem] | None = None,
+) -> dict[str, object]:
     outgoing: dict[str, object] = {}
     objective_revision_id = uuid4()
+    generation_items = items or [
+        GenerationPlanItem(
+            question_type="M1",
+            difficulty_band="standard",
+            target_difficulty=0.5,
+        )
+    ]
     output_text = json.dumps(
         {
             "candidates": [
                 {
                     "objective_revision_id": str(objective_revision_id),
-                    "question_type": "M1",
+                    "question_type": item.question_type,
                     "policy_version": "1",
-                    "prompt": "What is 2 + 2?",
+                    "prompt": f"Candidate {ordinal}.",
                     "rule_json": {"expected": 4, "tolerance": 0},
                     "explanation": "Add the two numbers.",
                     "knowledge_point": "addition",
-                    "difficulty": 0.1,
+                    "difficulty": item.target_difficulty,
                     "reading_material": None,
                 }
+                for ordinal, item in enumerate(generation_items, start=1)
             ]
         }
     )
@@ -527,16 +599,10 @@ def _capture_openai_request(monkeypatch: pytest.MonkeyPatch) -> dict[str, object
             difficulty_max=1,
             grade="Grade 5",
             subject="mathematics",
-            items=[
-                GenerationPlanItem(
-                    question_type="M1",
-                    difficulty_band="standard",
-                    target_difficulty=0.5,
-                )
-            ],
-            requested_count=1,
+            items=generation_items,
+            requested_count=len(generation_items),
             policy_version="1",
-            prompt_version="generator-v1",
+            prompt_version=prompt_version,
         )
     )
     return outgoing

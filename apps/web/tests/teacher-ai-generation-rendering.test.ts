@@ -111,6 +111,10 @@ describe('teacher AI generation request rendering', () => {
     expect(wrapper.find('[data-testid="question-type-M1-stretch-increment"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="question-type-E2-foundation-increment"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="question-type-E4-foundation-increment"]').exists()).toBe(false)
+    expect(wrapper.get('.ai-generation-form__type-group').findAll('.ai-generation-form__count-control span')
+      .map(control => control.text())).toEqual(['基础', '标准', '提高'])
+    expect(wrapper.get('[data-testid="question-type-M1-foundation-increment"]').attributes('aria-label'))
+      .toBe('增加 M1 基础 难度题数量')
   })
 
   it('uses one idempotency key and navigates only to the public job URL after a successful request', async () => {

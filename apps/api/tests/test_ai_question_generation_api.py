@@ -354,7 +354,7 @@ def test_generation_create_derives_course_and_versions_from_active_objective(
     assert job.grade == revision.objective.grade_mapping.internal_level
     assert job.subject == revision.objective.subject
     assert job.policy_version == "2026.07"
-    assert job.prompt_version == "generator-v1"
+    assert job.prompt_version == "generator-v2"
 
 
 def test_generation_difficulty_plan_rejects_client_target_difficulty(
