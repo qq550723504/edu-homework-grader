@@ -1,4 +1,4 @@
-.PHONY: install-python test lint format api-test api-lint api-migrate question-test calibration-report ai-evaluation verification-regression web-install web-test web-build web-e2e dev down
+.PHONY: install-python test lint format api-test api-lint api-migrate question-test calibration-report ai-evaluation ai-evaluation-operational verification-regression web-install web-test web-build web-e2e dev down
 
 install-python:
 	python -m pip install -e packages/processor-policy -e "services/generator[openai,dev]" -e "apps/api[dev]" -e "services/grader[dev]"
@@ -24,6 +24,10 @@ calibration-report:
 
 ai-evaluation:
 	python -m edu_grader_api.services.ai_evaluation_gate apps/api/tests/fixtures/ai_evaluation/gate-policy-v1.json apps/api/tests/fixtures/ai_evaluation/golden-v1.jsonl artifacts/ai-evaluation
+
+ai-evaluation-operational:
+	test -n "$(SPEC)" || (echo "SPEC=/secure/path/operational-spec.json is required" >&2; exit 1)
+	python -m edu_grader_api.services.ai_evaluation_operational "$(SPEC)" "$(or $(OUTPUT),artifacts/ai-evaluation-operational)"
 
 verification-regression:
 	python -m pytest apps/api/tests/test_verification_corpus.py -q -s
