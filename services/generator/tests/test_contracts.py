@@ -10,6 +10,7 @@ import edu_generator.prompt_templates as prompt_templates
 from edu_generator.contracts import (
     GeneratedCandidate,
     GeneratedCandidateEnvelope,
+    GenerationPlanItem,
     GenerationRequest,
     ProviderCandidatePayload,
 )
@@ -69,7 +70,14 @@ def test_fake_provider_returns_stable_m1_m2_e1_e4_envelopes() -> None:
         difficulty_max=1,
         grade="Grade 5",
         subject="mathematics",
-        question_types=["M1", "M2", "E1", "E4"],
+        items=[
+            GenerationPlanItem(
+                question_type=question_type,
+                difficulty_band="standard",
+                target_difficulty=0.5,
+            )
+            for question_type in ["M1", "M2", "E1", "E4"]
+        ],
         requested_count=4,
         policy_version="2026.07",
         prompt_version="generator-v1",
@@ -200,7 +208,13 @@ def test_openai_provider_decodes_json_encoded_rule_json(
             difficulty_max=1,
             grade="Grade 5",
             subject="mathematics",
-            question_types=["M1"],
+            items=[
+                GenerationPlanItem(
+                    question_type="M1",
+                    difficulty_band="standard",
+                    target_difficulty=0.5,
+                )
+            ],
             requested_count=1,
             policy_version="1",
             prompt_version="generator-v1",
@@ -224,14 +238,14 @@ def test_openai_provider_instructs_conditional_reading_material_output(
 
 
 @pytest.mark.parametrize(
-    ("prompt_version", "question_types"),
+    ("prompt_version", "item_question_types"),
     [
         ("unknown-template", ["M1"]),
         ("generator-v1", ["X1"]),
     ],
 )
 def test_openai_provider_rejects_unknown_or_out_of_scope_prompt_templates(
-    monkeypatch: pytest.MonkeyPatch, prompt_version: str, question_types: list[str]
+    monkeypatch: pytest.MonkeyPatch, prompt_version: str, item_question_types: list[str]
 ) -> None:
     request = GenerationRequest(
         objective_revision_id=uuid4(),
@@ -240,12 +254,28 @@ def test_openai_provider_rejects_unknown_or_out_of_scope_prompt_templates(
         difficulty_max=1,
         grade="Grade 5",
         subject="mathematics",
-        question_types=["M1"],
+        items=[
+            GenerationPlanItem(
+                question_type="M1",
+                difficulty_band="standard",
+                target_difficulty=0.5,
+            )
+        ],
         requested_count=1,
         policy_version="1",
         prompt_version="generator-v1",
     ).model_copy(
-        update={"prompt_version": prompt_version, "question_types": question_types}
+        update={
+            "prompt_version": prompt_version,
+            "items": [
+                GenerationPlanItem.model_construct(
+                    question_type=question_type,
+                    difficulty_band="standard",
+                    target_difficulty=0.5,
+                )
+                for question_type in item_question_types
+            ],
+        }
     )
     provider = OpenAIResponsesProvider(
         api_key="test-key",
@@ -298,7 +328,13 @@ def test_openai_provider_rejects_a_normal_request_outside_template_scope_before_
         difficulty_max=1,
         grade="Grade 5",
         subject="English",
-        question_types=["E1"],
+        items=[
+            GenerationPlanItem(
+                question_type="E1",
+                difficulty_band="standard",
+                target_difficulty=0.5,
+            )
+        ],
         requested_count=1,
         policy_version="1",
         prompt_version="generator-v1",
@@ -335,7 +371,14 @@ def test_fake_provider_emits_only_e4_reading_material() -> None:
         difficulty_max=1,
         grade="Grade 5",
         subject="English",
-        question_types=["M1", "E4"],
+        items=[
+            GenerationPlanItem(
+                question_type=question_type,
+                difficulty_band="standard",
+                target_difficulty=0.5,
+            )
+            for question_type in ["M1", "E4"]
+        ],
         requested_count=2,
         policy_version="2026.07",
         prompt_version="generator-v1",
@@ -484,7 +527,13 @@ def _capture_openai_request(monkeypatch: pytest.MonkeyPatch) -> dict[str, object
             difficulty_max=1,
             grade="Grade 5",
             subject="mathematics",
-            question_types=["M1"],
+            items=[
+                GenerationPlanItem(
+                    question_type="M1",
+                    difficulty_band="standard",
+                    target_difficulty=0.5,
+                )
+            ],
             requested_count=1,
             policy_version="1",
             prompt_version="generator-v1",
