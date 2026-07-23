@@ -63,11 +63,13 @@ def load_policy(path: Path) -> GatePolicy:
 def evaluate_records(
     records: Sequence[ai_evaluation.EvaluationRecord], policy: GatePolicy
 ) -> ai_evaluation.EvaluationReport:
-    report = ai_evaluation.evaluate_records(records, policy.base_policy())
+    state_violations = _record_state_violations(records)
+    valid_records = [record for record in records if not _record_state_reasons(record)]
+    report = ai_evaluation.evaluate_records(valid_records, policy.base_policy())
     violations = [
         *report.violations,
-        *_evidence_violations(records, policy.evidence_requirements),
-        *_record_state_violations(records),
+        *_evidence_violations(valid_records, policy.evidence_requirements),
+        *state_violations,
     ]
     violations = _deduplicate_violations(violations)
     return report.model_copy(
@@ -130,43 +132,7 @@ def _record_state_violations(
 ) -> list[ai_evaluation.EvaluationViolation]:
     violations: list[ai_evaluation.EvaluationViolation] = []
     for record in records:
-        reasons: list[str] = []
-        is_math = record.question_type in {"M1", "M2"}
-        if is_math and record.math_answer_correct is None:
-            reasons.append("math_answer_result_missing")
-        if not is_math and record.math_answer_correct is not None:
-            reasons.append("english_record_has_math_answer_result")
-
-        if record.teacher_outcome == "accepted_directly" and record.teacher_edited:
-            reasons.append("direct_accept_marked_edited")
-        if record.teacher_outcome == "accepted_after_edit" and not record.teacher_edited:
-            reasons.append("edited_accept_missing_edit")
-
-        if record.teacher_outcome == "rejected":
-            if record.rejection_category is None:
-                reasons.append("rejection_category_missing")
-            if record.published:
-                reasons.append("rejected_record_published")
-            if not record.review_evidence:
-                reasons.append("rejected_record_missing_review_evidence")
-        elif record.rejection_category is not None:
-            reasons.append("rejection_category_on_non_rejected_record")
-
-        if record.teacher_outcome == "pending_review":
-            if record.published:
-                reasons.append("pending_record_published")
-            if record.review_evidence:
-                reasons.append("pending_record_claims_review_evidence")
-        elif not record.review_evidence:
-            reasons.append("completed_review_missing_evidence")
-
-        if record.published and record.teacher_outcome not in {
-            "accepted_directly",
-            "accepted_after_edit",
-        }:
-            reasons.append("publication_without_acceptance")
-
-        for reason in reasons:
+        for reason in _record_state_reasons(record):
             violations.append(
                 _violation(
                     "evaluation_record_state_invalid",
@@ -176,6 +142,45 @@ def _record_state_violations(
                 )
             )
     return violations
+
+
+def _record_state_reasons(record: ai_evaluation.EvaluationRecord) -> list[str]:
+    reasons: list[str] = []
+    is_math = record.question_type in {"M1", "M2"}
+    if is_math and record.math_answer_correct is None:
+        reasons.append("math_answer_result_missing")
+    if not is_math and record.math_answer_correct is not None:
+        reasons.append("english_record_has_math_answer_result")
+
+    if record.teacher_outcome == "accepted_directly" and record.teacher_edited:
+        reasons.append("direct_accept_marked_edited")
+    if record.teacher_outcome == "accepted_after_edit" and not record.teacher_edited:
+        reasons.append("edited_accept_missing_edit")
+
+    if record.teacher_outcome == "rejected":
+        if record.rejection_category is None:
+            reasons.append("rejection_category_missing")
+        if record.published:
+            reasons.append("rejected_record_published")
+        if not record.review_evidence:
+            reasons.append("rejected_record_missing_review_evidence")
+    elif record.rejection_category is not None:
+        reasons.append("rejection_category_on_non_rejected_record")
+
+    if record.teacher_outcome == "pending_review":
+        if record.published:
+            reasons.append("pending_record_published")
+        if record.review_evidence:
+            reasons.append("pending_record_claims_review_evidence")
+    elif not record.review_evidence:
+        reasons.append("completed_review_missing_evidence")
+
+    if record.published and record.teacher_outcome not in {
+        "accepted_directly",
+        "accepted_after_edit",
+    }:
+        reasons.append("publication_without_acceptance")
+    return reasons
 
 
 def _violation(code: str, metric: str, **key: str | int) -> ai_evaluation.EvaluationViolation:
