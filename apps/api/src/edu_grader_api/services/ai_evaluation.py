@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import argparse
 from collections import Counter
+from html import escape
+import json
 from math import isfinite
 from pathlib import Path
+import sys
 from typing import Literal, Sequence
 
 from edu_generator.model_snapshots import validate_immutable_openai_model_id
@@ -384,6 +388,44 @@ def _add_version_metric_deltas(summaries: list[EvaluationScopeSummary]) -> None:
         }
 
 
+def write_report(report: EvaluationReport, output_dir: Path) -> tuple[Path, Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    payload = report.model_dump(mode="json")
+    json_path = output_dir / "report.json"
+    html_path = output_dir / "report.html"
+    rendered_json = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+    json_path.write_text(f"{rendered_json}\n", encoding="utf-8")
+    html_path.write_text(_render_html_report(rendered_json), encoding="utf-8")
+    return json_path, html_path
+
+
+def _render_html_report(rendered_json: str) -> str:
+    return "\n".join(
+        (
+            "<!doctype html>",
+            '<html lang="en">',
+            '<head><meta charset="utf-8"><title>AI evaluation report</title></head>',
+            "<body><h1>AI evaluation report</h1>",
+            f"<pre>{escape(rendered_json)}</pre>",
+            "</body></html>",
+            "",
+        )
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Evaluate AI question generation quality")
+    parser.add_argument("policy_path", type=Path)
+    parser.add_argument("records_path", type=Path)
+    parser.add_argument("output_directory", type=Path)
+    arguments = parser.parse_args(argv)
+    report = evaluate_records(
+        load_records(arguments.records_path), load_policy(arguments.policy_path)
+    )
+    write_report(report, arguments.output_directory)
+    return 0 if report.promotion_eligible else 1
+
+
 def _evaluate_metric(
     numerator: int, denominator: int, threshold: float | int, comparator: MetricComparator
 ) -> EvaluationMetric:
@@ -406,3 +448,7 @@ def _evaluate_metric(
         comparator=comparator,
         state="pass" if passes else "fail",
     )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

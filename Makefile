@@ -1,4 +1,4 @@
-.PHONY: install-python test lint format api-test api-lint api-migrate question-test calibration-report verification-regression web-install web-test web-build web-e2e dev down
+.PHONY: install-python test lint format api-test api-lint api-migrate question-test calibration-report ai-evaluation verification-regression web-install web-test web-build web-e2e dev down
 
 install-python:
 	python -m pip install -e packages/processor-policy -e "services/generator[openai,dev]" -e "apps/api[dev]" -e "services/grader[dev]"
@@ -21,6 +21,9 @@ question-test:
 
 calibration-report:
 	python -m edu_grader.calibration services/grader/tests/fixtures/english_calibration.jsonl
+
+ai-evaluation:
+	python -m edu_grader_api.services.ai_evaluation apps/api/tests/fixtures/ai_evaluation/policy-v1.json apps/api/tests/fixtures/ai_evaluation/golden-v1.jsonl artifacts/ai-evaluation
 
 verification-regression:
 	python -m pytest apps/api/tests/test_verification_corpus.py -q -s

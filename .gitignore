@@ -30,5 +30,8 @@ Thumbs.db
 *.log
 coverage/
 
+# Generated AI evaluation evidence
+/artifacts/ai-evaluation/
+
 # Local linked worktrees
 .worktrees/

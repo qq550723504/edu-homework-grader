@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from pathlib import Path
 
 import pytest
@@ -209,3 +210,40 @@ def test_evaluate_records_reports_versioned_strata_and_comparisons() -> None:
         "validator_version",
         "difficulty_band",
     }
+
+
+def _write_records(path: Path, records: list[evaluation.EvaluationRecord]) -> None:
+    path.write_text(
+        "\n".join(record.model_dump_json() for record in records) + "\n", encoding="utf-8"
+    )
+
+
+def test_main_writes_json_and_html_for_passing_gate(tmp_path: Path) -> None:
+    records_path = tmp_path / "records.jsonl"
+    output_directory = tmp_path / "report"
+    _write_records(records_path, _passing_records())
+
+    exit_code = evaluation.main(
+        [str(_FIXTURE_DIRECTORY / "policy-v1.json"), str(records_path), str(output_directory)]
+    )
+
+    assert exit_code == 0
+    report = json.loads((output_directory / "report.json").read_text(encoding="utf-8"))
+    assert report["promotion_eligible"] is True
+    html = (output_directory / "report.html").read_text(encoding="utf-8")
+    assert "ai-evaluation-policy-v1" in html
+    assert "schema_pass_rate" in html
+
+
+def test_main_writes_artifacts_when_quality_gate_blocks(tmp_path: Path) -> None:
+    records_path = tmp_path / "records.jsonl"
+    output_directory = tmp_path / "report"
+    _write_records(records_path, _wrong_math_answer(_passing_records()))
+
+    exit_code = evaluation.main(
+        [str(_FIXTURE_DIRECTORY / "policy-v1.json"), str(records_path), str(output_directory)]
+    )
+
+    assert exit_code == 1
+    assert (output_directory / "report.json").is_file()
+    assert (output_directory / "report.html").is_file()
