@@ -1,0 +1,39 @@
+name: Python test diagnostics
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-test-diagnostics-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  diagnostics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install Python packages
+        run: make install-python
+      - name: Capture Python test output
+        shell: bash
+        run: |
+          mkdir -p artifacts/python-test-diagnostics
+          set +e
+          make test > artifacts/python-test-diagnostics/make-test.log 2>&1
+          echo $? > artifacts/python-test-diagnostics/make-test.exit-code
+          exit 0
+      - name: Upload diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-test-diagnostics
+          path: artifacts/python-test-diagnostics/
+          if-no-files-found: error
+          retention-days: 2
