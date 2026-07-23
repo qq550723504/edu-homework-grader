@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "question_type": "similarity",
+  "cases": [
+    {"id": "similarity-missing-client", "scenario": "missing_client", "expected_codes": ["duplicate_semantic_check_unavailable"]},
+    {"id": "similarity-empty-scores", "scenario": "empty_scores", "expected_codes": ["duplicate_semantic_check_unavailable"]},
+    {"id": "similarity-non-finite-score", "scenario": "non_finite_score", "expected_codes": ["duplicate_semantic_check_unavailable"]},
+    {"id": "similarity-timeout", "scenario": "timeout", "expected_codes": ["duplicate_semantic_check_unavailable"]}
+  ]
+}

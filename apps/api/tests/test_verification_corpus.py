@@ -14,6 +14,7 @@ from test_question_verification import (
     FailingE3Grader,
     FailingE4Grader,
     MalformedE3FeedbackGrader,
+    MissingSemanticGrader,
     NonFiniteE4Grader,
     PassingGrader,
     PassingE2Grader,
@@ -25,6 +26,8 @@ from test_question_verification import (
     UnexpectedE3DecisionGrader,
     UnexpectedE4DecisionGrader,
     SafeAstM2Grader,
+    SemanticGrader,
+    add_published_question,
     finding_codes,
     generation_draft,
     valid_e2_candidate,
@@ -677,3 +680,39 @@ def test_m1_m2_verification_corpus_runs_with_stable_type_summaries(session: Sess
             f"verification corpus: {question_type} total={len(cases)} passed={passed} failed=0"
         )
     print("\n".join(summary))
+
+
+def test_similarity_dependency_corpus_blocks_without_candidate_contents(session: Session) -> None:
+    payload = _corpus("similarity")
+    cases = payload["cases"]
+    assert isinstance(cases, list) and cases
+    for case in cases:
+        assert isinstance(case, dict)
+        case_id = case.get("id")
+        scenario = case.get("scenario")
+        expected_codes = case.get("expected_codes")
+        assert isinstance(case_id, str) and case_id
+        assert isinstance(scenario, str)
+        assert isinstance(expected_codes, list) and all(
+            isinstance(code, str) for code in expected_codes
+        )
+        draft = generation_draft(
+            session, candidate_json=valid_m1_candidate("Calculate two plus two.")
+        )
+        add_published_question(session, draft=draft, prompt="Name the capital of France.")
+        if scenario == "missing_client":
+            grader = MissingSemanticGrader()
+        elif scenario == "empty_scores":
+            grader = SemanticGrader([[]])
+        elif scenario == "non_finite_score":
+            grader = SemanticGrader([[float("nan")]])
+        elif scenario == "timeout":
+            grader = SemanticGrader([RuntimeError("private similarity timeout")])
+        else:
+            raise AssertionError(f"unknown similarity corpus scenario: {scenario}")
+        run = verify_current_revision(session, draft=draft, grader_client=grader)
+        codes = sorted(finding_codes(run))
+        assert run.status.value == "blocked", f"{case_id}: status={run.status.value}, codes={codes}"
+        assert codes == expected_codes, f"{case_id}: expected={expected_codes}, actual={codes}"
+        assert "Calculate two plus two." not in str(run.findings)
+        assert "Name the capital of France." not in str(run.findings)
