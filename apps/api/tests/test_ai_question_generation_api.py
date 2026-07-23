@@ -53,6 +53,7 @@ from edu_grader_api.models import (
 from edu_grader_api.settings import settings
 import edu_grader_api.routers.ai_question_validation as validation_router
 import edu_grader_api.routers.ai_question_generation as generation_router
+from edu_grader_api.services.generation import GENERATION_PROMPT_VERSION
 import edu_grader_api.services.question_verification as question_verification
 from edu_generator.prompt_templates import resolve_prompt_template
 
@@ -392,7 +393,7 @@ def test_generation_create_derives_course_and_versions_from_active_objective(
     assert job.grade == revision.objective.grade_mapping.internal_level
     assert job.subject == revision.objective.subject
     assert job.policy_version == "2026.07"
-    assert job.prompt_version == "generator-v2"
+    assert job.prompt_version == GENERATION_PROMPT_VERSION
 
 
 def test_generation_difficulty_plan_rejects_client_target_difficulty(
@@ -458,7 +459,7 @@ def test_generation_create_with_globally_blocked_prompt_does_not_call_provider(
         session,
         tenant_id=teacher.tenant_id,
         target_type=GenerationGovernanceTargetType.PROMPT_VERSION,
-        target_key="generator-v2",
+        target_key=GENERATION_PROMPT_VERSION,
         control_state=state,
         is_global=True,
     )
@@ -489,7 +490,7 @@ def test_generation_create_with_tenant_canary_override_on_global_prompt_canary(
         session,
         tenant_id=teacher.tenant_id,
         target_type=GenerationGovernanceTargetType.PROMPT_VERSION,
-        target_key="generator-v2",
+        target_key=GENERATION_PROMPT_VERSION,
         control_state=GenerationControlState.CANARY,
         is_global=True,
     )
@@ -497,7 +498,7 @@ def test_generation_create_with_tenant_canary_override_on_global_prompt_canary(
         session,
         tenant_id=teacher.tenant_id,
         target_type=GenerationGovernanceTargetType.PROMPT_VERSION,
-        target_key="generator-v2",
+        target_key=GENERATION_PROMPT_VERSION,
         control_state=GenerationControlState.CANARY,
         is_global=False,
     )

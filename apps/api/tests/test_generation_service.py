@@ -36,6 +36,7 @@ from edu_grader_api.models import (
     utc_now,
 )
 from edu_grader_api.services.generation import (
+    GENERATION_PROMPT_VERSION,
     GenerationJobRequest,
     GenerationServiceError,
     _content_hash,
@@ -356,7 +357,7 @@ def test_creation_derives_course_and_versions_from_active_objective(session: Ses
     assert job.grade == revision.objective.grade_mapping.internal_level
     assert job.subject == revision.objective.subject
     assert job.policy_version == "2026.07"
-    assert job.prompt_version == "generator-v2"
+    assert job.prompt_version == GENERATION_PROMPT_VERSION
 
 
 def test_creation_persists_server_owned_difficulty_plan(session: Session) -> None:
@@ -489,7 +490,7 @@ def test_creation_rejects_a_normal_request_outside_the_catalog_template_scope(
     ]
     request_data["requested_count"] = 1
     request = GenerationJobRequest.model_validate(request_data)
-    template = resolve_prompt_template("generator-v2", ["M1"])
+    template = resolve_prompt_template(GENERATION_PROMPT_VERSION, ["M1"])
     monkeypatch.setattr(
         prompt_templates,
         "PROMPT_TEMPLATE_CATALOG",
@@ -652,7 +653,7 @@ def test_successful_attempt_records_template_audit_metadata_without_prompt_body(
         teacher_constraint=teacher_constraint,
     )
 
-    template = resolve_prompt_template("generator-v2", ["M1"])
+    template = resolve_prompt_template(GENERATION_PROMPT_VERSION, ["M1"])
     summary = job.attempts[0].request_summary
     assert summary is not None
     assert summary["prompt_template"] == {
@@ -731,7 +732,7 @@ def test_generation_pipeline_blocks_prompt_control_state(
         session,
         tenant_id=teacher.tenant_id,
         target_type=GenerationGovernanceTargetType.PROMPT_VERSION,
-        target_key="generator-v2",
+        target_key=GENERATION_PROMPT_VERSION,
         control_state=state,
         is_global=True,
     )
@@ -752,7 +753,7 @@ def test_generation_pipeline_allows_tenant_canary_to_override_global_prompt_cana
         session,
         tenant_id=teacher.tenant_id,
         target_type=GenerationGovernanceTargetType.PROMPT_VERSION,
-        target_key="generator-v2",
+        target_key=GENERATION_PROMPT_VERSION,
         control_state=GenerationControlState.CANARY,
         is_global=True,
     )
@@ -760,7 +761,7 @@ def test_generation_pipeline_allows_tenant_canary_to_override_global_prompt_cana
         session,
         tenant_id=teacher.tenant_id,
         target_type=GenerationGovernanceTargetType.PROMPT_VERSION,
-        target_key="generator-v2",
+        target_key=GENERATION_PROMPT_VERSION,
         control_state=GenerationControlState.CANARY,
         is_global=False,
     )
