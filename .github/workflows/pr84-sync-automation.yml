@@ -1,0 +1,33 @@
+name: One-shot PR 84 branch synchronization
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/pr84-sync-automation.yml
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/verification-hardening-consistency
+          fetch-depth: 0
+      - name: Merge main into PR 84 branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git merge --no-commit --no-ff -X ours origin/main
+          rm -f .github/workflows/pr84-sync-automation.yml
+          rm -f .github/workflows/sync-main-verification-hardening.yml
+          git add -A
+          git commit -m "merge: sync AI governance stack into verification hardening"
+          git push origin HEAD:codex/verification-hardening-consistency
