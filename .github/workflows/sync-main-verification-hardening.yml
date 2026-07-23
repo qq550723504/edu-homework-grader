@@ -1,3 +1,4 @@
+# synchronization trigger
 name: Sync main into verification hardening
 
 on:
