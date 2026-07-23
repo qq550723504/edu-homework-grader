@@ -25,6 +25,7 @@ const emit = defineEmits<{
   'save-revision': [candidate: TeacherAiCandidate]
   reject: [reason: TeacherAiRejectReason, detail: string]
   accept: [input: { confirmWarnings: boolean }]
+  regenerate: []
 }>()
 
 const candidate = reactive(structuredClone(toRaw(props.draft.candidate)))
@@ -107,6 +108,10 @@ function rejectCandidate() {
 function acceptCandidate() {
   if (!writeDisabled.value && canAccept.value) emit('accept', { confirmWarnings: warningConfirmed.value })
 }
+
+function regenerateCandidate() {
+  if (!writeDisabled.value) emit('regenerate')
+}
 </script>
 
 <template>
@@ -140,6 +145,15 @@ function acceptCandidate() {
     <label v-if="candidate.question_type === 'E4'">阅读材料<textarea v-model="candidate.reading_material" :disabled="writeDisabled" aria-label="阅读材料" /></label>
     <p v-if="saveError" role="alert">{{ saveError }}</p>
     <button :disabled="writeDisabled" data-testid="save-revision" type="button" @click="saveRevision">保存修订</button>
+    <button
+      v-if="draft.teacher_state === 'pending_review'"
+      :disabled="writeDisabled"
+      data-testid="regenerate-candidate"
+      type="button"
+      @click="regenerateCandidate"
+    >
+      重新生成
+    </button>
 
     <section v-if="validation" aria-label="校验结果">
       <p>校验状态：{{ validation.status }}</p>

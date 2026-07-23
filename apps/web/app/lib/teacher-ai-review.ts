@@ -83,6 +83,16 @@ export interface TeacherAiRevisionResult {
   validation_run: TeacherAiValidationRun
 }
 
+export interface TeacherAiBatchAcceptItem {
+  draft_id: string
+  expected_revision_number: number
+  confirm_warnings: boolean
+}
+
+export interface TeacherAiBatchAcceptResult {
+  items: TeacherAiReviewDecision[]
+}
+
 export type TeacherAiCandidateEdits = Partial<{
   prompt: string
   rule_json: string | Record<string, unknown>
@@ -182,6 +192,36 @@ export function acceptAiCandidate(
     headers: { 'X-CSRF-Token': csrfToken, 'Idempotency-Key': key },
     body: { expected_revision_number: expectedRevisionNumber, confirm_warnings: warningConfirmed },
   })
+}
+
+export function regenerateAiCandidate(
+  request: Request,
+  csrfToken: string,
+  draftId: string,
+  key: string,
+): Promise<TeacherAiGenerationJob> {
+  return request<TeacherAiGenerationJob>(`/api/core/v1/ai-generated-questions/${draftId}/regenerate`, {
+    method: 'POST',
+    headers: { 'X-CSRF-Token': csrfToken, 'Idempotency-Key': key },
+    body: {},
+  })
+}
+
+export function bulkAcceptAiCandidates(
+  request: Request,
+  csrfToken: string,
+  jobId: string,
+  key: string,
+  items: TeacherAiBatchAcceptItem[],
+): Promise<TeacherAiBatchAcceptResult> {
+  return request<TeacherAiBatchAcceptResult>(
+    `/api/core/v1/ai-question-generation/jobs/${jobId}/bulk-accept`,
+    {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': csrfToken, 'Idempotency-Key': key },
+      body: { items },
+    },
+  )
 }
 
 export function canAcceptCandidate(input: {

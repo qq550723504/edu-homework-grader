@@ -2,11 +2,13 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   acceptAiCandidate,
+  bulkAcceptAiCandidates,
   canAcceptCandidate,
   candidateEditInput,
   fetchAiGenerationDrafts,
   fetchAiGenerationJobs,
   fetchAiValidationRuns,
+  regenerateAiCandidate,
   rejectAiCandidate,
   saveAiCandidateRevision,
   type TeacherAiCandidate,
@@ -109,6 +111,38 @@ describe('teacher AI review API', () => {
       body: { expected_revision_number: 1, confirm_warnings: true },
     })
     expect(request.mock.calls.flat().join(' ')).not.toContain('publish')
+  })
+
+  it('regenerates a draft with an exact authenticated idempotent POST', async () => {
+    const regeneratedJob = { id: 'job-2', status: 'ready_for_review' }
+    const request = vi.fn().mockResolvedValue(regeneratedJob)
+
+    await expect(regenerateAiCandidate(
+      request, 'csrf-token', 'draft-1', 'regenerate-key',
+    )).resolves.toEqual(regeneratedJob)
+
+    expect(request).toHaveBeenCalledWith('/api/core/v1/ai-generated-questions/draft-1/regenerate', {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': 'csrf-token', 'Idempotency-Key': 'regenerate-key' },
+      body: {},
+    })
+  })
+
+  it('bulk accepts exact draft revision and warning-confirmation items', async () => {
+    const items = [{
+      draft_id: 'draft-1',
+      expected_revision_number: 2,
+      confirm_warnings: true,
+    }]
+    const request = vi.fn().mockResolvedValue({ items: [] })
+
+    await bulkAcceptAiCandidates(request, 'csrf-token', 'job-1', 'key-1', items)
+
+    expect(request).toHaveBeenCalledWith('/api/core/v1/ai-question-generation/jobs/job-1/bulk-accept', {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': 'csrf-token', 'Idempotency-Key': 'key-1' },
+      body: { items },
+    })
   })
 
   it('requires warning confirmation and rejects blocked candidates', () => {
