@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..audit import append_audit_event
@@ -20,10 +21,9 @@ from ..models import (
     Role,
     User,
 )
-from ..services.generation_governance import (
-    assert_transition_is_valid,
-)
+from ..services.generation_governance import assert_transition_is_valid
 from ..services.roster import RosterValidationError, import_roster, parse_roster
+from ..settings import settings
 
 
 router = APIRouter(prefix="/v1/admin", tags=["admin"])
@@ -169,7 +169,13 @@ def list_ai_generation_governance(
             ),
         )
     )
-    entries = session.scalars(statement.order_by(GenerationGovernanceEntry.target_type)).all()
+    entries = session.scalars(
+        statement.order_by(
+            GenerationGovernanceEntry.is_global.desc(),
+            GenerationGovernanceEntry.target_type,
+            GenerationGovernanceEntry.target_key,
+        )
+    ).all()
     return {"items": [_governance_entry_payload(entry) for entry in entries]}
 
 
@@ -181,51 +187,58 @@ def create_ai_generation_governance(
 ) -> dict[str, object]:
     actor_tenant_id = UUID(principal.tenant_id)
     if body.is_global:
+        _require_global_governance_admin(principal)
         if body.tenant_id is not None:
-            raise _api_error(status.HTTP_404_NOT_FOUND, "governance_tenant_not_found")
+            raise _api_error(status.HTTP_422_UNPROCESSABLE_CONTENT, "governance_scope_invalid")
         tenant_id: UUID | None = None
     else:
         tenant_id = body.tenant_id or actor_tenant_id
         if tenant_id != actor_tenant_id:
             raise _api_error(status.HTTP_404_NOT_FOUND, "governance_tenant_not_found")
 
-    existing = session.scalar(
-        select(GenerationGovernanceEntry).where(
-            GenerationGovernanceEntry.is_global.is_(body.is_global),
-            GenerationGovernanceEntry.target_type == body.target_type,
-            GenerationGovernanceEntry.target_key == body.target_key,
-            GenerationGovernanceEntry.tenant_id.is_(tenant_id)
-            if body.is_global
-            else GenerationGovernanceEntry.tenant_id == tenant_id,
-        )
-    )
-    if existing is not None:
-        raise _api_error(status.HTTP_409_CONFLICT, "governance_entry_duplicate")
-    entry = GenerationGovernanceEntry(
-        tenant_id=tenant_id,
-        is_global=body.is_global,
-        target_type=body.target_type,
-        target_key=body.target_key,
-        control_state=body.control_state,
-        note=body.note,
-        created_by_user_id=UUID(principal.user_id),
-    )
-    session.add(entry)
-    session.flush()
-    append_audit_event(
-        session,
-        tenant_id=actor_tenant_id,
-        actor_user_id=UUID(principal.user_id),
-        event_type="ai_generation_governance.entry_created",
-        target_type="generation_governance_entry",
-        target_id=entry.id,
-        metadata={
-            "is_global": body.is_global,
-            "target_type": body.target_type.value,
-            "target_key": body.target_key,
-            "control_state": body.control_state.value,
-        },
-    )
+    session.rollback()
+    try:
+        with session.begin():
+            existing = session.scalar(
+                select(GenerationGovernanceEntry).where(
+                    GenerationGovernanceEntry.is_global.is_(body.is_global),
+                    GenerationGovernanceEntry.target_type == body.target_type,
+                    GenerationGovernanceEntry.target_key == body.target_key,
+                    GenerationGovernanceEntry.tenant_id.is_(None)
+                    if body.is_global
+                    else GenerationGovernanceEntry.tenant_id == tenant_id,
+                )
+            )
+            if existing is not None:
+                raise _api_error(status.HTTP_409_CONFLICT, "governance_entry_duplicate")
+            entry = GenerationGovernanceEntry(
+                tenant_id=tenant_id,
+                is_global=body.is_global,
+                target_type=body.target_type,
+                target_key=body.target_key,
+                control_state=body.control_state,
+                note=body.note,
+                created_by_user_id=UUID(principal.user_id),
+            )
+            session.add(entry)
+            session.flush()
+            append_audit_event(
+                session,
+                tenant_id=actor_tenant_id,
+                actor_user_id=UUID(principal.user_id),
+                event_type="ai_generation_governance.entry_created",
+                target_type="generation_governance_entry",
+                target_id=entry.id,
+                metadata={
+                    "is_global": body.is_global,
+                    "target_type": body.target_type.value,
+                    "target_key": body.target_key,
+                    "control_state": body.control_state.value,
+                },
+            )
+    except IntegrityError as exc:
+        session.rollback()
+        raise _api_error(status.HTTP_409_CONFLICT, "governance_entry_duplicate") from exc
     return _governance_entry_payload(entry)
 
 
@@ -237,31 +250,41 @@ def transition_ai_generation_governance_entry(
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, object]:
     actor_tenant_id = UUID(principal.tenant_id)
-    entry = _admin_governance_entry(session, entry_id=entry_id, tenant_id=actor_tenant_id)
-    if entry is None:
-        raise _api_error(status.HTTP_404_NOT_FOUND, "governance_entry_not_found")
-    previous_state = entry.control_state
-    try:
-        assert_transition_is_valid(entry.control_state, body.control_state)
-    except ValueError as exc:
-        raise _api_error(status.HTTP_409_CONFLICT, "invalid_governance_transition") from exc
-    entry.control_state = body.control_state
-    session.flush()
-    append_audit_event(
-        session,
-        tenant_id=actor_tenant_id,
-        actor_user_id=UUID(principal.user_id),
-        event_type="ai_generation_governance.entry_transitioned",
-        target_type="generation_governance_entry",
-        target_id=entry.id,
-        metadata={
-            "target_type": entry.target_type.value,
-            "target_key": entry.target_key,
-            "from": previous_state.value,
-            "to": body.control_state.value,
-        },
-    )
+    session.rollback()
+    with session.begin():
+        entry = _admin_governance_entry(session, entry_id=entry_id, tenant_id=actor_tenant_id)
+        if entry is None:
+            raise _api_error(status.HTTP_404_NOT_FOUND, "governance_entry_not_found")
+        if entry.is_global:
+            _require_global_governance_admin(principal)
+        previous_state = entry.control_state
+        try:
+            assert_transition_is_valid(entry.control_state, body.control_state)
+        except ValueError as exc:
+            raise _api_error(status.HTTP_409_CONFLICT, "invalid_governance_transition") from exc
+        entry.control_state = body.control_state
+        session.flush()
+        append_audit_event(
+            session,
+            tenant_id=actor_tenant_id,
+            actor_user_id=UUID(principal.user_id),
+            event_type="ai_generation_governance.entry_transitioned",
+            target_type="generation_governance_entry",
+            target_id=entry.id,
+            metadata={
+                "target_type": entry.target_type.value,
+                "target_key": entry.target_key,
+                "from": previous_state.value,
+                "to": body.control_state.value,
+                "is_global": entry.is_global,
+            },
+        )
     return _governance_entry_payload(entry)
+
+
+def _require_global_governance_admin(principal: CurrentPrincipal) -> None:
+    if principal.oidc_subject not in settings.generation_governance_admin_subject_set:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
 
 
 def _admin_governance_entry(
