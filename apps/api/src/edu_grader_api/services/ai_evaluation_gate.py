@@ -95,9 +95,7 @@ def _evidence_violations(
 
     type_counts = Counter(record.question_type for record in records)
     reviewed_counts = Counter(
-        record.question_type
-        for record in records
-        if record.teacher_outcome != "pending_review"
+        record.question_type for record in records if record.teacher_outcome != "pending_review"
     )
     for question_type in requirements.required_question_types:
         observed = type_counts[question_type]
@@ -180,9 +178,7 @@ def _record_state_violations(
     return violations
 
 
-def _violation(
-    code: str, metric: str, **key: str | int
-) -> ai_evaluation.EvaluationViolation:
+def _violation(code: str, metric: str, **key: str | int) -> ai_evaluation.EvaluationViolation:
     return ai_evaluation.EvaluationViolation(
         code=code,
         metric=metric,
