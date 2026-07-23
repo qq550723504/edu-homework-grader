@@ -10,10 +10,11 @@ from edu_grader_api.services import ai_evaluation_gate
 
 
 _FIXTURE_DIRECTORY = Path(__file__).parent / "fixtures" / "ai_evaluation"
+_GATE_POLICY = _FIXTURE_DIRECTORY / "gate-policy-v1.json"
 
 
 def _policy() -> ai_evaluation_gate.GatePolicy:
-    return ai_evaluation_gate.load_policy(_FIXTURE_DIRECTORY / "policy-v1.json")
+    return ai_evaluation_gate.load_policy(_GATE_POLICY)
 
 
 def _records() -> list[ai_evaluation.EvaluationRecord]:
@@ -129,11 +130,7 @@ def test_gate_main_writes_blocking_artifacts_for_empty_input(tmp_path: Path) -> 
     records_path.write_text("", encoding="utf-8")
 
     exit_code = ai_evaluation_gate.main(
-        [
-            str(_FIXTURE_DIRECTORY / "policy-v1.json"),
-            str(records_path),
-            str(output_directory),
-        ]
+        [str(_GATE_POLICY), str(records_path), str(output_directory)]
     )
 
     assert exit_code == 1
