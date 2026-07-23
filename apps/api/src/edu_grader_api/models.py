@@ -688,13 +688,27 @@ class GenerationGovernanceEntry(Base):
     __tablename__ = "generation_governance_entries"
     __table_args__ = (
         CheckConstraint(
-            "is_global OR tenant_id IS NOT NULL",
-            name="ck_generation_governance_requires_tenant_for_tenant_scope",
+            "(is_global = true AND tenant_id IS NULL) OR "
+            "(is_global = false AND tenant_id IS NOT NULL)",
+            name="ck_generation_governance_scope_is_consistent",
         ),
         Index(
-            "ix_generation_governance_scope", "tenant_id", "is_global", "target_type", "target_key"
+            "uq_generation_governance_global_target",
+            "target_type",
+            "target_key",
+            unique=True,
+            postgresql_where=text("is_global"),
+            sqlite_where=text("is_global = 1"),
         ),
-        Index("ix_generation_governance_global_scope", "is_global", "target_type", "target_key"),
+        Index(
+            "uq_generation_governance_tenant_target",
+            "tenant_id",
+            "target_type",
+            "target_key",
+            unique=True,
+            postgresql_where=text("NOT is_global"),
+            sqlite_where=text("is_global = 0"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
