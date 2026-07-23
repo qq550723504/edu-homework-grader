@@ -3,11 +3,14 @@ import { computed, onMounted, ref, watch } from 'vue'
 
 import {
   acceptAiCandidate,
+  bulkAcceptAiCandidates,
   fetchAiGenerationDrafts,
   fetchAiGenerationJobs,
   fetchAiValidationRuns,
+  regenerateAiCandidate,
   rejectAiCandidate,
   saveAiCandidateRevision,
+  type TeacherAiBatchAcceptItem,
   type TeacherAiCandidate,
   type TeacherAiDraft,
   type TeacherAiGenerationJob,
@@ -24,9 +27,18 @@ const drafts = ref<TeacherAiDraft[]>([])
 const currentValidation = ref<TeacherAiValidationRun | null>(null)
 const currentValidationKey = ref('')
 const acceptedQuestionVersionIds = ref<Record<string, string>>({})
+const selectedBatchDraftIds = ref<string[]>([])
+const batchWarningAcknowledgements = ref<Record<string, boolean>>({})
+const batchSelectionRevisions = ref<Record<string, number>>({})
+const batchValidationStates = ref<Record<string, {
+  revisionNumber: number
+  status: TeacherAiValidationRun['status']
+}>>({})
+const regenerationKeys = ref<Record<string, string>>({})
+const batchIdempotency = ref<{ signature: string, key: string } | null>(null)
 const loading = ref(false)
 const refreshing = ref(false)
-const busyOperation = ref<'save' | 'reject' | 'accept' | null>(null)
+const busyOperation = ref<'save' | 'reject' | 'accept' | 'bulk-accept' | 'regenerate' | null>(null)
 const notice = ref('')
 const errorMessage = ref('')
 const syncWarning = ref('')
@@ -34,6 +46,17 @@ const pendingRefresh = ref<{
   jobId: string
   draftId: string
   idempotencyKey: string
+  minimumRevisionNumber?: number
+  expectedTeacherStates?: Record<string, string>
+} | null>(null)
+const pendingBatchRefresh = ref<{
+  jobId: string
+  idempotencyKey: string
+  expectedTeacherStates: Record<string, string>
+} | null>(null)
+const confirmedBatchTeacherStates = ref<{
+  jobId: string
+  states: Record<string, string>
 } | null>(null)
 let routeLoadGeneration = 0
 let selectionRefreshGeneration = 0
@@ -51,9 +74,50 @@ const selectedAcceptedQuestionVersionId = computed(() => {
   const draft = selectedDraft.value
   return draft ? acceptedQuestionVersionIds.value[validationKey(draft)] ?? null : null
 })
+const currentBatchSelected = computed(() => {
+  const draftId = selectedDraftId.value
+  return draftId !== null && selectedBatchDraftIds.value.includes(draftId)
+})
+const currentBatchWarningConfirmed = computed(() => {
+  const draftId = selectedDraftId.value
+  return draftId !== null && batchWarningAcknowledgements.value[draftId] === true
+})
+const currentBatchSelectable = computed(() => {
+  const draft = selectedDraft.value
+  const validation = selectedValidation.value
+  return draft !== null
+    && isPendingReview(draft)
+    && validation !== null
+    && validation.status !== 'blocked'
+})
+const batchItems = computed<TeacherAiBatchAcceptItem[]>(() => drafts.value.flatMap((draft) => {
+  if (!selectedBatchDraftIds.value.includes(draft.id)
+    || !isPendingReview(draft)
+    || batchSelectionRevisions.value[draft.id] !== draft.revision_number) {
+    return []
+  }
+  const validation = batchValidationStates.value[draft.id]
+  if (!validation || validation.revisionNumber !== draft.revision_number || validation.status === 'blocked') {
+    return []
+  }
+  return [{
+    draft_id: draft.id,
+    expected_revision_number: draft.revision_number,
+    confirm_warnings: validation.status === 'warning'
+      ? batchWarningAcknowledgements.value[draft.id] === true
+      : false,
+  }]
+}))
+const batchSelectionReady = computed(() => batchItems.value.length > 0
+  && batchItems.value.length === selectedBatchDraftIds.value.length
+  && batchItems.value.every((item) => {
+    const validation = batchValidationStates.value[item.draft_id]
+    return validation?.status !== 'warning' || item.confirm_warnings
+  }))
 const writeControlsDisabled = computed(() => loading.value
   || busyOperation.value !== null
   || refreshing.value
+  || pendingBatchRefresh.value?.jobId === selectedJobId.value
   || (pendingRefresh.value !== null
     && requestMatches(pendingRefresh.value.jobId, pendingRefresh.value.draftId)))
 
@@ -70,14 +134,15 @@ async function loadWorkspace() {
     pendingRefresh.value.jobId, pendingRefresh.value.draftId,
   )) {
     pendingRefresh.value = null
-    syncWarning.value = ''
+    if (pendingBatchRefresh.value?.jobId !== requestedJobId) syncWarning.value = ''
   }
   loading.value = true
   errorMessage.value = ''
   try {
     const nextJobs = await fetchAiGenerationJobs($fetch)
     const jobId = nextJobs.some((job) => job.id === requestedJobId) ? requestedJobId : nextJobs[0]?.id ?? null
-    const nextDrafts = jobId ? await fetchAiGenerationDrafts($fetch, jobId) : []
+    const fetchedDrafts = jobId ? await fetchAiGenerationDrafts($fetch, jobId) : []
+    const nextDrafts = jobId ? preserveConfirmedBatchStates(jobId, fetchedDrafts) : []
     if (!requestIsCurrent(generation, requestedJobId, requestedDraftId)) return
 
     const draftId = nextDrafts.some((draft) => draft.id === requestedDraftId)
@@ -98,8 +163,9 @@ async function loadWorkspace() {
 
     jobs.value = nextJobs
     drafts.value = nextDrafts
+    pruneBatchIntent(nextDrafts)
     setCurrentValidation(draft, validation)
-    syncWarning.value = ''
+    if (pendingBatchRefresh.value?.jobId !== jobId) syncWarning.value = ''
     pendingRefresh.value = null
   } catch (error: unknown) {
     if (requestIsCurrent(generation, requestedJobId, requestedDraftId)) {
@@ -114,6 +180,7 @@ async function refreshSelection(
   jobId: string,
   draftId: string,
   minimumRevisionNumber?: number,
+  expectedTeacherStates: Record<string, string> = {},
 ): Promise<'updated' | 'stale' | 'behind'> {
   if (!requestMatches(jobId, draftId)) return 'stale'
   const generation = ++selectionRefreshGeneration
@@ -124,10 +191,16 @@ async function refreshSelection(
   if (draft && minimumRevisionNumber !== undefined && draft.revision_number < minimumRevisionNumber) {
     return 'behind'
   }
+  if (Object.entries(expectedTeacherStates).some(([expectedDraftId, teacherState]) => (
+    nextDrafts.find(item => item.id === expectedDraftId)?.teacher_state !== teacherState
+  ))) {
+    return 'behind'
+  }
   const validation = draft ? await fetchCurrentValidation(draft) : null
   if (!refreshIsCurrent(generation, owningRouteGeneration, jobId, draftId)) return 'stale'
 
   drafts.value = nextDrafts
+  pruneBatchIntent(nextDrafts)
   setCurrentValidation(draft, validation)
   return 'updated'
 }
@@ -140,6 +213,23 @@ async function fetchCurrentValidation(draft: TeacherAiDraft): Promise<TeacherAiV
 function setCurrentValidation(draft: TeacherAiDraft | null, validation: TeacherAiValidationRun | null) {
   currentValidation.value = validation
   currentValidationKey.value = draft ? validationKey(draft) : ''
+  if (!draft) return
+  if (!validation) {
+    removeBatchDraft(draft.id)
+    return
+  }
+  batchValidationStates.value = {
+    ...batchValidationStates.value,
+    [draft.id]: {
+      revisionNumber: draft.revision_number,
+      status: validation.status,
+    },
+  }
+  if (validation.status === 'blocked'
+    || (selectedBatchDraftIds.value.includes(draft.id)
+      && batchSelectionRevisions.value[draft.id] !== draft.revision_number)) {
+    removeBatchDraft(draft.id)
+  }
 }
 
 function validationKey(draft: TeacherAiDraft): string {
@@ -178,6 +268,96 @@ function selectDraft(draftId: string) {
   const jobId = selectedJobId.value
   if (!jobId) return
   return navigateTo({ query: { job: jobId, draft: draftId } })
+}
+
+function updateCurrentBatchSelection(event: Event) {
+  const draft = selectedDraft.value
+  const validation = selectedValidation.value
+  const checked = event.target instanceof HTMLInputElement && event.target.checked
+  if (!draft) return
+  if (!checked) {
+    removeBatchDraft(draft.id)
+    return
+  }
+  if (!currentBatchSelectable.value || !validation) return
+  selectedBatchDraftIds.value = [...new Set([...selectedBatchDraftIds.value, draft.id])]
+  batchSelectionRevisions.value = {
+    ...batchSelectionRevisions.value,
+    [draft.id]: draft.revision_number,
+  }
+  batchValidationStates.value = {
+    ...batchValidationStates.value,
+    [draft.id]: {
+      revisionNumber: draft.revision_number,
+      status: validation.status,
+    },
+  }
+  if (validation.status === 'warning') {
+    batchWarningAcknowledgements.value = {
+      ...batchWarningAcknowledgements.value,
+      [draft.id]: false,
+    }
+  }
+}
+
+function updateCurrentBatchWarning(event: Event) {
+  const draft = selectedDraft.value
+  const checked = event.target instanceof HTMLInputElement && event.target.checked
+  if (!draft
+    || !selectedBatchDraftIds.value.includes(draft.id)
+    || selectedValidation.value?.status !== 'warning') {
+    return
+  }
+  batchWarningAcknowledgements.value = {
+    ...batchWarningAcknowledgements.value,
+    [draft.id]: checked,
+  }
+}
+
+function removeBatchDraft(draftId: string) {
+  selectedBatchDraftIds.value = selectedBatchDraftIds.value.filter(id => id !== draftId)
+  batchWarningAcknowledgements.value = omitKey(batchWarningAcknowledgements.value, draftId)
+  batchSelectionRevisions.value = omitKey(batchSelectionRevisions.value, draftId)
+}
+
+function pruneBatchIntent(nextDrafts: TeacherAiDraft[]) {
+  const nextDraftsById = new Map(nextDrafts.map(draft => [draft.id, draft]))
+  for (const draftId of selectedBatchDraftIds.value) {
+    const draft = nextDraftsById.get(draftId)
+    if (!draft
+      || !isPendingReview(draft)
+      || batchSelectionRevisions.value[draftId] !== draft.revision_number) {
+      removeBatchDraft(draftId)
+    }
+  }
+}
+
+function resetBatchIntent() {
+  selectedBatchDraftIds.value = []
+  batchWarningAcknowledgements.value = {}
+  batchSelectionRevisions.value = {}
+  batchValidationStates.value = {}
+  batchIdempotency.value = null
+  pendingBatchRefresh.value = null
+  confirmedBatchTeacherStates.value = null
+  if (pendingRefresh.value === null) syncWarning.value = ''
+}
+
+function preserveConfirmedBatchStates(jobId: string, nextDrafts: TeacherAiDraft[]): TeacherAiDraft[] {
+  const confirmed = confirmedBatchTeacherStates.value
+  if (!confirmed || confirmed.jobId !== jobId) return nextDrafts
+  return nextDrafts.map((draft) => {
+    const expectedState = confirmed.states[draft.id]
+    if (!expectedState || draft.teacher_state === expectedState) return draft
+    const patchedDraft = drafts.value.find(item => (
+      item.id === draft.id && item.teacher_state === expectedState
+    ))
+    return patchedDraft ?? { ...draft, teacher_state: expectedState }
+  })
+}
+
+function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  return Object.fromEntries(Object.entries(record).filter(([entryKey]) => entryKey !== key))
 }
 
 async function csrfToken(): Promise<string> {
@@ -235,8 +415,162 @@ async function acceptCandidate(input: { confirmWarnings: boolean }) {
   })
 }
 
+async function acceptBatch() {
+  const jobId = selectedJobId.value
+  const draft = selectedDraft.value
+  const items = batchItems.value
+  if (!jobId || !draft || !batchSelectionReady.value || writeControlsDisabled.value) return
+  const idempotencyKey = batchIdempotencyKey(items)
+  busyOperation.value = 'bulk-accept'
+  notice.value = ''
+  errorMessage.value = ''
+  syncWarning.value = ''
+  try {
+    const csrf = await csrfToken()
+    const result = await bulkAcceptAiCandidates($fetch, csrf, jobId, idempotencyKey, items)
+    if (selectedJobId.value !== jobId) return
+    const expectedTeacherStates: Record<string, string> = {}
+    for (const decision of result.items) {
+      const currentDraft = drafts.value.find(item => item.id === decision.draft_id)
+      if (!currentDraft || decision.action !== 'accept') continue
+      const updatedDraft = applyWritePatch(currentDraft, {
+        teacher_state: 'accepted',
+        revision_number: decision.revision_number,
+      })
+      expectedTeacherStates[decision.draft_id] = 'accepted'
+      batchValidationStates.value = {
+        ...batchValidationStates.value,
+        [decision.draft_id]: {
+          revisionNumber: decision.revision_number,
+          status: decision.validation_run.status,
+        },
+      }
+      if (selectedDraftId.value === decision.draft_id) {
+        setCurrentValidation(updatedDraft, decision.validation_run)
+      }
+      if (decision.accepted_question_version_id) {
+        acceptedQuestionVersionIds.value = {
+          ...acceptedQuestionVersionIds.value,
+          [validationKey(updatedDraft)]: decision.accepted_question_version_id,
+        }
+      }
+      removeBatchDraft(decision.draft_id)
+    }
+    rememberConfirmedBatchStates(jobId, expectedTeacherStates)
+    pendingBatchRefresh.value = {
+      jobId,
+      idempotencyKey,
+      expectedTeacherStates,
+    }
+    notice.value = `已批量接受 ${result.items.length} 道候选题并创建草稿。`
+    try {
+      const refresh = await refreshBatchJob(jobId, expectedTeacherStates)
+      if (refresh === 'updated'
+        && pendingBatchRefresh.value?.idempotencyKey === idempotencyKey) {
+        pendingBatchRefresh.value = null
+        syncWarning.value = ''
+      }
+      if (refresh === 'behind') {
+        deferBatchRefresh(jobId, idempotencyKey, expectedTeacherStates)
+      }
+    } catch {
+      if (selectedJobId.value === jobId) {
+        deferBatchRefresh(jobId, idempotencyKey, expectedTeacherStates)
+      }
+    }
+  } catch (error: unknown) {
+    if (selectedJobId.value !== jobId) return
+    errorMessage.value = publicErrorMessage(
+      error, '暂时无法批量接受 AI 候选题，请稍后重试。',
+    )
+  } finally {
+    busyOperation.value = null
+  }
+}
+
+function rememberConfirmedBatchStates(jobId: string, states: Record<string, string>) {
+  const existingStates = confirmedBatchTeacherStates.value?.jobId === jobId
+    ? confirmedBatchTeacherStates.value.states
+    : {}
+  confirmedBatchTeacherStates.value = {
+    jobId,
+    states: { ...existingStates, ...states },
+  }
+}
+
+async function refreshBatchJob(
+  jobId: string,
+  expectedTeacherStates: Record<string, string>,
+): Promise<'updated' | 'stale' | 'behind'> {
+  const nextDrafts = await fetchAiGenerationDrafts($fetch, jobId)
+  if (selectedJobId.value !== jobId) return 'stale'
+  if (Object.entries(expectedTeacherStates).some(([draftId, teacherState]) => (
+    nextDrafts.find(item => item.id === draftId)?.teacher_state !== teacherState
+  ))) {
+    return 'behind'
+  }
+  drafts.value = preserveConfirmedBatchStates(jobId, nextDrafts)
+  pruneBatchIntent(drafts.value)
+  return 'updated'
+}
+
+function deferBatchRefresh(
+  jobId: string,
+  idempotencyKey: string,
+  expectedTeacherStates: Record<string, string>,
+) {
+  pendingBatchRefresh.value = { jobId, idempotencyKey, expectedTeacherStates }
+  syncWarning.value = '操作已成功，但最新审核状态暂时无法刷新。请重试刷新。'
+}
+
+function batchIdempotencyKey(items: TeacherAiBatchAcceptItem[]): string {
+  const signature = JSON.stringify(items)
+  if (batchIdempotency.value?.signature === signature) return batchIdempotency.value.key
+  const key = crypto.randomUUID()
+  batchIdempotency.value = { signature, key }
+  return key
+}
+
+async function regenerateCandidate() {
+  const jobId = selectedJobId.value
+  const draft = selectedDraft.value
+  if (!jobId || !draft || !isPendingReview(draft) || writeControlsDisabled.value) return
+  busyOperation.value = 'regenerate'
+  notice.value = ''
+  errorMessage.value = ''
+  syncWarning.value = ''
+  const idempotencyKey = regenerationKeys.value[draft.id] ?? crypto.randomUUID()
+  regenerationKeys.value = {
+    ...regenerationKeys.value,
+    [draft.id]: idempotencyKey,
+  }
+  try {
+    const csrf = await csrfToken()
+    const regeneratedJob = await regenerateAiCandidate(
+      $fetch, csrf, draft.id, idempotencyKey,
+    )
+    regenerationKeys.value = omitKey(regenerationKeys.value, draft.id)
+    if (!requestMatches(jobId, draft.id)) return
+    await navigateTo({ query: { job: regeneratedJob.id } })
+  } catch (error: unknown) {
+    if (!regenerationOutcomeUnknown(error)) {
+      regenerationKeys.value = omitKey(regenerationKeys.value, draft.id)
+    }
+    if (!requestMatches(jobId, draft.id)) return
+    errorMessage.value = publicErrorMessage(
+      error, '暂时无法重新生成 AI 候选题，请稍后重试。',
+    )
+  } finally {
+    busyOperation.value = null
+  }
+}
+
 function isPendingReview(draft: TeacherAiDraft): boolean {
   return draft.teacher_state === 'pending_review'
+}
+
+function regenerationOutcomeUnknown(error: unknown): boolean {
+  return !(error instanceof MissingCsrfTokenError) && errorStatus(error) === null
 }
 
 async function runWrite(
@@ -269,12 +603,36 @@ async function runWrite(
         [validationKey(updatedDraft)]: result.acceptedQuestionVersionId,
       }
     }
+    const expectedTeacherStates = result.draftPatch?.teacher_state
+      ? { [draft.id]: result.draftPatch.teacher_state }
+      : {}
     try {
-      const refresh = await refreshSelection(jobId, draft.id, result.validation.revision_number)
+      const refresh = await refreshSelection(
+        jobId,
+        draft.id,
+        result.validation.revision_number,
+        expectedTeacherStates,
+      )
       if (refresh === 'updated') pendingRefresh.value = null
-      if (refresh === 'behind') deferRefresh(jobId, draft.id, idempotencyKey)
+      if (refresh === 'behind') {
+        deferRefresh(
+          jobId,
+          draft.id,
+          idempotencyKey,
+          result.validation.revision_number,
+          expectedTeacherStates,
+        )
+      }
     } catch {
-      if (requestMatches(jobId, draft.id)) deferRefresh(jobId, draft.id, idempotencyKey)
+      if (requestMatches(jobId, draft.id)) {
+        deferRefresh(
+          jobId,
+          draft.id,
+          idempotencyKey,
+          result.validation.revision_number,
+          expectedTeacherStates,
+        )
+      }
     }
   } catch (error: unknown) {
     if (!requestMatches(jobId, draft.id)) return
@@ -304,21 +662,66 @@ function applyWritePatch(
   if (!patch) return draft
   const updatedDraft = { ...draft, ...patch }
   drafts.value = drafts.value.map((item) => item.id === draft.id ? updatedDraft : item)
+  if (!isPendingReview(updatedDraft)
+    || (selectedBatchDraftIds.value.includes(updatedDraft.id)
+      && batchSelectionRevisions.value[updatedDraft.id] !== updatedDraft.revision_number)) {
+    removeBatchDraft(updatedDraft.id)
+  }
   return updatedDraft
 }
 
-function deferRefresh(jobId: string, draftId: string, idempotencyKey: string) {
-  pendingRefresh.value = { jobId, draftId, idempotencyKey }
+function deferRefresh(
+  jobId: string,
+  draftId: string,
+  idempotencyKey: string,
+  minimumRevisionNumber?: number,
+  expectedTeacherStates?: Record<string, string>,
+) {
+  pendingRefresh.value = {
+    jobId,
+    draftId,
+    idempotencyKey,
+    minimumRevisionNumber,
+    expectedTeacherStates,
+  }
   syncWarning.value = '操作已成功，但最新审核状态暂时无法刷新。请重试刷新。'
 }
 
 async function retryRefresh() {
+  const pendingBatch = pendingBatchRefresh.value
+  if (pendingBatch?.jobId === selectedJobId.value) {
+    const operationIdentity = pendingBatch.idempotencyKey
+    refreshing.value = true
+    try {
+      const refresh = await refreshBatchJob(
+        pendingBatch.jobId,
+        pendingBatch.expectedTeacherStates,
+      )
+      if (refresh === 'updated'
+        && pendingBatchRefresh.value?.idempotencyKey === operationIdentity) {
+        pendingBatchRefresh.value = null
+        syncWarning.value = ''
+      }
+    } catch {
+      if (pendingBatchRefresh.value?.idempotencyKey === operationIdentity) {
+        syncWarning.value = '操作已成功，但最新审核状态暂时无法刷新。请重试刷新。'
+      }
+    } finally {
+      refreshing.value = false
+    }
+    return
+  }
   const pending = pendingRefresh.value
   if (!pending || !requestMatches(pending.jobId, pending.draftId)) return
   const operationIdentity = pending.idempotencyKey
   refreshing.value = true
   try {
-    const refresh = await refreshSelection(pending.jobId, pending.draftId)
+    const refresh = await refreshSelection(
+      pending.jobId,
+      pending.draftId,
+      pending.minimumRevisionNumber,
+      pending.expectedTeacherStates,
+    )
     if (refresh === 'updated' && pendingRefresh.value?.idempotencyKey === operationIdentity) {
       pendingRefresh.value = null
       syncWarning.value = ''
@@ -375,6 +778,9 @@ class MissingCsrfTokenError extends Error {}
 
 onMounted(loadWorkspace)
 watch(() => route.query, loadWorkspace)
+watch(selectedJobId, (jobId, previousJobId) => {
+  if (jobId !== previousJobId) resetBatchIntent()
+})
 </script>
 
 <template>
@@ -422,6 +828,37 @@ watch(() => route.query, loadWorkspace)
       </aside>
 
       <section class="card wide ai-review-workspace__review" aria-live="polite">
+        <section v-if="selectedDraft" class="batch-review-controls" aria-label="批量接受候选题">
+          <label>
+            <input
+              :checked="currentBatchSelected"
+              :data-testid="`batch-select-${selectedDraft.id}`"
+              :disabled="writeControlsDisabled || !currentBatchSelectable"
+              type="checkbox"
+              @change="updateCurrentBatchSelection"
+            >
+            将此候选加入批量接受
+          </label>
+          <label v-if="currentBatchSelected && selectedValidation?.status === 'warning'">
+            <input
+              :checked="currentBatchWarningConfirmed"
+              :data-testid="`batch-warning-${selectedDraft.id}`"
+              :disabled="writeControlsDisabled"
+              type="checkbox"
+              @change="updateCurrentBatchWarning"
+            >
+            我已阅读此候选的 warning
+          </label>
+          <p>已选择 {{ selectedBatchDraftIds.length }} 道候选题。</p>
+          <button
+            :disabled="writeControlsDisabled || !batchSelectionReady"
+            data-testid="bulk-accept-candidates"
+            type="button"
+            @click="acceptBatch"
+          >
+            批量接受并创建草稿
+          </button>
+        </section>
         <TeacherAiCandidateReview
           v-if="selectedDraft"
           :draft="selectedDraft"
@@ -431,6 +868,7 @@ watch(() => route.query, loadWorkspace)
           @save-revision="saveRevision"
           @reject="rejectCandidate"
           @accept="acceptCandidate"
+          @regenerate="regenerateCandidate"
         />
         <p v-else-if="!loading">请选择要审核的候选题。</p>
       </section>
@@ -459,7 +897,22 @@ watch(() => route.query, loadWorkspace)
 }
 
 .ai-review-workspace__review {
+  display: grid;
+  gap: 20px;
   min-width: 0;
+}
+
+.batch-review-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  align-items: center;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--color-border, #d8dee8);
+}
+
+.batch-review-controls p {
+  margin: 0;
 }
 
 @media (max-width: 760px) {

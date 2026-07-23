@@ -118,7 +118,15 @@ def persist_generated_draft(
         tenant_id=tenant.id,
         teacher_user_id=teacher.id,
         curriculum_objective_revision_id=objective_revision_id,
-        distribution_json={"question_types": ["M1"]},
+        distribution_json={
+            "items": [
+                {
+                    "question_type": "M1",
+                    "difficulty_band": "standard",
+                    "target_difficulty": 0.5,
+                }
+            ]
+        },
         idempotency_key=job_idempotency_key,
         status=GenerationJobStatus.READY_FOR_REVIEW,
         requested_count=1,
@@ -147,7 +155,7 @@ def persist_generated_draft(
                 rule_json={"expected": 4},
                 explanation="Add the two numbers.",
                 knowledge_point="addition",
-                difficulty=0.2,
+                difficulty=0.5,
             )
         ],
     )

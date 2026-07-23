@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import unicodedata
 from uuid import UUID
 
+from edu_generator.contracts import GenerationPlanItem
 from edu_generator.providers import FakeGenerationProvider
 from jwt.exceptions import InvalidTokenError
 from sqlalchemy import select
@@ -29,6 +30,7 @@ from .models import (
     Enrollment,
     GeneratedQuestionDraftRevision,
     GenerationJob,
+    GenerationValidationRun,
     GuardianConsentStatus,
     GradingPolicy,
     Question,
@@ -37,6 +39,9 @@ from .models import (
     StudentGuardianConsent,
     Tenant,
     User,
+    ValidationFinding,
+    ValidationFindingSeverity,
+    ValidationRunStatus,
     VersionStatus,
 )
 from .services.ai_question_review import create_review_revision
@@ -47,7 +52,6 @@ from .services.generation import (
     run_generation_job,
 )
 from .services.grader import EmbeddingDependencyVersion, SemanticSimilarityResult
-from .services.question_verification import run_candidate_verification
 from .services.questions import GradeResult
 
 
@@ -57,7 +61,9 @@ E2E_ISSUER = "http://localhost:8080/realms/edu-grader"
 AI_REVIEW_JOB_KEY = "e2e-ai-review-batch-v1"
 AI_REVIEW_OBJECTIVE_REVISION_ID = UUID("00000000-0000-0000-0000-000000000037")
 AI_GENERATION_PROFILE_CODE = "e2e-ai-generation-mathematics-g7-2026"
-AI_GENERATION_OBJECTIVE_CODE = "E2E-AI-G7-M1"
+AI_GENERATION_OBJECTIVE_CODE = "E2E-AI-G7-M1-M2"
+AI_REGENERATION_PROFILE_CODE = "e2e-ai-generation-english-g8-2026"
+AI_REGENERATION_OBJECTIVE_CODE = "E2E-AI-G8-E1-E4"
 
 M2_RULE = {
     "expected": ["Add", "x", 1],
@@ -315,6 +321,7 @@ def seed_demo_assignment(session: Session) -> None:
                 raise RuntimeError("E2E teacher is missing")
             _seed_ai_review_batch(session, tenant=tenant, teacher=teacher)
             _seed_ai_generation_request_curriculum(session)
+            _seed_ai_regeneration_curriculum(session)
             session.commit()
             return
 
@@ -454,6 +461,7 @@ def seed_demo_assignment(session: Session) -> None:
     session.commit()
     _seed_ai_review_batch(session, tenant=tenant, teacher=teacher)
     _seed_ai_generation_request_curriculum(session)
+    _seed_ai_regeneration_curriculum(session)
     session.commit()
 
 
@@ -485,26 +493,26 @@ def _seed_ai_review_batch(session: Session, *, tenant: Tenant, teacher: User) ->
         )
         grade = CurriculumGradeMapping(
             profile=profile,
-            internal_level="G5",
-            external_label="Grade 5",
-            position=5,
+            internal_level="G7",
+            external_label="G7",
+            position=7,
         )
         objective = CurriculumObjective(
             profile=profile,
             grade_mapping=grade,
-            code="E2E-AI-REVIEW-M1",
+            code="E2E-AI-REVIEW-M1-M2",
             subject="mathematics",
             domain="number",
-            knowledge_point="whole-number practice",
+            knowledge_point="arithmetic and expression practice",
             status=CurriculumProfileStatus.ACTIVE,
         )
         revision = CurriculumObjectiveRevision(
             id=AI_REVIEW_OBJECTIVE_REVISION_ID,
             objective=objective,
             revision_number=1,
-            text="Solve whole-number practice items.",
+            text="Solve Grade 7 arithmetic and expression questions.",
             source_locator="e2e fixture",
-            allowed_question_types=["M1"],
+            allowed_question_types=["M1", "M2"],
             difficulty_min=0,
             difficulty_max=1,
             activity_type=CurriculumActivityType.SCORED_QUESTION,
@@ -517,14 +525,25 @@ def _seed_ai_review_batch(session: Session, *, tenant: Tenant, teacher: User) ->
         session,
         request=GenerationJobRequest(
             curriculum_objective_revision_id=revision.id,
-            question_types=["M1", "M1"],
+            items=[
+                GenerationPlanItem(
+                    question_type="M1",
+                    difficulty_band="foundation",
+                    target_difficulty=0.2,
+                ),
+                GenerationPlanItem(
+                    question_type="M2",
+                    difficulty_band="stretch",
+                    target_difficulty=0.8,
+                ),
+            ],
             requested_count=2,
             idempotency_key=AI_REVIEW_JOB_KEY,
         ),
         actor=teacher,
         snapshot=GenerationJobSnapshot(
-            grade="Grade 5",
-            subject="E2E AI review batch",
+            grade="G7",
+            subject="E2E G7 M1 M2 review batch",
             policy_catalog_version="2026.07",
             prompt_version="generator-v1",
         ),
@@ -556,11 +575,31 @@ def _seed_ai_review_batch(session: Session, *, tenant: Tenant, teacher: User) ->
     )
     if second_revision is None:
         raise RuntimeError("E2E AI review candidate revision is missing")
-    run_candidate_verification(
-        session,
-        draft=drafts[1],
-        revision=second_revision,
-        grader_client=DeterministicE2EGraderClient("unused"),
+    warning_run = GenerationValidationRun(
+        generated_question_draft_id=drafts[1].id,
+        draft_revision_id=second_revision.id,
+        generation_job_id=job.id,
+        run_number=1,
+        validator_version="e2e-validator-v1",
+        ruleset_version="e2e-ruleset-v1",
+        status=ValidationRunStatus.WARNING,
+        feature_summary_json={"finding_count": 1},
+    )
+    session.add(warning_run)
+    session.flush()
+    session.add(
+        ValidationFinding(
+            validation_run_id=warning_run.id,
+            code="grade_complexity_warning",
+            severity=ValidationFindingSeverity.WARNING,
+            evidence_json={
+                "grade_level": "G7",
+                "metric": "max_operation_nodes",
+                "observed": 2,
+                "limit": 1,
+            },
+            remediation="Revise the candidate to fit the selected grade complexity limit.",
+        )
     )
 
 
@@ -643,9 +682,99 @@ def _seed_ai_generation_request_curriculum(session: Session) -> None:
             CurriculumObjectiveRevision(
                 objective=objective,
                 revision_number=1,
-                text="Solve Grade 7 whole-number arithmetic questions.",
+                text="Solve Grade 7 arithmetic and expression questions.",
                 source_locator="e2e generation request fixture",
-                allowed_question_types=["M1"],
+                allowed_question_types=["M1", "M2"],
+                difficulty_min=0,
+                difficulty_max=1,
+                activity_type=CurriculumActivityType.SCORED_QUESTION,
+                status=CurriculumRevisionStatus.ACTIVE,
+            )
+        )
+
+
+def _seed_ai_regeneration_curriculum(session: Session) -> None:
+    source = session.scalar(
+        select(CurriculumSourceRecord).where(
+            CurriculumSourceRecord.canonical_url
+            == "https://example.test/e2e-ai-regeneration-curriculum"
+        )
+    )
+    if source is None:
+        source = CurriculumSourceRecord(
+            issuer="E2E Curriculum Board",
+            title="E2E AI regeneration curriculum",
+            canonical_url="https://example.test/e2e-ai-regeneration-curriculum",
+            version_label="2026",
+        )
+        session.add(source)
+        session.flush()
+
+    profile = session.scalar(
+        select(CurriculumProfile).where(CurriculumProfile.code == AI_REGENERATION_PROFILE_CODE)
+    )
+    if profile is None:
+        profile = CurriculumProfile(
+            code=AI_REGENERATION_PROFILE_CODE,
+            name="E2E AI Generation English",
+            jurisdiction="e2e",
+            version_label="2026",
+            status=CurriculumProfileStatus.ACTIVE,
+            source_record=source,
+        )
+        session.add(profile)
+        session.flush()
+
+    grade = session.scalar(
+        select(CurriculumGradeMapping).where(
+            CurriculumGradeMapping.profile_id == profile.id,
+            CurriculumGradeMapping.internal_level == "G8",
+            CurriculumGradeMapping.external_label == "G8",
+        )
+    )
+    if grade is None:
+        grade = CurriculumGradeMapping(
+            profile=profile,
+            internal_level="G8",
+            external_label="G8",
+            position=8,
+        )
+        session.add(grade)
+        session.flush()
+
+    objective = session.scalar(
+        select(CurriculumObjective).where(
+            CurriculumObjective.profile_id == profile.id,
+            CurriculumObjective.code == AI_REGENERATION_OBJECTIVE_CODE,
+        )
+    )
+    if objective is None:
+        objective = CurriculumObjective(
+            profile=profile,
+            grade_mapping=grade,
+            code=AI_REGENERATION_OBJECTIVE_CODE,
+            subject="English",
+            domain="language and reading",
+            knowledge_point="vocabulary and reading evidence",
+            status=CurriculumProfileStatus.ACTIVE,
+        )
+        session.add(objective)
+        session.flush()
+
+    revision = session.scalar(
+        select(CurriculumObjectiveRevision).where(
+            CurriculumObjectiveRevision.objective_id == objective.id,
+            CurriculumObjectiveRevision.revision_number == 1,
+        )
+    )
+    if revision is None:
+        session.add(
+            CurriculumObjectiveRevision(
+                objective=objective,
+                revision_number=1,
+                text="Use Grade 8 English vocabulary and reading evidence.",
+                source_locator="e2e regeneration fixture",
+                allowed_question_types=["E1", "E4"],
                 difficulty_min=0,
                 difficulty_max=1,
                 activity_type=CurriculumActivityType.SCORED_QUESTION,

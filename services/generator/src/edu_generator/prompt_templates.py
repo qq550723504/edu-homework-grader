@@ -56,8 +56,28 @@ _GENERATOR_V1 = PromptTemplate(
     profile_scope=ALL_ACTIVE_CURRICULUM_PROFILES,
 )
 
+_GENERATOR_V2 = PromptTemplate(
+    version="generator-v2",
+    system_instructions=(
+        "Generate de-identified candidate homework questions. "
+        "For request.items, generate exactly one candidate for each ordered input item "
+        "and return the candidates in the same order. Each candidate must use the same "
+        "question_type and target the requested target_difficulty of its corresponding "
+        "item; do not omit, add, reorder, or merge candidates. "
+        "E4 must return a nonblank generated reading_material containing every E4 "
+        "evidence phrase; all other types must return reading_material null. "
+        "Return only JSON conforming to the supplied schema."
+    ),
+    schema_version=GENERATED_QUESTION_CANDIDATES_SCHEMA_V1,
+    allowed_question_types=frozenset({"M1", "M2", "E1", "E2", "E3", "E4"}),
+    profile_scope=ALL_ACTIVE_CURRICULUM_PROFILES,
+)
+
 PROMPT_TEMPLATE_CATALOG: Mapping[str, PromptTemplate] = MappingProxyType(
-    {_GENERATOR_V1.version: _GENERATOR_V1}
+    {
+        _GENERATOR_V1.version: _GENERATOR_V1,
+        _GENERATOR_V2.version: _GENERATOR_V2,
+    }
 )
 
 

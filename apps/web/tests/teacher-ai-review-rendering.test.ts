@@ -12,10 +12,12 @@ import type { TeacherAiDraft, TeacherAiGenerationJob, TeacherAiValidationRun } f
 
 const mocks = vi.hoisted(() => ({
   acceptAiCandidate: vi.fn(),
+  bulkAcceptAiCandidates: vi.fn(),
   fetchAiGenerationDrafts: vi.fn(),
   fetchAiGenerationJobs: vi.fn(),
   fetchAiValidationRuns: vi.fn(),
   fetchCurrentPrincipal: vi.fn(),
+  regenerateAiCandidate: vi.fn(),
   rejectAiCandidate: vi.fn(),
   saveAiCandidateRevision: vi.fn(),
 }))
@@ -23,9 +25,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../app/lib/teacher-ai-review', async (importOriginal) => ({
   ...await importOriginal<typeof import('../app/lib/teacher-ai-review')>(),
   acceptAiCandidate: mocks.acceptAiCandidate,
+  bulkAcceptAiCandidates: mocks.bulkAcceptAiCandidates,
   fetchAiGenerationDrafts: mocks.fetchAiGenerationDrafts,
   fetchAiGenerationJobs: mocks.fetchAiGenerationJobs,
   fetchAiValidationRuns: mocks.fetchAiValidationRuns,
+  regenerateAiCandidate: mocks.regenerateAiCandidate,
   rejectAiCandidate: mocks.rejectAiCandidate,
   saveAiCandidateRevision: mocks.saveAiCandidateRevision,
 }))
@@ -124,6 +128,15 @@ describe('teacher AI review rendering', () => {
     mocks.acceptAiCandidate.mockResolvedValue({
       draft_id: 'draft-1', action: 'accept', revision_number: 1,
       validation_run: warningValidation, accepted_question_version_id: 'version-1',
+    })
+    mocks.bulkAcceptAiCandidates.mockResolvedValue({
+      items: [{
+        draft_id: 'draft-1', action: 'accept', reason: null, revision_number: 1,
+        validation_run: warningValidation, accepted_question_version_id: 'version-1',
+      }],
+    })
+    mocks.regenerateAiCandidate.mockResolvedValue({
+      id: 'job-regenerated', status: 'ready_for_review',
     })
   })
 
@@ -288,6 +301,247 @@ describe('teacher AI review rendering', () => {
 
     expect(wrapper.get('[data-testid="validation-finding"]').text()).toContain('UNSAFE_CONTENT')
     expect(wrapper.get('[data-testid="accept-candidate"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('never allows a blocked draft to enter the batch selection', async () => {
+    mocks.fetchAiValidationRuns.mockResolvedValue([{ ...blockedValidation, revision_number: 1 }])
+
+    const wrapper = await mountWorkspace()
+    const selection = wrapper.get('[data-testid="batch-select-draft-1"]')
+
+    expect(selection.attributes('disabled')).toBeDefined()
+    await selection.setValue(true)
+    await wrapper.get('[data-testid="bulk-accept-candidates"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.bulkAcceptAiCandidates).not.toHaveBeenCalled()
+  })
+
+  it('requires an explicit per-draft warning acknowledgement before bulk acceptance', async () => {
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="batch-select-draft-1"]').setValue(true)
+    expect(wrapper.get('[data-testid="bulk-accept-candidates"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.get('[data-testid="batch-warning-draft-1"]').setValue(true)
+    expect(wrapper.get('[data-testid="bulk-accept-candidates"]').attributes('disabled')).toBeUndefined()
+    await wrapper.get('[data-testid="bulk-accept-candidates"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.bulkAcceptAiCandidates).toHaveBeenCalledWith(
+      expect.any(Function),
+      'csrf-token',
+      'job-1',
+      'operation-key',
+      [{
+        draft_id: 'draft-1',
+        expected_revision_number: 1,
+        confirm_warnings: true,
+      }],
+    )
+  })
+
+  it('changes accepted state only after a successful bulk response', async () => {
+    let resolveBulk!: (result: {
+      items: Array<{
+        draft_id: string
+        action: 'accept'
+        reason: null
+        revision_number: number
+        validation_run: TeacherAiValidationRun
+        accepted_question_version_id: string
+      }>
+    }) => void
+    mocks.bulkAcceptAiCandidates.mockReturnValue(new Promise((resolve) => { resolveBulk = resolve }))
+    mocks.fetchAiGenerationDrafts
+      .mockResolvedValueOnce([warningE4Draft])
+      .mockResolvedValueOnce([{ ...warningE4Draft, teacher_state: 'accepted' }])
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="batch-select-draft-1"]').setValue(true)
+    await wrapper.get('[data-testid="batch-warning-draft-1"]').setValue(true)
+    await wrapper.get('[data-testid="bulk-accept-candidates"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="accepted-notice"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="bulk-accept-candidates"]').attributes('disabled')).toBeDefined()
+
+    resolveBulk({
+      items: [{
+        draft_id: 'draft-1',
+        action: 'accept',
+        reason: null,
+        revision_number: 1,
+        validation_run: warningValidation,
+        accepted_question_version_id: 'version-batch-1',
+      }],
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="accepted-notice"]').text()).toContain('已创建题库草稿')
+    expect(wrapper.get('[data-testid="accepted-question-version-id"]').text()).toContain('version-batch-1')
+  })
+
+  it('keeps confirmed batch success and retry recovery across same-job draft navigation', async () => {
+    const secondDraft = {
+      ...warningE4Draft,
+      id: 'draft-2',
+      ordinal: 2,
+      candidate: { ...warningE4Draft.candidate, prompt: 'Second prompt' },
+    }
+    let resolveBulk!: (result: {
+      items: Array<{
+        draft_id: string
+        action: 'accept'
+        reason: null
+        revision_number: number
+        validation_run: TeacherAiValidationRun
+        accepted_question_version_id: string
+      }>
+    }) => void
+    let resolveNavigationDrafts!: (drafts: TeacherAiDraft[]) => void
+    let draftFetchCount = 0
+    mocks.bulkAcceptAiCandidates.mockReturnValue(new Promise((resolve) => { resolveBulk = resolve }))
+    mocks.fetchAiGenerationDrafts.mockImplementation(() => {
+      draftFetchCount += 1
+      if (draftFetchCount === 1) return Promise.resolve([warningE4Draft, secondDraft])
+      if (draftFetchCount === 2) {
+        return new Promise((resolve) => { resolveNavigationDrafts = resolve })
+      }
+      return Promise.resolve([warningE4Draft, secondDraft])
+    })
+    mocks.fetchAiValidationRuns.mockImplementation((_request, draftId: string) => Promise.resolve([{
+      ...warningValidation,
+      draft_id: draftId,
+    }]))
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="batch-select-draft-1"]').setValue(true)
+    await wrapper.get('[data-testid="batch-warning-draft-1"]').setValue(true)
+    await wrapper.get('[data-testid="bulk-accept-candidates"]').trigger('click')
+    await wrapper.get('[data-testid="generation-draft-draft-2"]').trigger('click')
+    await flushPromises()
+
+    resolveBulk({
+      items: [{
+        draft_id: 'draft-1',
+        action: 'accept',
+        reason: null,
+        revision_number: 1,
+        validation_run: warningValidation,
+        accepted_question_version_id: 'version-batch-1',
+      }],
+    })
+    await flushPromises()
+    resolveNavigationDrafts([warningE4Draft, secondDraft])
+    await flushPromises()
+
+    await wrapper.get('[data-testid="generation-draft-draft-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="accepted-notice"]').text()).toContain('已创建题库草稿')
+    expect(wrapper.get('[data-testid="accepted-question-version-id"]').text()).toContain('version-batch-1')
+    expect(wrapper.find('[data-testid="regenerate-candidate"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="retry-refresh"]').exists()).toBe(true)
+  })
+
+  it('reuses the batch idempotency key while selection, revision, and confirmation intent is unchanged', async () => {
+    vi.mocked(crypto.randomUUID)
+      .mockReturnValueOnce('batch-key-1')
+      .mockReturnValueOnce('batch-key-2')
+    mocks.bulkAcceptAiCandidates.mockRejectedValue({ statusCode: 503 })
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="batch-select-draft-1"]').setValue(true)
+    await wrapper.get('[data-testid="batch-warning-draft-1"]').setValue(true)
+    await wrapper.get('[data-testid="bulk-accept-candidates"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="bulk-accept-candidates"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.bulkAcceptAiCandidates).toHaveBeenCalledTimes(2)
+    expect(mocks.bulkAcceptAiCandidates.mock.calls.map(call => call[3])).toEqual([
+      'batch-key-1',
+      'batch-key-1',
+    ])
+    expect(wrapper.get('[role="alert"]').text()).toBe('AI 出题审核服务暂时不可用，请稍后重试。')
+  })
+
+  it('regenerates only pending review candidates and routes to the returned job', async () => {
+    const wrapper = await mountWorkspace()
+
+    expect(wrapper.get('[data-testid="regenerate-candidate"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="regenerate-candidate"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.regenerateAiCandidate).toHaveBeenCalledWith(
+      expect.any(Function), 'csrf-token', 'draft-1', 'operation-key',
+    )
+    expect(navigateTo).toHaveBeenCalledWith({ query: { job: 'job-regenerated' } })
+
+    const terminal = mount(TeacherAiCandidateReview, {
+      props: {
+        draft: { ...warningE4Draft, teacher_state: 'accepted' },
+        validation: warningValidation,
+      },
+    })
+    expect(terminal.find('[data-testid="regenerate-candidate"]').exists()).toBe(false)
+  })
+
+  it('uses a fresh regeneration key after returning to the source draft from a successful job', async () => {
+    vi.mocked(crypto.randomUUID)
+      .mockReturnValueOnce('regeneration-key-1')
+      .mockReturnValueOnce('regeneration-key-2')
+    mocks.fetchAiGenerationJobs.mockResolvedValue([
+      { id: 'job-1', status: 'completed', succeeded_count: 1, failed_count: 0 },
+      { id: 'job-regenerated-1', status: 'completed', succeeded_count: 0, failed_count: 0 },
+      { id: 'job-regenerated-2', status: 'completed', succeeded_count: 0, failed_count: 0 },
+    ])
+    mocks.fetchAiGenerationDrafts.mockImplementation((_request, jobId) => (
+      jobId === 'job-1' ? Promise.resolve([warningE4Draft]) : Promise.resolve([])
+    ))
+    mocks.regenerateAiCandidate
+      .mockResolvedValueOnce({ id: 'job-regenerated-1', status: 'ready_for_review' })
+      .mockResolvedValueOnce({ id: 'job-regenerated-2', status: 'ready_for_review' })
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="regenerate-candidate"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="generation-job-job-1"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="regenerate-candidate"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.regenerateAiCandidate.mock.calls.map(call => [call[2], call[3]])).toEqual([
+      ['draft-1', 'regeneration-key-1'],
+      ['draft-1', 'regeneration-key-2'],
+    ])
+    expect(navigateTo).toHaveBeenCalledWith({ query: { job: 'job-regenerated-1' } })
+    expect(navigateTo).toHaveBeenCalledWith({ query: { job: 'job-regenerated-2' } })
+  })
+
+  it('retains a regeneration key only while the request outcome is unknown', async () => {
+    vi.mocked(crypto.randomUUID)
+      .mockReturnValueOnce('regeneration-key-1')
+      .mockReturnValueOnce('regeneration-key-2')
+    mocks.regenerateAiCandidate
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockRejectedValueOnce({ statusCode: 409 })
+      .mockResolvedValueOnce({ id: 'job-regenerated', status: 'ready_for_review' })
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="regenerate-candidate"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="regenerate-candidate"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="regenerate-candidate"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.regenerateAiCandidate.mock.calls.map(call => call[3])).toEqual([
+      'regeneration-key-1',
+      'regeneration-key-1',
+      'regeneration-key-2',
+    ])
   })
 
   it.each(['accepted', 'rejected'])('enforces pending review again in workspace handlers for %s drafts', async (teacherState) => {

@@ -256,7 +256,7 @@ def create_and_fetch_e4_draft(client: TestClient, session: Session) -> object:
         headers=headers,
         json={
             "curriculum_objective_revision_id": str(revision.id),
-            "question_types": ["E4"],
+            "items": [{"question_type": "E4", "difficulty_band": "standard"}],
             "requested_count": 1,
         },
     )
@@ -279,7 +279,7 @@ def create_generation_job(
         headers=headers,
         json={
             "curriculum_objective_revision_id": str(revision.id),
-            "question_types": ["M1"],
+            "items": [{"question_type": "M1", "difficulty_band": "standard"}],
             "requested_count": 1,
         },
     )
@@ -343,7 +343,7 @@ def test_generation_create_derives_course_and_versions_from_active_objective(
         headers=authorize(client, teacher) | {"Idempotency-Key": "derived-course-context"},
         json={
             "curriculum_objective_revision_id": str(revision.id),
-            "question_types": ["M1"],
+            "items": [{"question_type": "M1", "difficulty_band": "standard"}],
             "requested_count": 1,
         },
     )
@@ -354,7 +354,36 @@ def test_generation_create_derives_course_and_versions_from_active_objective(
     assert job.grade == revision.objective.grade_mapping.internal_level
     assert job.subject == revision.objective.subject
     assert job.policy_version == "2026.07"
-    assert job.prompt_version == "generator-v1"
+    assert job.prompt_version == "generator-v2"
+
+
+def test_generation_difficulty_plan_rejects_client_target_difficulty(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+
+    response = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=authorize(client, teacher) | {"Idempotency-Key": "forged-target-difficulty"},
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "items": [
+                {
+                    "question_type": "M1",
+                    "difficulty_band": "foundation",
+                    "target_difficulty": 0.9,
+                }
+            ],
+            "requested_count": 1,
+        },
+    )
+
+    assert response.status_code == 422
+    assert any(
+        error["type"] == "extra_forbidden"
+        and error["loc"][-3:] == ["items", 0, "target_difficulty"]
+        for error in response.json()["detail"]
+    )
 
 
 def test_generation_rejects_type_count_mismatch_with_a_stable_public_error(
@@ -367,7 +396,7 @@ def test_generation_rejects_type_count_mismatch_with_a_stable_public_error(
         headers=authorize(client, teacher) | {"Idempotency-Key": "type-count-mismatch"},
         json={
             "curriculum_objective_revision_id": str(revision.id),
-            "question_types": ["M1"],
+            "items": [{"question_type": "M1", "difficulty_band": "standard"}],
             "requested_count": 2,
         },
     )
@@ -386,7 +415,7 @@ def test_generation_create_rejects_client_owned_course_and_version_fields(
         headers=authorize(client, teacher) | {"Idempotency-Key": "client-owned-context"},
         json={
             "curriculum_objective_revision_id": str(revision.id),
-            "question_types": ["M1"],
+            "items": [{"question_type": "M1", "difficulty_band": "standard"}],
             "requested_count": 1,
             "grade": "forged-grade",
             "subject": "forged-subject",
@@ -409,7 +438,7 @@ def test_generation_create_rejects_pii_teacher_constraint_without_echoing_it(
         headers=authorize(client, teacher) | {"Idempotency-Key": "pii-create"},
         json={
             "curriculum_objective_revision_id": str(revision.id),
-            "question_types": ["M1"],
+            "items": [{"question_type": "M1", "difficulty_band": "standard"}],
             "requested_count": 1,
             "teacher_constraint": teacher_constraint,
         },
@@ -431,7 +460,7 @@ def test_generation_create_rejects_a_phone_number_teacher_constraint(
         headers=authorize(client, teacher) | {"Idempotency-Key": "pii-create-phone"},
         json={
             "curriculum_objective_revision_id": str(revision.id),
-            "question_types": ["M1"],
+            "items": [{"question_type": "M1", "difficulty_band": "standard"}],
             "requested_count": 1,
             "teacher_constraint": teacher_constraint,
         },
@@ -451,7 +480,7 @@ def test_generation_create_rejects_a_phone_label_with_unformatted_digits(
         headers=authorize(client, teacher) | {"Idempotency-Key": "pii-create-labelled-phone"},
         json={
             "curriculum_objective_revision_id": str(revision.id),
-            "question_types": ["M1"],
+            "items": [{"question_type": "M1", "difficulty_band": "standard"}],
             "requested_count": 1,
             "teacher_constraint": "Guardian phone: 81234567.",
         },
@@ -493,7 +522,7 @@ def test_generation_routes_reject_oversized_idempotency_keys_with_a_stable_error
         headers=authorize(client, teacher) | {"Idempotency-Key": oversized_key},
         json={
             "curriculum_objective_revision_id": str(revision.id),
-            "question_types": ["M1"],
+            "items": [{"question_type": "M1", "difficulty_band": "standard"}],
             "requested_count": 1,
         },
     )
@@ -523,7 +552,7 @@ def test_generation_create_accepts_a_128_character_idempotency_key(
         headers=authorize(client, teacher) | {"Idempotency-Key": "x" * 128},
         json={
             "curriculum_objective_revision_id": str(revision.id),
-            "question_types": ["M1"],
+            "items": [{"question_type": "M1", "difficulty_band": "standard"}],
             "requested_count": 1,
         },
     )
@@ -715,6 +744,77 @@ def test_generation_regeneration_preserves_original_job_snapshot(
     ) == expected_snapshot
 
 
+def test_generation_regeneration_inherits_ordinal_difficulty_plan_and_snapshot(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    headers = authorize(client, teacher)
+    created = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=headers | {"Idempotency-Key": "regeneration-inherits-source"},
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "items": [
+                {"question_type": "M1", "difficulty_band": "foundation"},
+                {"question_type": "M1", "difficulty_band": "stretch"},
+            ],
+            "requested_count": 2,
+        },
+    )
+    assert created.status_code == 201
+    source = session.get(GenerationJob, UUID(created.json()["id"]))
+    assert source is not None
+    source_snapshot = (
+        source.grade,
+        source.subject,
+        source.policy_version,
+        source.prompt_version,
+    )
+    source_distribution = source.distribution_json.copy()
+    source_drafts = client.get(
+        f"/v1/ai-question-generation/jobs/{source.id}/questions",
+        headers=headers,
+    ).json()["items"]
+    second_draft = next(item for item in source_drafts if item["ordinal"] == 2)
+    source_draft = session.get(GeneratedQuestionDraft, UUID(second_draft["id"]))
+    assert source_draft is not None
+    source_candidate = source_draft.candidate_json.copy()
+    source_revision_id = source_draft.current_revision_id
+    revision.objective.grade_mapping.internal_level = "G6"
+    revision.objective.subject = "science"
+    session.commit()
+
+    response = client.post(
+        f"/v1/ai-generated-questions/{source_draft.id}/regenerate",
+        headers=headers | {"Idempotency-Key": "regeneration-inherits-ordinal-two"},
+        json={},
+    )
+
+    assert response.status_code == 201
+    regenerated = session.get(GenerationJob, UUID(response.json()["id"]))
+    assert regenerated is not None
+    assert regenerated.distribution_json == {
+        "items": [
+            {
+                "question_type": "M1",
+                "difficulty_band": "stretch",
+                "target_difficulty": 0.8,
+            }
+        ]
+    }
+    assert (
+        regenerated.grade,
+        regenerated.subject,
+        regenerated.policy_version,
+        regenerated.prompt_version,
+    ) == source_snapshot
+    session.refresh(source)
+    session.refresh(source_draft)
+    assert source.distribution_json == source_distribution
+    assert source_draft.candidate_json == source_candidate
+    assert source_draft.current_revision_id == source_revision_id
+
+
 def test_teacher_job_request_is_idempotent_and_never_publishes(
     client: TestClient, session: Session
 ) -> None:
@@ -722,7 +822,7 @@ def test_teacher_job_request_is_idempotent_and_never_publishes(
     headers = authorize(client, teacher) | {"Idempotency-Key": "same-request"}
     payload = {
         "curriculum_objective_revision_id": str(revision.id),
-        "question_types": ["M1"],
+        "items": [{"question_type": "M1", "difficulty_band": "standard"}],
         "requested_count": 1,
     }
 
@@ -751,7 +851,7 @@ def test_generation_job_and_draft_payloads_do_not_expose_system_prompt(
         headers=headers,
         json={
             "curriculum_objective_revision_id": str(revision.id),
-            "question_types": ["M1"],
+            "items": [{"question_type": "M1", "difficulty_band": "standard"}],
             "requested_count": 1,
             "teacher_constraint": teacher_constraint,
         },
@@ -800,7 +900,7 @@ def test_generation_job_rejects_a_batch_over_the_configured_limit(
         headers=authorize(client, teacher) | {"Idempotency-Key": "oversized-request"},
         json={
             "curriculum_objective_revision_id": str(revision.id),
-            "question_types": ["M1"],
+            "items": [{"question_type": "M1", "difficulty_band": "standard"}],
             "requested_count": 2,
         },
     )
@@ -820,7 +920,7 @@ def test_old_validation_run_is_not_current_after_edit(
         headers=headers,
         json={
             "curriculum_objective_revision_id": str(revision.id),
-            "question_types": ["M1"],
+            "items": [{"question_type": "M1", "difficulty_band": "standard"}],
             "requested_count": 1,
             "teacher_constraint": teacher_constraint,
         },
@@ -922,7 +1022,7 @@ def test_validation_run_route_exposes_unavailable_difficulty_signal_without_diag
         headers=headers,
         json={
             "curriculum_objective_revision_id": str(revision.id),
-            "question_types": ["M1"],
+            "items": [{"question_type": "M1", "difficulty_band": "standard"}],
             "requested_count": 1,
         },
     )

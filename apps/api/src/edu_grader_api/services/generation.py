@@ -4,10 +4,16 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from decimal import Decimal
+from typing import Literal, Protocol, Sequence
 from uuid import UUID
 
-from edu_generator.contracts import GeneratedCandidate, GenerationRequest, ProviderFailure
+from edu_generator.contracts import (
+    GeneratedCandidate,
+    GenerationPlanItem,
+    GenerationRequest,
+    ProviderFailure,
+)
 from edu_generator.prompt_templates import PromptTemplate, resolve_prompt_template
 from edu_generator.providers import GenerationProvider
 from edu_grader_processor_policy import (
@@ -15,7 +21,7 @@ from edu_grader_processor_policy import (
     assert_deidentified_payload,
     assert_deidentified_text,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -40,7 +46,15 @@ class GenerationServiceError(ValueError):
 
 
 GENERATION_POLICY_CATALOG_VERSION = "2026.07"
-GENERATION_PROMPT_VERSION = "generator-v1"
+GENERATION_PROMPT_VERSION = "generator-v2"
+_DIFFICULTY_BAND_FRACTIONS = {"foundation": 0.2, "standard": 0.5, "stretch": 0.8}
+# Provider-authored estimates within five percentage points remain aligned to the plan target.
+_TARGET_DIFFICULTY_TOLERANCE = 0.05
+
+
+class _GenerationPlanSourceItem(Protocol):
+    question_type: Literal["M1", "M2", "E1", "E2", "E3", "E4"]
+    difficulty_band: Literal["foundation", "standard", "stretch"]
 
 
 class GenerationJobRequest(BaseModel):
@@ -49,9 +63,7 @@ class GenerationJobRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     curriculum_objective_revision_id: UUID
-    question_types: list[Literal["M1", "M2", "E1", "E2", "E3", "E4"]] = Field(
-        min_length=1, max_length=20
-    )
+    items: list[GenerationPlanItem] = Field(min_length=1, max_length=20)
     requested_count: int = Field(ge=1, le=20)
     idempotency_key: str = Field(min_length=1, max_length=128)
     teacher_constraint: str | None = Field(default=None, max_length=1_000)
@@ -61,6 +73,25 @@ class GenerationJobRequest(BaseModel):
             assert_deidentified_payload(self.model_dump(mode="json"))
         except ValueError as exc:
             raise ValueError("generation requests must be de-identified") from exc
+
+
+def derive_generation_plan(
+    revision: CurriculumObjectiveRevision,
+    items: Sequence[_GenerationPlanSourceItem],
+) -> list[GenerationPlanItem]:
+    return [
+        GenerationPlanItem(
+            question_type=item.question_type,
+            difficulty_band=item.difficulty_band,
+            target_difficulty=round(
+                revision.difficulty_min
+                + (revision.difficulty_max - revision.difficulty_min)
+                * _DIFFICULTY_BAND_FRACTIONS[item.difficulty_band],
+                4,
+            ),
+        )
+        for item in items
+    ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,13 +145,14 @@ def create_or_get_job(
         or revision.objective.profile.status is not CurriculumProfileStatus.ACTIVE
     ):
         raise GenerationServiceError("curriculum objective revision must be active")
-    if not set(request.question_types).issubset(set(revision.allowed_question_types)):
+    question_types = [item.question_type for item in request.items]
+    if not set(question_types).issubset(set(revision.allowed_question_types)):
         raise GenerationServiceError("requested question types are not allowed by the objective")
-    if len(request.question_types) != request.requested_count:
+    if len(request.items) != request.requested_count:
         raise GenerationServiceError("generation_distribution_invalid")
     active_snapshot = snapshot or _snapshot_from_active_revision(revision)
     try:
-        resolve_prompt_template(active_snapshot.prompt_version, request.question_types)
+        resolve_prompt_template(active_snapshot.prompt_version, question_types)
     except ValueError as exc:
         raise GenerationServiceError("prompt template is not available for this request") from exc
 
@@ -131,7 +163,9 @@ def create_or_get_job(
         curriculum_objective_revision_id=revision.id,
         grade=active_snapshot.grade,
         subject=active_snapshot.subject,
-        distribution_json={"question_types": request.question_types},
+        distribution_json={
+            "items": [item.model_dump(mode="json") for item in request.items],
+        },
         requested_count=request.requested_count,
         status=GenerationJobStatus.QUEUED,
         idempotency_key=request.idempotency_key,
@@ -178,7 +212,9 @@ def run_generation_job(
 
     request = _provider_request(session, job, teacher_constraint=teacher_constraint)
     try:
-        template = resolve_prompt_template(request.prompt_version, request.question_types)
+        template = resolve_prompt_template(
+            request.prompt_version, [item.question_type for item in request.items]
+        )
     except ValueError:
         job.status = GenerationJobStatus.FAILED
         job.failure_code = "prompt_template_unavailable"
@@ -269,11 +305,7 @@ def _provider_request(
             assert_deidentified_text(teacher_constraint)
         except ProcessorPolicyError as exc:
             raise GenerationServiceError("teacher_constraint_contains_pii") from exc
-    question_types = job.distribution_json.get("question_types", [])
-    if not isinstance(question_types, list) or not all(
-        isinstance(item, str) for item in question_types
-    ):
-        raise GenerationServiceError("generation job question type distribution is invalid")
+    items = _generation_plan_items(job)
     revision = session.get(CurriculumObjectiveRevision, job.curriculum_objective_revision_id)
     if revision is None:
         raise GenerationServiceError("generation job objective revision was not found")
@@ -285,12 +317,32 @@ def _provider_request(
         difficulty_max=revision.difficulty_max,
         grade=job.grade or "unspecified",
         subject=job.subject or "unspecified",
-        question_types=question_types,
+        items=items,
         requested_count=job.requested_count,
         policy_version=job.policy_version or "unknown",
         prompt_version=job.prompt_version or "unknown",
         teacher_constraint=teacher_constraint,
     )
+
+
+def generation_plan_item_for_ordinal(job: GenerationJob, ordinal: int) -> GenerationPlanItem:
+    items = _generation_plan_items(job)
+    if ordinal < 1 or ordinal > len(items):
+        raise GenerationServiceError("generation job plan ordinal is invalid")
+    return items[ordinal - 1]
+
+
+def _generation_plan_items(job: GenerationJob) -> list[GenerationPlanItem]:
+    raw_items = job.distribution_json.get("items")
+    if not isinstance(raw_items, list):
+        raise GenerationServiceError("generation job plan is invalid")
+    try:
+        items = [GenerationPlanItem.model_validate(item) for item in raw_items]
+    except ValidationError as exc:
+        raise GenerationServiceError("generation job plan is invalid") from exc
+    if len(items) != job.requested_count:
+        raise GenerationServiceError("generation job plan is invalid")
+    return items
 
 
 def _persist_valid_candidates(
@@ -301,13 +353,21 @@ def _persist_valid_candidates(
     candidates: list[GeneratedCandidate],
 ) -> int:
     valid_count = 0
-    allowed_question_types = set(job.distribution_json.get("question_types", []))
-    for candidate in candidates:
+    plan_items = _generation_plan_items(job)
+    for ordinal, candidate in enumerate(candidates, start=1):
         if valid_count + job.succeeded_count >= job.requested_count:
             break
+        if ordinal > len(plan_items):
+            break
+        plan_item = plan_items[ordinal - 1]
         if candidate.objective_revision_id != job.curriculum_objective_revision_id:
             continue
-        if candidate.question_type not in allowed_question_types:
+        if candidate.question_type != plan_item.question_type:
+            continue
+        difficulty_delta = abs(
+            Decimal(str(candidate.difficulty)) - Decimal(str(plan_item.target_difficulty))
+        )
+        if difficulty_delta > Decimal(str(_TARGET_DIFFICULTY_TOLERANCE)):
             continue
         if validate_policy(candidate.question_type, candidate.policy_version, candidate.rule_json):
             continue
@@ -315,7 +375,7 @@ def _persist_valid_candidates(
         draft = GeneratedQuestionDraft(
             job_id=job.id,
             generation_attempt_id=attempt.id,
-            ordinal=job.succeeded_count + valid_count + 1,
+            ordinal=ordinal,
             content_hash=_content_hash(content),
             candidate_json=content,
             teacher_state="pending_review",
@@ -348,7 +408,7 @@ def _request_summary(
         "objective_revision_id": str(request.objective_revision_id),
         "grade": request.grade,
         "subject": request.subject,
-        "question_types": request.question_types,
+        "question_types": [item.question_type for item in request.items],
         "policy_version": request.policy_version,
         "prompt_version": request.prompt_version,
         "prompt_template": {

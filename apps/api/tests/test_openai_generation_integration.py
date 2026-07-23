@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from edu_generator.contracts import GenerationRequest
+from edu_generator.contracts import GenerationPlanItem, GenerationRequest
 from edu_generator.openai_provider import OpenAIResponsesProvider
 
 
@@ -39,7 +39,13 @@ def test_openai_responses_provider_returns_one_schema_valid_candidate() -> None:
             difficulty_max=0.3,
             grade="Grade 5",
             subject="mathematics",
-            question_types=["M1"],
+            items=[
+                GenerationPlanItem(
+                    question_type="M1",
+                    difficulty_band="standard",
+                    target_difficulty=0.2,
+                )
+            ],
             requested_count=1,
             policy_version="2026.07",
             prompt_version="generator-v1",
