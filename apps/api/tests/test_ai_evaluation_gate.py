@@ -105,9 +105,7 @@ def test_gate_blocks_cross_field_state_contradictions() -> None:
     english_index = next(
         index for index, record in enumerate(records) if record.question_type == "E1"
     )
-    records[english_index] = records[english_index].model_copy(
-        update={"math_answer_correct": True}
-    )
+    records[english_index] = records[english_index].model_copy(update={"math_answer_correct": True})
 
     report = ai_evaluation_gate.evaluate_records(records, _policy())
 
