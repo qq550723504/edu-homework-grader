@@ -116,13 +116,16 @@ git commit -m "feat: add ordered AI generation plan contract"
 
 - Modify: apps/api/src/edu_grader_api/services/generation.py
 - Modify: apps/api/src/edu_grader_api/routers/ai_question_generation.py
+- Modify: apps/api/src/edu_grader_api/e2e_support.py
 - Modify: apps/api/tests/test_generation_service.py
 - Modify: apps/api/tests/test_ai_question_generation_api.py
+- Modify: apps/api/tests/test_generation_models.py
 
 **Interfaces:**
 
 - Consumes: GenerationPlanItem from Task 1 and curriculum difficulty_min/difficulty_max.
 - Produces: GenerationJobRequest.items, derive_generation_plan(revision, items), and distribution_json with items.
+- Migration boundary: migrate in-repository E2E/model fixtures to complete items; production deliberately rejects incomplete historical question_types JSON rather than restoring compatibility or adding a migration.
 
 - [ ] **Step 1: Write failing service and API tests**
 
