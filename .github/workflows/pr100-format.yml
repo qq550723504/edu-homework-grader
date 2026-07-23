@@ -1,0 +1,53 @@
+name: PR 100 one-shot formatter
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out pull request head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install Python packages
+        run: make install-python
+
+      - name: Format the new operational evaluation files
+        run: |
+          python -m ruff format \
+            apps/api/src/edu_grader_api/services/ai_evaluation_operational.py \
+            apps/api/tests/test_ai_evaluation_operational.py
+
+      - name: Commit formatting changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- \
+            apps/api/src/edu_grader_api/services/ai_evaluation_operational.py \
+            apps/api/tests/test_ai_evaluation_operational.py; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            apps/api/src/edu_grader_api/services/ai_evaluation_operational.py \
+            apps/api/tests/test_ai_evaluation_operational.py
+          git commit -m "style: format operational AI evaluation"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
