@@ -110,7 +110,18 @@ def generation_request(
 ) -> GenerationJobRequest:
     return GenerationJobRequest(
         curriculum_objective_revision_id=revision.id,
-        question_types=["M1", "M1"],
+        items=[
+            GenerationPlanItem(
+                question_type="M1",
+                difficulty_band="standard",
+                target_difficulty=0.5,
+            ),
+            GenerationPlanItem(
+                question_type="M1",
+                difficulty_band="standard",
+                target_difficulty=0.5,
+            ),
+        ],
         requested_count=2,
         idempotency_key="same-request",
         teacher_constraint=teacher_constraint,
@@ -126,7 +137,13 @@ def teacher_and_e4_objective(session: Session) -> tuple[User, CurriculumObjectiv
 def e4_generation_request(revision: CurriculumObjectiveRevision) -> GenerationJobRequest:
     return GenerationJobRequest(
         curriculum_objective_revision_id=revision.id,
-        question_types=["E4"],
+        items=[
+            GenerationPlanItem(
+                question_type="E4",
+                difficulty_band="standard",
+                target_difficulty=0.5,
+            )
+        ],
         requested_count=1,
         idempotency_key="e4-reading-material",
     )
@@ -146,7 +163,7 @@ def valid_single_candidate(revision: CurriculumObjectiveRevision) -> GeneratedCa
                     "rule_json": {"expected": 4, "tolerance": 0},
                     "explanation": "Add the two whole numbers.",
                     "knowledge_point": "whole-number addition",
-                    "difficulty": 0.2,
+                    "difficulty": 0.5,
                 }
             ],
         }
@@ -317,6 +334,42 @@ def test_creation_derives_course_and_versions_from_active_objective(session: Ses
     assert job.prompt_version == "generator-v1"
 
 
+def test_creation_persists_server_owned_difficulty_plan(session: Session) -> None:
+    teacher, revision = teacher_and_objective(session)
+    request = GenerationJobRequest(
+        curriculum_objective_revision_id=revision.id,
+        items=[
+            GenerationPlanItem(
+                question_type="M1",
+                difficulty_band="foundation",
+                target_difficulty=0.2,
+            ),
+            GenerationPlanItem(
+                question_type="M1",
+                difficulty_band="stretch",
+                target_difficulty=0.8,
+            ),
+        ],
+        requested_count=2,
+        idempotency_key="difficulty-plan",
+    )
+
+    job = create_or_get_job(session, request=request, actor=teacher)
+
+    assert job.distribution_json["items"] == [
+        {
+            "question_type": "M1",
+            "difficulty_band": "foundation",
+            "target_difficulty": 0.2,
+        },
+        {
+            "question_type": "M1",
+            "difficulty_band": "stretch",
+            "target_difficulty": 0.8,
+        },
+    ]
+
+
 def test_generation_request_rejects_server_owned_snapshot_fields(
     session: Session,
 ) -> None:
@@ -325,7 +378,13 @@ def test_generation_request_rejects_server_owned_snapshot_fields(
     with pytest.raises(ValidationError):
         GenerationJobRequest(
             curriculum_objective_revision_id=revision.id,
-            question_types=["M1"],
+            items=[
+                GenerationPlanItem(
+                    question_type="M1",
+                    difficulty_band="standard",
+                    target_difficulty=0.5,
+                )
+            ],
             requested_count=1,
             idempotency_key="server-owned-snapshot-fields",
             grade="forged-grade",
@@ -374,7 +433,14 @@ def test_creation_defensively_rejects_invalid_question_types_before_persisting_a
     session: Session,
 ) -> None:
     teacher, revision = teacher_and_objective(session)
-    request = generation_request(revision).model_copy(update={"question_types": ["X1", "X1"]})
+    invalid_item = GenerationPlanItem.model_construct(
+        question_type="X1",
+        difficulty_band="standard",
+        target_difficulty=0.5,
+    )
+    request = generation_request(revision).model_copy(
+        update={"items": [invalid_item, invalid_item]}
+    )
 
     with pytest.raises(GenerationServiceError) as exc_info:
         create_or_get_job(session, request=request, actor=teacher)
@@ -389,7 +455,13 @@ def test_creation_rejects_a_normal_request_outside_the_catalog_template_scope(
     teacher, revision = teacher_and_objective(session)
     revision.allowed_question_types = ["E1"]
     request_data = generation_request(revision).model_dump()
-    request_data["question_types"] = ["E1"]
+    request_data["items"] = [
+        {
+            "question_type": "E1",
+            "difficulty_band": "standard",
+            "target_difficulty": 0.5,
+        }
+    ]
     request_data["requested_count"] = 1
     request = GenerationJobRequest.model_validate(request_data)
     template = resolve_prompt_template("generator-v1", ["M1"])
@@ -478,6 +550,63 @@ def test_provider_receives_active_objective_context_and_requested_count(session:
     ]
     assert [item.target_difficulty for item in provider.request.items] == [0.5, 0.5]
     assert provider.request.requested_count == job.requested_count
+
+
+def test_difficulty_plan_discards_candidates_that_miss_their_ordinal_plan(
+    session: Session,
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    request = GenerationJobRequest(
+        curriculum_objective_revision_id=revision.id,
+        items=[
+            GenerationPlanItem(
+                question_type="M1",
+                difficulty_band="foundation",
+                target_difficulty=0.2,
+            ),
+            GenerationPlanItem(
+                question_type="M1",
+                difficulty_band="stretch",
+                target_difficulty=0.8,
+            ),
+        ],
+        requested_count=2,
+        idempotency_key="difficulty-plan-ordinal-enforcement",
+    )
+    job = create_or_get_job(session, request=request, actor=teacher)
+    result = GeneratedCandidateEnvelope.from_provider_payload(
+        {
+            "provider_name": "fake",
+            "model_version": "fake-v1",
+            "candidates": [
+                {
+                    "objective_revision_id": str(revision.id),
+                    "question_type": "M1",
+                    "policy_version": "1",
+                    "prompt": "This misses the foundation target.",
+                    "rule_json": {"expected": 4, "tolerance": 0},
+                    "explanation": "The reported difficulty belongs to another plan item.",
+                    "knowledge_point": "whole-number addition",
+                    "difficulty": 0.75,
+                },
+                {
+                    "objective_revision_id": str(revision.id),
+                    "question_type": "M1",
+                    "policy_version": "1",
+                    "prompt": "This matches ordinal two.",
+                    "rule_json": {"expected": 4, "tolerance": 0},
+                    "explanation": "The type and difficulty match ordinal two.",
+                    "knowledge_point": "whole-number addition",
+                    "difficulty": 0.75,
+                },
+            ],
+        }
+    )
+
+    run_generation_job(session, job=job, provider=CapturingProvider(result))
+
+    assert job.succeeded_count == 1
+    assert [draft.ordinal for draft in job.drafts] == [2]
 
 
 def test_successful_attempt_records_template_audit_metadata_without_prompt_body(

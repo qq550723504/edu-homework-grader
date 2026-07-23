@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import unicodedata
 from uuid import UUID
 
+from edu_generator.contracts import GenerationPlanItem
 from edu_generator.providers import FakeGenerationProvider
 from jwt.exceptions import InvalidTokenError
 from sqlalchemy import select
@@ -517,7 +518,18 @@ def _seed_ai_review_batch(session: Session, *, tenant: Tenant, teacher: User) ->
         session,
         request=GenerationJobRequest(
             curriculum_objective_revision_id=revision.id,
-            question_types=["M1", "M1"],
+            items=[
+                GenerationPlanItem(
+                    question_type="M1",
+                    difficulty_band="standard",
+                    target_difficulty=0.5,
+                ),
+                GenerationPlanItem(
+                    question_type="M1",
+                    difficulty_band="standard",
+                    target_difficulty=0.5,
+                ),
+            ],
             requested_count=2,
             idempotency_key=AI_REVIEW_JOB_KEY,
         ),

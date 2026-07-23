@@ -22,6 +22,7 @@ from ..auth import CurrentPrincipal
 from ..db import get_session
 from ..dependencies import require_any_role
 from ..models import (
+    CurriculumObjectiveRevision,
     GeneratedQuestionDraft,
     GeneratedQuestionDraftRevision,
     GeneratedQuestionReviewDecision,
@@ -49,6 +50,8 @@ from ..services.generation import (
     GenerationServiceError,
     cancel_generation_job,
     create_or_get_job,
+    derive_generation_plan,
+    generation_plan_item_for_ordinal,
     run_generation_job,
 )
 from ..services.grader import HttpGraderClient
@@ -59,13 +62,18 @@ router = APIRouter(prefix="/v1/ai-question-generation", tags=["AI question gener
 draft_router = APIRouter(prefix="/v1/ai-generated-questions", tags=["AI question generation"])
 
 
+class CreateGenerationPlanItemRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question_type: Literal["M1", "M2", "E1", "E2", "E3", "E4"]
+    difficulty_band: Literal["foundation", "standard", "stretch"]
+
+
 class CreateGenerationJobRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     curriculum_objective_revision_id: UUID
-    question_types: list[Literal["M1", "M2", "E1", "E2", "E3", "E4"]] = Field(
-        min_length=1, max_length=20
-    )
+    items: list[CreateGenerationPlanItemRequest] = Field(min_length=1, max_length=20)
     requested_count: int = Field(ge=1, le=20)
     teacher_constraint: str | None = Field(default=None, max_length=1_000)
 
@@ -128,8 +136,14 @@ def create_generation_job_route(
 ) -> dict[str, object]:
     key = _required_idempotency_key(idempotency_key)
     actor = _actor(session, principal)
+    revision = session.get(CurriculumObjectiveRevision, body.curriculum_objective_revision_id)
+    if revision is None:
+        raise _api_error(status.HTTP_409_CONFLICT, "generation_request_rejected")
     request = GenerationJobRequest(
-        **body.model_dump(),
+        curriculum_objective_revision_id=body.curriculum_objective_revision_id,
+        items=derive_generation_plan(revision, body.items),
+        requested_count=body.requested_count,
+        teacher_constraint=body.teacher_constraint,
         idempotency_key=key,
     )
     existing = _find_job_by_idempotency(session, actor=actor, idempotency_key=key)
@@ -352,12 +366,13 @@ def regenerate_draft_route(
     actor = _actor(session, principal)
     draft = _authorized_draft(session, draft_id=draft_id, actor=actor)
     original = draft.job
-    question_type = draft.candidate_json.get("question_type")
-    if not isinstance(question_type, str):
+    try:
+        source_item = generation_plan_item_for_ordinal(original, draft.ordinal)
+    except GenerationServiceError:
         raise _api_error(status.HTTP_409_CONFLICT, "generation_draft_invalid")
     request = GenerationJobRequest(
         curriculum_objective_revision_id=original.curriculum_objective_revision_id,
-        question_types=[question_type],
+        items=[source_item],
         requested_count=1,
         idempotency_key=key,
         teacher_constraint=body.teacher_constraint,
