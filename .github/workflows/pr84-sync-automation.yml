@@ -1,17 +1,20 @@
 name: One-shot PR 84 branch synchronization
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/pr84-sync-automation.yml
+  issue_comment:
+    types:
+      - created
 
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
   sync:
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.issue.number == 84 &&
+      github.event.comment.body == '/sync-pr84-main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
