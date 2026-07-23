@@ -1,9 +1,9 @@
 name: One-shot PR 84 branch synchronization
 
 on:
-  issue_comment:
+  pull_request_target:
     types:
-      - created
+      - synchronize
 
 permissions:
   contents: write
@@ -11,10 +11,7 @@ permissions:
 
 jobs:
   sync:
-    if: >-
-      github.event.issue.pull_request &&
-      github.event.issue.number == 84 &&
-      github.event.comment.body == '/sync-pr84-main'
+    if: github.event.pull_request.number == 84
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
