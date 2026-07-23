@@ -107,7 +107,7 @@ class GenerationJobSnapshot:
     subject: str
     policy_catalog_version: str
     prompt_version: str
-    curriculum_profile_id: UUID
+    curriculum_profile_id: UUID | None = None
 
     @classmethod
     def from_job(cls, job: GenerationJob) -> GenerationJobSnapshot:
@@ -158,11 +158,12 @@ def create_or_get_job(
     if len(request.items) != request.requested_count:
         raise GenerationServiceError("generation_distribution_invalid")
     active_snapshot = snapshot or _snapshot_from_active_revision(revision)
+    resolved_profile_id = active_snapshot.curriculum_profile_id or revision.objective.profile_id
     try:
         assert_generation_configured_components_allowed(
             session,
             tenant_id=actor.tenant_id,
-            curriculum_profile_id=str(active_snapshot.curriculum_profile_id),
+            curriculum_profile_id=str(resolved_profile_id),
             prompt_version=active_snapshot.prompt_version,
         )
     except GenerationGovernanceError as exc:
