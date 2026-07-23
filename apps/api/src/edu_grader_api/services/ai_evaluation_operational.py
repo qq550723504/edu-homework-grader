@@ -72,13 +72,9 @@ _GRADE_CODES = frozenset(
         "grade_complexity_warning",
     }
 )
-_UNAVAILABLE_CODES = frozenset(
-    {"validator_unavailable", "duplicate_semantic_check_unavailable"}
-)
+_UNAVAILABLE_CODES = frozenset({"validator_unavailable", "duplicate_semantic_check_unavailable"})
 _EXACT_DUPLICATE_CODES = frozenset({"duplicate_exact_prompt"})
-_SIMILARITY_CODES = frozenset(
-    {"duplicate_normalized_prompt", "duplicate_semantic_near_match"}
-)
+_SIMILARITY_CODES = frozenset({"duplicate_normalized_prompt", "duplicate_semantic_near_match"})
 
 
 class EvaluationExportSpec(BaseModel):
@@ -354,11 +350,14 @@ def _select_evidence(
     *,
     draft: GeneratedQuestionDraft,
     watermark: datetime,
-) -> tuple[
-    GeneratedQuestionDraftRevision,
-    GenerationValidationRun,
-    GeneratedQuestionReviewDecision | None,
-] | None:
+) -> (
+    tuple[
+        GeneratedQuestionDraftRevision,
+        GenerationValidationRun,
+        GeneratedQuestionReviewDecision | None,
+    ]
+    | None
+):
     decision = session.scalar(
         select(GeneratedQuestionReviewDecision)
         .where(
@@ -396,9 +395,7 @@ def _select_evidence(
             GenerationValidationRun.draft_revision_id == revision.id,
             GenerationValidationRun.created_at <= watermark,
         )
-        .order_by(
-            GenerationValidationRun.run_number.desc(), GenerationValidationRun.id.desc()
-        )
+        .order_by(GenerationValidationRun.run_number.desc(), GenerationValidationRun.id.desc())
         .limit(1)
     )
     return (revision, run, None) if run is not None else None
@@ -510,9 +507,7 @@ def run_operational_evaluation(
     )
 
 
-def _matches(
-    record: ai_evaluation.EvaluationRecord, selector: EvaluationVersionSelector
-) -> bool:
+def _matches(record: ai_evaluation.EvaluationRecord, selector: EvaluationVersionSelector) -> bool:
     return (
         record.model_id == selector.model_id
         and record.prompt_version == selector.prompt_version
@@ -535,9 +530,7 @@ def _governance_violations(
             (GenerationGovernanceTargetType.PROMPT_VERSION, selector.prompt_version),
         )
         for target_type, target_key in targets:
-            effective = _effective_state(
-                session, spec.export.tenant_id, target_type, target_key
-            )
+            effective = _effective_state(session, spec.export.tenant_id, target_type, target_key)
             if effective not in allowed:
                 violations.append(
                     ai_evaluation.EvaluationViolation(
@@ -696,9 +689,7 @@ def _deduplicate(
     return list(unique.values())
 
 
-def _issue(
-    code: str, draft: GeneratedQuestionDraft, **detail: str
-) -> EvaluationExportIssue:
+def _issue(code: str, draft: GeneratedQuestionDraft, **detail: str) -> EvaluationExportIssue:
     return EvaluationExportIssue(code=code, draft_id=str(draft.id), detail=detail)
 
 
@@ -727,7 +718,7 @@ def write_operational_artifacts(
         report.model_dump(mode="json"), ensure_ascii=False, indent=2, sort_keys=True
     )
     html = (
-        "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\">"
+        '<!doctype html>\n<html lang="en">\n<head><meta charset="utf-8">'
         "<title>Operational AI evaluation</title></head>\n"
         f"<body><h1>Operational AI evaluation</h1><pre>{escape(report_json)}</pre></body>\n"
         "</html>\n"

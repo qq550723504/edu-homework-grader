@@ -409,9 +409,7 @@ def test_export_fails_closed_when_validation_evidence_is_missing(session: Sessio
     )
 
     assert exported.records == []
-    assert [issue.code for issue in exported.issues] == [
-        "evaluation_export_evidence_missing"
-    ]
+    assert [issue.code for issue in exported.issues] == ["evaluation_export_evidence_missing"]
     assert exported.manifest.issue_count == 1
 
 
@@ -575,9 +573,7 @@ def test_explicit_version_comparison_blocks_candidate_regression(session: Sessio
     assert report.baseline_gate is not None and report.baseline_gate.promotion_eligible is True
     assert report.candidate_gate is not None and report.candidate_gate.promotion_eligible is True
     assert report.promotion_eligible is False
-    assert "evaluation_candidate_regression" in {
-        violation.code for violation in report.violations
-    }
+    assert "evaluation_candidate_regression" in {violation.code for violation in report.violations}
     assert report.metric_comparisons["grade_mismatch_rate"].state == "fail"
     assert any(
         comparison["key"].get("question_type") == "M1"
