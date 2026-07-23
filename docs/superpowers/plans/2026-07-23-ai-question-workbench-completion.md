@@ -43,12 +43,17 @@
 
 - Modify: services/generator/src/edu_generator/contracts.py
 - Modify: services/generator/src/edu_generator/providers.py
+- Modify: services/generator/src/edu_generator/openai_provider.py
+- Modify: apps/api/src/edu_grader_api/services/generation.py
 - Modify: apps/api/tests/test_generation_service.py
+- Modify: services/generator/tests/test_contracts.py
+- Modify: apps/api/tests/test_openai_generation_integration.py
 
 **Interfaces:**
 
 - Consumes: GeneratedCandidate.difficulty.
 - Produces: GenerationPlanItem(question_type, difficulty_band, target_difficulty) and GenerationRequest.items.
+- Transitional boundary: adapt old persisted distribution_json.question_types into standard-band midpoint items inside the service until Task 2 persists complete items; do not retain a public question_types field.
 
 - [ ] **Step 1: Write the failing test**
 
