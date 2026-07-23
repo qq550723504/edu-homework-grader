@@ -31,45 +31,50 @@ def _policy() -> evaluation.EvaluationPolicy:
 
 
 def _passing_records() -> list[evaluation.EvaluationRecord]:
-    outcomes = [
-        ("M1", "accepted_directly"),
-        ("M2", "accepted_after_edit"),
-        ("E1", "accepted_directly"),
-        ("E2", "accepted_directly"),
-        ("E3", "accepted_after_edit"),
-    ]
-    return [
-        evaluation.EvaluationRecord.model_validate(
-            {
-                "record_id": f"record-{index}",
-                "run_id": "run-v1",
-                "curriculum_profile": "cn-2022",
-                "grade": "G7",
-                "subject": "mathematics" if question_type.startswith("M") else "english",
-                "question_type": question_type,
-                "model_id": "gpt-5.6-terra",
-                "prompt_version": "generator-v3",
-                "validator_version": "verification-v5",
-                "difficulty_band": "standard",
-                "seed": index,
-                "parameters": {"temperature": 0},
-                "content_fingerprint": f"{index:064x}",
-                "schema_valid": True,
-                "math_answer_correct": True if question_type.startswith("M") else None,
-                "grade_aligned": True,
-                "duplicate_exact": False,
-                "similarity_high": False,
-                "teacher_outcome": teacher_outcome,
-                "teacher_edited": teacher_outcome == "accepted_after_edit",
-                "rejection_category": None,
-                "published": True,
-                "review_evidence": True,
-                "cost_usd": 0.01,
-                "duration_ms": 100,
-            }
-        )
-        for index, (question_type, teacher_outcome) in enumerate(outcomes, start=1)
-    ]
+    records: list[evaluation.EvaluationRecord] = []
+    for question_type in ("M1", "M2", "E1", "E2", "E3", "E4"):
+        for index in range(20):
+            teacher_outcome = (
+                "accepted_directly"
+                if index < 12
+                else "accepted_after_edit"
+                if index < 16
+                else "rejected"
+            )
+            records.append(
+                evaluation.EvaluationRecord.model_validate(
+                    {
+                        "record_id": f"{question_type.lower()}-record-{index}",
+                        "run_id": "run-v1",
+                        "curriculum_profile": "cn-2022",
+                        "grade": "G7",
+                        "subject": "mathematics" if question_type.startswith("M") else "english",
+                        "question_type": question_type,
+                        "model_id": "gpt-5.6-terra",
+                        "prompt_version": "generator-v3",
+                        "validator_version": "verification-v5",
+                        "difficulty_band": "standard",
+                        "seed": index,
+                        "parameters": {"temperature": 0},
+                        "content_fingerprint": f"{len(records):064x}",
+                        "schema_valid": True,
+                        "math_answer_correct": True if question_type.startswith("M") else None,
+                        "grade_aligned": True,
+                        "duplicate_exact": False,
+                        "similarity_high": False,
+                        "teacher_outcome": teacher_outcome,
+                        "teacher_edited": teacher_outcome == "accepted_after_edit",
+                        "rejection_category": "not_aligned"
+                        if teacher_outcome == "rejected"
+                        else None,
+                        "published": teacher_outcome != "rejected",
+                        "review_evidence": True,
+                        "cost_usd": 0.01,
+                        "duration_ms": 100,
+                    }
+                )
+            )
+    return records
 
 
 def _wrong_math_answer(
@@ -84,7 +89,8 @@ def _out_of_grade(
     records: list[evaluation.EvaluationRecord],
 ) -> list[evaluation.EvaluationRecord]:
     mutated = deepcopy(records)
-    mutated[0] = mutated[0].model_copy(update={"grade_aligned": False})
+    for index in range(3):
+        mutated[index] = mutated[index].model_copy(update={"grade_aligned": False})
     return mutated
 
 
@@ -92,7 +98,32 @@ def _duplicate_candidate(
     records: list[evaluation.EvaluationRecord],
 ) -> list[evaluation.EvaluationRecord]:
     mutated = deepcopy(records)
-    mutated[0] = mutated[0].model_copy(update={"duplicate_exact": True})
+    for index in range(4):
+        mutated[index] = mutated[index].model_copy(update={"duplicate_exact": True})
+    return mutated
+
+
+def _unapproved_model(
+    records: list[evaluation.EvaluationRecord],
+) -> list[evaluation.EvaluationRecord]:
+    mutated = deepcopy(records)
+    mutated[0] = mutated[0].model_copy(update={"model_id": "gpt-4o"})
+    return mutated
+
+
+def _unapproved_prompt(
+    records: list[evaluation.EvaluationRecord],
+) -> list[evaluation.EvaluationRecord]:
+    mutated = deepcopy(records)
+    mutated[0] = mutated[0].model_copy(update={"prompt_version": "generator-floating-v1"})
+    return mutated
+
+
+def _published_without_review(
+    records: list[evaluation.EvaluationRecord],
+) -> list[evaluation.EvaluationRecord]:
+    mutated = deepcopy(records)
+    mutated[0] = mutated[0].model_copy(update={"review_evidence": False})
     return mutated
 
 
@@ -101,8 +132,8 @@ def test_evaluate_records_passes_versioned_baseline_policy() -> None:
 
     assert report.promotion_eligible is True
     assert report.violations == []
-    assert report.rejection_reason_counts == {}
-    assert report.cost_per_final_accepted_question == pytest.approx(0.01)
+    assert report.rejection_reason_counts == {"not_aligned": 24}
+    assert report.cost_per_final_accepted_question == pytest.approx(0.0125)
     assert report.end_to_end_duration_ms == {"average": 100.0, "maximum": 100}
 
 
@@ -136,3 +167,45 @@ def test_evaluate_records_blocks_quality_regressions(mutate, code) -> None:
 
     assert report.promotion_eligible is False
     assert code in {violation.code for violation in report.violations}
+
+
+@pytest.mark.parametrize(
+    ("mutate", "code"),
+    [
+        (_unapproved_model, "evaluation_unapproved_model"),
+        (_unapproved_prompt, "evaluation_unapproved_prompt"),
+        (_published_without_review, "evaluation_published_without_teacher_review"),
+    ],
+)
+def test_evaluate_records_blocks_unapproved_versions_and_publication(mutate, code) -> None:
+    report = evaluation.evaluate_records(mutate(_passing_records()), _policy())
+
+    assert report.promotion_eligible is False
+    assert code in {violation.code for violation in report.violations}
+
+
+def test_evaluate_records_reports_versioned_strata_and_comparisons() -> None:
+    records = _passing_records()
+    records[0] = records[0].model_copy(
+        update={"model_id": "gpt-5.6-sol", "prompt_version": "generator-v4"}
+    )
+    policy = _policy().model_copy(
+        update={
+            "approved_model_ids": ["gpt-5.6-sol", "gpt-5.6-terra"],
+            "approved_prompt_versions": ["generator-v3", "generator-v4"],
+        }
+    )
+
+    report = evaluation.evaluate_records(records, policy)
+
+    assert len(report.version_summaries) == 2
+    assert set(report.strata[0].key) == {
+        "curriculum_profile",
+        "grade",
+        "subject",
+        "question_type",
+        "model_id",
+        "prompt_version",
+        "validator_version",
+        "difficulty_band",
+    }

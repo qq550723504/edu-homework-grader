@@ -66,11 +66,6 @@ class EvaluationRecord(BaseModel):
     cost_usd: float = Field(ge=0)
     duration_ms: int = Field(ge=0)
 
-    @field_validator("model_id")
-    @classmethod
-    def _require_immutable_model_id(cls, model_id: str) -> str:
-        return validate_immutable_openai_model_id(model_id)
-
     @field_validator("cost_usd")
     @classmethod
     def _require_finite_cost(cls, cost_usd: float) -> float:
@@ -95,6 +90,15 @@ class EvaluationViolation(BaseModel):
 
     code: str = Field(min_length=1, max_length=200)
     metric: str = Field(min_length=1, max_length=200)
+    key: dict[str, str] = Field(default_factory=dict)
+
+
+class EvaluationScopeSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: dict[str, str]
+    metrics: dict[str, EvaluationMetric]
+    metric_deltas: dict[str, float | None] = Field(default_factory=dict)
 
 
 class EvaluationReport(BaseModel):
@@ -107,6 +111,8 @@ class EvaluationReport(BaseModel):
     rejection_reason_counts: dict[str, int]
     cost_per_final_accepted_question: float | None
     end_to_end_duration_ms: dict[str, float | int]
+    strata: list[EvaluationScopeSummary] = Field(default_factory=list)
+    version_summaries: list[EvaluationScopeSummary] = Field(default_factory=list)
 
 
 def load_policy(path: Path) -> EvaluationPolicy:
@@ -139,71 +145,35 @@ def load_records(path: Path) -> list[EvaluationRecord]:
 def evaluate_records(
     records: Sequence[EvaluationRecord], policy: EvaluationPolicy
 ) -> EvaluationReport:
-    metric_definitions = (
+    metric_definitions = _metric_definitions(records, policy.thresholds)
+    metrics, violations = _evaluate_metric_definitions(metric_definitions)
+    violations.extend(_version_approval_violations(records, policy))
+    violations.extend(_duplicate_record_id_violations(records))
+
+    strata = _scope_summaries(
+        records,
+        policy.thresholds,
         (
-            "schema_pass_rate",
-            sum(record.schema_valid for record in records),
-            len(records),
-            policy.thresholds.schema_pass_rate_min,
-            "min",
-            "evaluation_schema_pass_rate_below_threshold",
-        ),
-        (
-            "math_answer_error_rate",
-            sum(record.math_answer_correct is False for record in records),
-            sum(record.math_answer_correct is not None for record in records),
-            policy.thresholds.math_answer_error_rate_max,
-            "max",
-            "evaluation_math_answer_error_rate_above_threshold",
-        ),
-        (
-            "grade_mismatch_rate",
-            sum(not record.grade_aligned for record in records),
-            len(records),
-            policy.thresholds.grade_mismatch_rate_max,
-            "max",
-            "evaluation_grade_mismatch_rate_above_threshold",
-        ),
-        (
-            "duplicate_or_similarity_rate",
-            sum(record.duplicate_exact or record.similarity_high for record in records),
-            len(records),
-            policy.thresholds.duplicate_or_similarity_rate_max,
-            "max",
-            "evaluation_similarity_rate_above_threshold",
-        ),
-        (
-            "teacher_direct_accept_rate",
-            sum(record.teacher_outcome == "accepted_directly" for record in records),
-            sum(record.teacher_outcome != "pending_review" for record in records),
-            policy.thresholds.teacher_direct_accept_rate_min,
-            "min",
-            "evaluation_teacher_direct_accept_rate_below_threshold",
-        ),
-        (
-            "teacher_modified_accept_rate",
-            sum(record.teacher_outcome == "accepted_after_edit" for record in records),
-            sum(record.teacher_edited for record in records),
-            policy.thresholds.teacher_modified_accept_rate_min,
-            "min",
-            "evaluation_teacher_modified_accept_rate_below_threshold",
-        ),
-        (
-            "published_without_teacher_review",
-            sum(record.published and not record.review_evidence for record in records),
-            len(records),
-            policy.thresholds.published_without_teacher_review_max,
-            "max",
-            "evaluation_published_without_teacher_review",
+            "curriculum_profile",
+            "grade",
+            "subject",
+            "question_type",
+            "model_id",
+            "prompt_version",
+            "validator_version",
+            "difficulty_band",
         ),
     )
-    metrics: dict[str, EvaluationMetric] = {}
-    violations: list[EvaluationViolation] = []
-    for name, numerator, denominator, threshold, comparator, code in metric_definitions:
-        metric = _evaluate_metric(numerator, denominator, threshold, comparator)
-        metrics[name] = metric
-        if metric.state == "fail":
-            violations.append(EvaluationViolation(code=code, metric=name))
+    version_summaries = _scope_summaries(
+        records,
+        policy.thresholds,
+        ("model_id", "prompt_version", "validator_version"),
+    )
+    for summary in [*strata, *version_summaries]:
+        _, summary_violations = _evaluate_metric_definitions(summary.metrics.items())
+        for violation in summary_violations:
+            violations.append(violation.model_copy(update={"key": summary.key}))
+    _add_version_metric_deltas(version_summaries)
 
     final_accepts = [
         record
@@ -231,7 +201,187 @@ def evaluate_records(
             "average": sum(durations) / len(durations) if durations else 0.0,
             "maximum": max(durations, default=0),
         },
+        strata=strata,
+        version_summaries=version_summaries,
     )
+
+
+def _metric_definitions(
+    records: Sequence[EvaluationRecord], thresholds: EvaluationThresholds
+) -> tuple[tuple[str, int, int, float | int, MetricComparator, str], ...]:
+    return (
+        (
+            "schema_pass_rate",
+            sum(record.schema_valid for record in records),
+            len(records),
+            thresholds.schema_pass_rate_min,
+            "min",
+            "evaluation_schema_pass_rate_below_threshold",
+        ),
+        (
+            "math_answer_error_rate",
+            sum(record.math_answer_correct is False for record in records),
+            sum(record.math_answer_correct is not None for record in records),
+            thresholds.math_answer_error_rate_max,
+            "max",
+            "evaluation_math_answer_error_rate_above_threshold",
+        ),
+        (
+            "grade_mismatch_rate",
+            sum(not record.grade_aligned for record in records),
+            len(records),
+            thresholds.grade_mismatch_rate_max,
+            "max",
+            "evaluation_grade_mismatch_rate_above_threshold",
+        ),
+        (
+            "duplicate_or_similarity_rate",
+            sum(record.duplicate_exact or record.similarity_high for record in records),
+            len(records),
+            thresholds.duplicate_or_similarity_rate_max,
+            "max",
+            "evaluation_similarity_rate_above_threshold",
+        ),
+        (
+            "teacher_direct_accept_rate",
+            sum(record.teacher_outcome == "accepted_directly" for record in records),
+            sum(record.teacher_outcome != "pending_review" for record in records),
+            thresholds.teacher_direct_accept_rate_min,
+            "min",
+            "evaluation_teacher_direct_accept_rate_below_threshold",
+        ),
+        (
+            "teacher_modified_accept_rate",
+            sum(record.teacher_outcome == "accepted_after_edit" for record in records),
+            sum(record.teacher_edited for record in records),
+            thresholds.teacher_modified_accept_rate_min,
+            "min",
+            "evaluation_teacher_modified_accept_rate_below_threshold",
+        ),
+        (
+            "published_without_teacher_review",
+            sum(record.published and not record.review_evidence for record in records),
+            len(records),
+            thresholds.published_without_teacher_review_max,
+            "max",
+            "evaluation_published_without_teacher_review",
+        ),
+    )
+
+
+def _evaluate_metric_definitions(
+    definitions: Sequence[
+        tuple[str, int, int, float | int, MetricComparator, str] | tuple[str, EvaluationMetric]
+    ],
+) -> tuple[dict[str, EvaluationMetric], list[EvaluationViolation]]:
+    metrics: dict[str, EvaluationMetric] = {}
+    violations: list[EvaluationViolation] = []
+    for definition in definitions:
+        if len(definition) == 2:
+            name, metric = definition
+            code = _violation_code_for_metric(name)
+        else:
+            name, numerator, denominator, threshold, comparator, code = definition
+            metric = _evaluate_metric(numerator, denominator, threshold, comparator)
+        metrics[name] = metric
+        if metric.state == "fail":
+            violations.append(EvaluationViolation(code=code, metric=name))
+    return metrics, violations
+
+
+def _violation_code_for_metric(metric: str) -> str:
+    return {
+        "schema_pass_rate": "evaluation_schema_pass_rate_below_threshold",
+        "math_answer_error_rate": "evaluation_math_answer_error_rate_above_threshold",
+        "grade_mismatch_rate": "evaluation_grade_mismatch_rate_above_threshold",
+        "duplicate_or_similarity_rate": "evaluation_similarity_rate_above_threshold",
+        "teacher_direct_accept_rate": "evaluation_teacher_direct_accept_rate_below_threshold",
+        "teacher_modified_accept_rate": "evaluation_teacher_modified_accept_rate_below_threshold",
+        "published_without_teacher_review": "evaluation_published_without_teacher_review",
+    }[metric]
+
+
+def _version_approval_violations(
+    records: Sequence[EvaluationRecord], policy: EvaluationPolicy
+) -> list[EvaluationViolation]:
+    violations: list[EvaluationViolation] = []
+    for record in records:
+        try:
+            validate_immutable_openai_model_id(record.model_id)
+        except ValueError:
+            violations.append(
+                EvaluationViolation(
+                    code="evaluation_unapproved_model",
+                    metric="model_approval",
+                    key={"model_id": record.model_id},
+                )
+            )
+            continue
+        if record.model_id not in policy.approved_model_ids:
+            violations.append(
+                EvaluationViolation(
+                    code="evaluation_unapproved_model",
+                    metric="model_approval",
+                    key={"model_id": record.model_id},
+                )
+            )
+        if record.prompt_version not in policy.approved_prompt_versions:
+            violations.append(
+                EvaluationViolation(
+                    code="evaluation_unapproved_prompt",
+                    metric="prompt_approval",
+                    key={"prompt_version": record.prompt_version},
+                )
+            )
+    return violations
+
+
+def _duplicate_record_id_violations(
+    records: Sequence[EvaluationRecord],
+) -> list[EvaluationViolation]:
+    record_ids = Counter(record.record_id for record in records)
+    return [
+        EvaluationViolation(
+            code="evaluation_duplicate_record_id",
+            metric="record_identity",
+            key={"record_id": record_id},
+        )
+        for record_id, count in sorted(record_ids.items())
+        if count > 1
+    ]
+
+
+def _scope_summaries(
+    records: Sequence[EvaluationRecord],
+    thresholds: EvaluationThresholds,
+    fields: tuple[str, ...],
+) -> list[EvaluationScopeSummary]:
+    grouped: dict[tuple[str, ...], list[EvaluationRecord]] = {}
+    for record in records:
+        values = tuple(str(getattr(record, field)) for field in fields)
+        grouped.setdefault(values, []).append(record)
+    return [
+        EvaluationScopeSummary(
+            key=dict(zip(fields, values, strict=True)),
+            metrics=_evaluate_metric_definitions(_metric_definitions(group, thresholds))[0],
+        )
+        for values, group in sorted(grouped.items())
+    ]
+
+
+def _add_version_metric_deltas(summaries: list[EvaluationScopeSummary]) -> None:
+    if not summaries:
+        return
+    baseline = summaries[0].metrics
+    for summary in summaries:
+        summary.metric_deltas = {
+            name: (
+                None
+                if metric.rate is None or baseline[name].rate is None
+                else metric.rate - baseline[name].rate
+            )
+            for name, metric in summary.metrics.items()
+        }
 
 
 def _evaluate_metric(
