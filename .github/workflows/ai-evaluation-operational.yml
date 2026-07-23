@@ -1,0 +1,73 @@
+name: Operational AI evaluation
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Branch, tag, or commit SHA containing the exporter to run
+        required: true
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: operational-ai-evaluation-${{ inputs.target_ref }}
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    name: production facts and explicit version comparison
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ai-evaluation-operational
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      OPERATIONAL_EVALUATION_SPEC_JSON: ${{ secrets.OPERATIONAL_EVALUATION_SPEC_JSON || vars.OPERATIONAL_EVALUATION_SPEC_JSON }}
+    steps:
+      - name: Check out exact target
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Validate protected configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${DATABASE_URL:-}" ]]; then
+            echo "DATABASE_URL is not configured in ai-evaluation-operational." >&2
+            exit 1
+          fi
+          if [[ -z "${OPERATIONAL_EVALUATION_SPEC_JSON:-}" ]]; then
+            echo "OPERATIONAL_EVALUATION_SPEC_JSON is not configured." >&2
+            exit 1
+          fi
+          mkdir -p artifacts/ai-evaluation-operational
+          printf '%s' "$OPERATIONAL_EVALUATION_SPEC_JSON" \
+            > "$RUNNER_TEMP/operational-evaluation-spec.json"
+
+      - name: Install Python packages
+        run: make install-python
+
+      - name: Export facts and compare explicit versions
+        run: |
+          python -m edu_grader_api.services.ai_evaluation_operational \
+            "$RUNNER_TEMP/operational-evaluation-spec.json" \
+            artifacts/ai-evaluation-operational/report
+
+      - name: Upload operational evaluation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-ai-evaluation-${{ github.run_id }}
+          path: artifacts/ai-evaluation-operational/report
+          if-no-files-found: warn
+          retention-days: 30
