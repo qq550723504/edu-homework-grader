@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 
 QuestionType = Literal["M1", "M2", "E1", "E2", "E3", "E4"]
+DifficultyBand = Literal["foundation", "standard", "stretch"]
 
 
 class ProviderFailure(RuntimeError):
@@ -20,6 +21,14 @@ class ProviderFailure(RuntimeError):
         super().__init__(message)
         self.code = code
         self.retryable = retryable
+
+
+class GenerationPlanItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question_type: QuestionType
+    difficulty_band: DifficultyBand
+    target_difficulty: float = Field(ge=0, le=1)
 
 
 class GenerationRequest(BaseModel):
@@ -34,11 +43,17 @@ class GenerationRequest(BaseModel):
     difficulty_max: float = Field(ge=0, le=1)
     grade: str = Field(min_length=1, max_length=100)
     subject: str = Field(min_length=1, max_length=100)
-    question_types: list[QuestionType] = Field(min_length=1, max_length=20)
+    items: list[GenerationPlanItem] = Field(min_length=1, max_length=20)
     requested_count: int = Field(ge=1, le=20)
     policy_version: str = Field(min_length=1, max_length=100)
     prompt_version: str = Field(min_length=1, max_length=100)
     teacher_constraint: str | None = Field(default=None, max_length=1_000)
+
+    @model_validator(mode="after")
+    def _validate_item_count(self) -> "GenerationRequest":
+        if len(self.items) != self.requested_count:
+            raise ValueError("generation plan item count must equal requested_count")
+        return self
 
     def model_post_init(self, __context: object) -> None:
         try:

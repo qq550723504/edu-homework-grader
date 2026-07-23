@@ -7,7 +7,12 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 import edu_generator.prompt_templates as prompt_templates
-from edu_generator.contracts import GeneratedCandidateEnvelope, GenerationRequest, ProviderFailure
+from edu_generator.contracts import (
+    GeneratedCandidateEnvelope,
+    GenerationPlanItem,
+    GenerationRequest,
+    ProviderFailure,
+)
 from edu_generator.prompt_templates import PromptTemplate, resolve_prompt_template
 from edu_generator.providers import FakeGenerationProvider
 from edu_grader_api.models import (
@@ -209,7 +214,14 @@ def test_fake_provider_candidates_match_current_platform_policy_versions() -> No
         difficulty_max=1,
         grade="Grade 5",
         subject="mathematics",
-        question_types=["M1", "M2", "E1", "E4"],
+        items=[
+            GenerationPlanItem(
+                question_type=question_type,
+                difficulty_band="standard",
+                target_difficulty=0.5,
+            )
+            for question_type in ["M1", "M2", "E1", "E4"]
+        ],
         requested_count=4,
         policy_version="2026.07",
         prompt_version="generator-v1",
@@ -221,6 +233,55 @@ def test_fake_provider_candidates_match_current_platform_policy_versions() -> No
         not validate_policy(candidate.question_type, candidate.policy_version, candidate.rule_json)
         for candidate in result.candidates
     )
+
+
+def test_fake_provider_preserves_ordered_generation_plan() -> None:
+    request = GenerationRequest(
+        objective_revision_id=uuid4(),
+        objective_text="Add within 100.",
+        difficulty_min=0,
+        difficulty_max=1,
+        grade="G7",
+        subject="mathematics",
+        items=[
+            GenerationPlanItem(
+                question_type="M1", difficulty_band="foundation", target_difficulty=0.2
+            ),
+            GenerationPlanItem(
+                question_type="M2", difficulty_band="stretch", target_difficulty=0.8
+            ),
+        ],
+        requested_count=2,
+        policy_version="2026.07",
+        prompt_version="generator-v1",
+    )
+
+    result = FakeGenerationProvider(seed=7).generate(request)
+
+    assert [item.question_type for item in result.candidates] == ["M1", "M2"]
+    assert [item.difficulty for item in result.candidates] == [0.2, 0.8]
+
+
+def test_generation_request_requires_an_item_for_every_requested_candidate() -> None:
+    with pytest.raises(ValidationError, match="generation plan item count"):
+        GenerationRequest(
+            objective_revision_id=uuid4(),
+            objective_text="Add within 100.",
+            difficulty_min=0,
+            difficulty_max=1,
+            grade="G7",
+            subject="mathematics",
+            items=[
+                GenerationPlanItem(
+                    question_type="M1",
+                    difficulty_band="foundation",
+                    target_difficulty=0.2,
+                )
+            ],
+            requested_count=2,
+            policy_version="2026.07",
+            prompt_version="generator-v1",
+        )
 
 
 def test_e4_material_is_persisted_and_part_of_candidate_hash(session: Session) -> None:
@@ -410,6 +471,12 @@ def test_provider_receives_active_objective_context_and_requested_count(session:
     assert provider.request.objective_text == revision.text
     assert provider.request.difficulty_min == revision.difficulty_min
     assert provider.request.difficulty_max == revision.difficulty_max
+    assert [item.question_type for item in provider.request.items] == ["M1", "M1"]
+    assert [item.difficulty_band for item in provider.request.items] == [
+        "standard",
+        "standard",
+    ]
+    assert [item.target_difficulty for item in provider.request.items] == [0.5, 0.5]
     assert provider.request.requested_count == job.requested_count
 
 

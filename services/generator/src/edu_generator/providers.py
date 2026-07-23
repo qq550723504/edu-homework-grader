@@ -27,7 +27,8 @@ class FakeGenerationProvider:
 
     def generate(self, request: GenerationRequest) -> GeneratedCandidateEnvelope:
         candidates = []
-        for ordinal, question_type in enumerate(request.question_types, start=1):
+        for ordinal, item in enumerate(request.items, start=1):
+            question_type = item.question_type
             stable_value = self._stable_value(request, ordinal)
             candidates.append(
                 {
@@ -38,7 +39,7 @@ class FakeGenerationProvider:
                     "rule_json": _rule_for(question_type, stable_value),
                     "explanation": f"Generated for {request.grade} using objective practice.",
                     "knowledge_point": f"{request.subject} objective practice",
-                    "difficulty": round(((stable_value % 7) + 1) / 10, 1),
+                    "difficulty": item.target_difficulty,
                     "reading_material": (
                         "The student gave a complete response about the practice item."
                         if question_type == "E4"

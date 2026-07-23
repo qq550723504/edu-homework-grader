@@ -7,7 +7,12 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from edu_generator.contracts import GeneratedCandidate, GenerationRequest, ProviderFailure
+from edu_generator.contracts import (
+    GeneratedCandidate,
+    GenerationPlanItem,
+    GenerationRequest,
+    ProviderFailure,
+)
 from edu_generator.prompt_templates import PromptTemplate, resolve_prompt_template
 from edu_generator.providers import GenerationProvider
 from edu_grader_processor_policy import (
@@ -178,7 +183,9 @@ def run_generation_job(
 
     request = _provider_request(session, job, teacher_constraint=teacher_constraint)
     try:
-        template = resolve_prompt_template(request.prompt_version, request.question_types)
+        template = resolve_prompt_template(
+            request.prompt_version, [item.question_type for item in request.items]
+        )
     except ValueError:
         job.status = GenerationJobStatus.FAILED
         job.failure_code = "prompt_template_unavailable"
@@ -277,6 +284,15 @@ def _provider_request(
     revision = session.get(CurriculumObjectiveRevision, job.curriculum_objective_revision_id)
     if revision is None:
         raise GenerationServiceError("generation job objective revision was not found")
+    target_difficulty = (revision.difficulty_min + revision.difficulty_max) / 2
+    items = [
+        GenerationPlanItem(
+            question_type=question_type,
+            difficulty_band="standard",
+            target_difficulty=target_difficulty,
+        )
+        for question_type in question_types
+    ]
     return GenerationRequest(
         objective_revision_id=job.curriculum_objective_revision_id,
         objective_text=revision.text,
@@ -285,7 +301,7 @@ def _provider_request(
         difficulty_max=revision.difficulty_max,
         grade=job.grade or "unspecified",
         subject=job.subject or "unspecified",
-        question_types=question_types,
+        items=items,
         requested_count=job.requested_count,
         policy_version=job.policy_version or "unknown",
         prompt_version=job.prompt_version or "unknown",
@@ -348,7 +364,7 @@ def _request_summary(
         "objective_revision_id": str(request.objective_revision_id),
         "grade": request.grade,
         "subject": request.subject,
-        "question_types": request.question_types,
+        "question_types": [item.question_type for item in request.items],
         "policy_version": request.policy_version,
         "prompt_version": request.prompt_version,
         "prompt_template": {

@@ -61,7 +61,7 @@ class OpenAIResponsesProvider:
     def generate(self, request: GenerationRequest) -> GeneratedCandidateEnvelope:
         try:
             template = resolve_prompt_template(
-                request.prompt_version, request.question_types
+                request.prompt_version, [item.question_type for item in request.items]
             )
         except ValueError as exc:
             raise ProviderFailure(
