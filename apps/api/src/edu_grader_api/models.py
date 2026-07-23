@@ -138,6 +138,21 @@ class GenerationJobStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class GenerationControlState(StrEnum):
+    ACTIVE = "active"
+    CANARY = "canary"
+    PAUSED = "paused"
+    RETIRED = "retired"
+
+
+class GenerationGovernanceTargetType(StrEnum):
+    GENERATOR = "generator"
+    CURRICULUM_PROFILE = "curriculum_profile"
+    PROMPT_VERSION = "prompt_version"
+    PROVIDER = "provider"
+    MODEL = "model"
+
+
 class ValidationRunStatus(StrEnum):
     PASSED = "passed"
     WARNING = "warning"
@@ -667,6 +682,50 @@ class GenerationQuotaReservation(Base):
     idempotency_key: Mapped[str] = mapped_column(String(128), primary_key=True)
     quota_day: Mapped[date] = mapped_column(Date, nullable=False)
     requested_count: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class GenerationGovernanceEntry(Base):
+    __tablename__ = "generation_governance_entries"
+    __table_args__ = (
+        CheckConstraint(
+            "is_global OR tenant_id IS NOT NULL",
+            name="ck_generation_governance_requires_tenant_for_tenant_scope",
+        ),
+        Index(
+            "ix_generation_governance_scope", "tenant_id", "is_global", "target_type", "target_key"
+        ),
+        Index("ix_generation_governance_global_scope", "is_global", "target_type", "target_key"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID | None] = mapped_column(ForeignKey("tenants.id"))
+    is_global: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    target_type: Mapped[GenerationGovernanceTargetType] = mapped_column(
+        Enum(
+            GenerationGovernanceTargetType,
+            native_enum=False,
+            values_callable=role_values,
+        ),
+        nullable=False,
+    )
+    target_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    control_state: Mapped[GenerationControlState] = mapped_column(
+        Enum(
+            GenerationControlState,
+            native_enum=False,
+            values_callable=role_values,
+        ),
+        nullable=False,
+    )
+    note: Mapped[str | None] = mapped_column(String(1_000))
+    created_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+    tenant: Mapped[Tenant | None] = relationship()
+    created_by_user: Mapped[User | None] = relationship()
 
 
 class GenerationAttempt(Base):
