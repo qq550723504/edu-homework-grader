@@ -1,0 +1,132 @@
+name: PR 101 one-shot document patcher
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update authoritative README and roadmap sections
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+              return text.replace(old, new, 1)
+
+          readme_path = Path("README.md")
+          readme = readme_path.read_text(encoding="utf-8")
+          readme = replace_once(
+              readme,
+              "> 当前仓库已具备第一阶段浏览器垂直切片，但尚未生产就绪。能力边界、已知限制和试点条件见 [项目状态](docs/project-status.md)。",
+              "> 当前仓库已具备英语/数学作业闭环和教师 AI 候选题影子模式基础，但尚未完成发布环境统一全栈验收或生产上线。能力边界见 [项目状态](docs/project-status.md)，机器可读证据见 [状态证据](docs/status-evidence.json)。",
+              "README status banner",
+          )
+
+          ai_start = readme.index("### 受控 AI 出题候选")
+          ai_end = readme.index("### 不使用 Docker", ai_start)
+          ai_section = """### 受控 AI 出题候选
+
+`POST /v1/ai-question-generation/jobs` 会基于精确的课程目标 revision、题型、数量和难度计划生成**待教师审核**候选题。请求必须带 `Idempotency-Key`；任务、attempt、候选 revision、验证运行和审核决定均可追溯。
+
+教师工作台支持查看 `passed` / `warning` / `blocked` 证据、编辑后重新验证、拒绝、单题重新生成和原子批量接受。`blocked` 不可接受，`warning` 必须明确确认；接受后只创建 `QuestionVersion` 草稿，仍须通过原有题目测试和发布门禁。AI 没有直接发布旁路。
+
+本地默认 `GENERATION_PROVIDER=fake`，不会访问外部模型。受控环境使用固定、已批准的 Provider/模型 ID 和 `generator-v3` Prompt；全局/租户治理支持 `active`、`canary`、`paused` 和 `retired`，全局暂停或退役不可由租户覆盖。真实 M1、M2、E1、E4 Provider 验收只在 `ai-provider-acceptance` 受保护 Environment 中运行。
+
+离线质量门禁使用 `make ai-evaluation`。生产形态的只读事实导出与显式 baseline/candidate 比较使用 `make ai-evaluation-operational SPEC=...`，运行要求和隐私边界见 [生产事实评估运行手册](docs/operations/ai-evaluation-operational.md)。
+
+"""
+          readme = readme[:ai_start] + ai_section + readme[ai_end:]
+
+          old_ci = """CI 使用与本地相同的质量门禁：`make lint && make test`、`make web-install && make web-test &&
+make web-build`，以及 `make web-e2e`。迁移回滚验证需要一个 PostgreSQL 实例，并可运行：
+"""
+          new_ci = """CI 使用与本地相同的质量门禁：`make lint`、`make test`、`make verification-regression`、`make docs-check`、`make web-install && make web-test && make web-build`，以及 `make web-e2e`。迁移回滚验证需要一个 PostgreSQL 实例，并可运行：
+"""
+          readme = replace_once(readme, old_ci, new_ci, "README CI commands")
+
+          policy_start = readme.index("教师使用 `POST /v1/questions` 创建租户内题目和第一个草稿版本。")
+          policy_end = readme.index("发布前，为草稿添加", policy_start)
+          policy_copy = """教师使用 `POST /v1/questions` 创建租户内题目和第一个草稿版本。新建题目的默认策略为 `M1@1`、`M2@2`、`E1@2`、`E2@1`、`E3@1` 和 `E4@2`；E4@1 只保留历史兼容，不能用于新题。API 会在保存前返回带 JSON Pointer 的 422 校验错误。
+
+"""
+          readme = readme[:policy_start] + policy_copy + readme[policy_end:]
+          readme_path.write_text(readme, encoding="utf-8")
+
+          roadmap_path = Path("docs/roadmap.md")
+          roadmap = roadmap_path.read_text(encoding="utf-8")
+          status_section = """### 当前实施状态（2026-07-24）
+
+- [x] #37、#38：课程目录、导入、审核、激活、来源和 prerequisite 图基础；
+- [x] #39：结构化 Generator、真实 Provider、配额和幂等；
+- [x] #40、#41：候选验证主体与教师 AI 出题工作台；
+- [x] PR #84：六题型确定性回归、答案/解析一致性和离线 fail-closed 评估门禁；
+- [x] PR #85–#89：全局/租户治理、Canary、Kill Switch、权限和生成流水线强制检查；
+- [x] PR #100：生产形态事实导出、固定水位和显式 baseline/candidate 分层比较；
+- [ ] #83：课程复杂度/先修图和数学多解、定义域等语义边界；
+- [ ] #99：首次真实只读数据库报告、成本/usage 完整性和发布后修正映射；
+- [ ] #42：教师黄金集、最终 blocking thresholds、线上反馈和 shadow/canary 证据；
+- [ ] #43：默认版本晋级/回滚、预算、Provider 合规、版权下架和事故响应；
+- [ ] #31：真实 OIDC、PostgreSQL、Provider、Grader 与教师浏览器统一发布环境验收。
+
+机器证据和最新 CI 见 [项目状态](project-status.md) 与 [status-evidence.json](status-evidence.json)。
+
+"""
+          roadmap = replace_once(
+              roadmap,
+              "### 首期范围\n",
+              status_section + "### 首期范围\n",
+              "roadmap current status",
+          )
+          old_dependencies = """#37 → #38 → #39 → #40 → #41 → #42
+                 └────────────→ #43
+
+#29、#30 ───────────────→ #41 / #36 验收
+#31 ────────────────────→ 真实全栈验收
+#44 ────────────────────→ G1–G12 MVP 后实施
+"""
+          new_dependencies = """#37 → #38 → #39 → #40 → #41
+                         ├→ #83 课程/数学语义边界 ─┐
+                         ├→ #99 生产评估事实 ──────┼→ #42 教师阈值与线上证据 ─┐
+                         └→ #43 运营治理 ──────────┘                          ├→ #31 真实全栈验收
+#29、#30 ────────────────────────────────────────────────────────────────────┘
+#44 ─────────────────────────────→ G1–G12 MVP 后实施
+"""
+          roadmap = replace_once(
+              roadmap, old_dependencies, new_dependencies, "roadmap dependencies"
+          )
+          roadmap_path.write_text(roadmap, encoding="utf-8")
+          PY
+
+      - name: Validate patched documentation
+        run: python scripts/check_docs_status.py
+
+      - name: Commit patched documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- README.md docs/roadmap.md; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md docs/roadmap.md
+          git commit -m "docs: synchronize README and roadmap status"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
