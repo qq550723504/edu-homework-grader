@@ -38,6 +38,11 @@ from ..models import (
     User,
     utc_now,
 )
+from ..services.generation_governance import (
+    GenerationGovernanceError,
+    assert_generation_configured_components_allowed,
+    assert_generation_pipeline_allowed,
+)
 from ..policies import validate_policy
 
 
@@ -102,6 +107,7 @@ class GenerationJobSnapshot:
     subject: str
     policy_catalog_version: str
     prompt_version: str
+    curriculum_profile_id: UUID
 
     @classmethod
     def from_job(cls, job: GenerationJob) -> GenerationJobSnapshot:
@@ -110,6 +116,7 @@ class GenerationJobSnapshot:
             subject=job.subject or "unspecified",
             policy_catalog_version=job.policy_version or "unknown",
             prompt_version=job.prompt_version or "unknown",
+            curriculum_profile_id=job.curriculum_profile_id,
         )
 
 
@@ -152,6 +159,15 @@ def create_or_get_job(
         raise GenerationServiceError("generation_distribution_invalid")
     active_snapshot = snapshot or _snapshot_from_active_revision(revision)
     try:
+        assert_generation_configured_components_allowed(
+            session,
+            tenant_id=actor.tenant_id,
+            curriculum_profile_id=str(active_snapshot.curriculum_profile_id),
+            prompt_version=active_snapshot.prompt_version,
+        )
+    except GenerationGovernanceError as exc:
+        raise GenerationServiceError(str(exc)) from exc
+    try:
         resolve_prompt_template(active_snapshot.prompt_version, question_types)
     except ValueError as exc:
         raise GenerationServiceError("prompt template is not available for this request") from exc
@@ -187,6 +203,7 @@ def _snapshot_from_active_revision(revision: CurriculumObjectiveRevision) -> Gen
         subject=revision.objective.subject,
         policy_catalog_version=GENERATION_POLICY_CATALOG_VERSION,
         prompt_version=GENERATION_PROMPT_VERSION,
+        curriculum_profile_id=revision.objective.profile_id,
     )
 
 
@@ -208,6 +225,25 @@ def run_generation_job(
         session.flush()
         return job
     if job.status in {GenerationJobStatus.READY_FOR_REVIEW, GenerationJobStatus.PARTIALLY_FAILED}:
+        return job
+
+    try:
+        assert_generation_pipeline_allowed(
+            session,
+            tenant_id=job.tenant_id,
+            curriculum_profile_id=str(job.curriculum_profile_id)
+            if job.curriculum_profile_id
+            else None,
+            prompt_version=job.prompt_version or "unknown",
+            provider_name=str(getattr(provider, "provider_name", "unknown")),
+            model_version=str(getattr(provider, "model_version", "unknown")),
+        )
+    except GenerationGovernanceError as exc:
+        job.status = GenerationJobStatus.FAILED
+        job.failure_code = exc.failure_code
+        job.failed_count = max(job.requested_count - job.succeeded_count, 0)
+        job.finished_at = utc_now()
+        session.flush()
         return job
 
     request = _provider_request(session, job, teacher_constraint=teacher_constraint)
