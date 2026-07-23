@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
+import json
 import math
 import re
 from typing import Callable, Literal, Protocol
@@ -47,6 +48,9 @@ _DUPLICATE_REMEDIATION = "Revise the prompt to make the candidate meaningfully d
 _WHITESPACE = re.compile(r"\s+")
 _E2_TERMINAL_PUNCTUATION = re.compile(r"[.!?。！？]+$")
 _M1_PROBE_TEXT_LIMIT = 100
+# Mirrors the Grader's public safe-AST contract without importing its service package.
+_M2_SAFE_AST_MAX_DEPTH = 20
+_M2_SAFE_AST_MAX_NODES = 100
 _LEXICAL_UNITS = re.compile(
     r"[A-Za-z0-9\u00c0-\u024f\u1e00-\u1eff\u2c60-\u2c7f\ua720-\ua7ff\uab30-\uab6f]+(?:'[A-Za-z0-9\u00c0-\u024f\u1e00-\u1eff\u2c60-\u2c7f\ua720-\ua7ff\uab30-\uab6f]+)*|[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002ebef\U00030000-\U000323af]"
 )
@@ -311,7 +315,14 @@ def _evaluate_candidate(
     m2_findings: list[VerificationFinding] = []
     normalized_m2_ast: dict[str, object] | None = None
     if question_type == "M2" and isinstance(rule_json, dict) and not policy_errors:
-        m2_findings, normalized_m2_ast = _m2_findings(rule_json, policy_version, grader_client)
+        m2_findings, normalized_m2_ast = _m2_findings(
+            rule_json,
+            policy_version,
+            explanation,
+            candidate.get("verification_assertions"),
+            job.prompt_version == "generator-v3",
+            grader_client,
+        )
 
     if isinstance(prompt, str):
         findings.extend(
@@ -351,7 +362,16 @@ def _evaluate_candidate(
             )
 
     if question_type == "M1" and isinstance(rule_json, dict) and not policy_errors:
-        findings.extend(_m1_findings(rule_json, policy_version, grader_client))
+        findings.extend(
+            _m1_findings(
+                rule_json,
+                policy_version,
+                explanation,
+                candidate.get("verification_assertions"),
+                job.prompt_version == "generator-v3",
+                grader_client,
+            )
+        )
     findings.extend(m2_findings)
     if question_type == "E2" and isinstance(rule_json, dict) and not policy_errors:
         findings.extend(_e2_findings(rule_json, policy_version, grader_client))
@@ -383,6 +403,9 @@ def _evaluate_candidate(
 def _m1_findings(
     rule_json: dict[str, object],
     policy_version: object,
+    explanation: object,
+    assertions: object,
+    assertions_required: bool,
     grader_client: VerificationGraderClient,
 ) -> list[VerificationFinding]:
     if policy_version != "1":
@@ -400,6 +423,10 @@ def _m1_findings(
                 "Provide a finite numeric expected answer and a non-negative tolerance.",
             )
         ]
+    if assertions_required or assertions is not None:
+        consistency_findings = _m1_consistency_findings(rule_json, explanation, assertions)
+        if consistency_findings:
+            return consistency_findings
     try:
         probes = _m1_probes(expected, tolerance)
     except (InvalidOperation, ValueError):
@@ -440,6 +467,27 @@ def _m1_findings(
             first_failure = probe.name
     if first_failure is not None:
         return [_blocked("m1_grader_probe_failed", {"probe": first_failure}, remediation)]
+    return []
+
+
+def _m1_consistency_findings(
+    rule_json: dict[str, object], explanation: object, assertions: object
+) -> list[VerificationFinding]:
+    assertion_values = _assertion_values(assertions, question_type="M1")
+    if isinstance(assertion_values, VerificationFinding):
+        return [assertion_values]
+    final_answer_text, _final_answer_mathjson, declared_max_score = assertion_values
+    try:
+        assertion_answer = Decimal(final_answer_text)
+        expected_answer = Decimal(str(rule_json["expected"]))
+    except (InvalidOperation, KeyError, ValueError):
+        return [_unsupported_consistency_finding("M1", "final_answer_text")]
+    if not assertion_answer.is_finite() or assertion_answer != expected_answer:
+        return [_answer_explanation_inconsistent_finding("M1", "final_answer_text")]
+    if not _has_explanation_suffix(explanation, final_answer_text):
+        return [_answer_explanation_inconsistent_finding("M1", "explanation_suffix")]
+    if not math.isclose(declared_max_score, 1, rel_tol=0, abs_tol=1e-9):
+        return [_score_total_inconsistent_finding("M1")]
     return []
 
 
@@ -766,8 +814,15 @@ def _m2_complexity_metrics(ast: dict[str, object]) -> tuple[Decimal | None, int]
         "symbol": (),
     }
 
-    def visit(node: object) -> None:
-        nonlocal maximum_numeric_value, operation_nodes
+    stack: list[tuple[object, int]] = [(ast, 0)]
+    safe_ast_nodes = 0
+    while stack:
+        node, depth = stack.pop()
+        if depth > _M2_SAFE_AST_MAX_DEPTH:
+            raise ValueError("safe MathJSON AST depth exceeds the supported limit")
+        safe_ast_nodes += 1
+        if safe_ast_nodes > _M2_SAFE_AST_MAX_NODES:
+            raise ValueError("safe MathJSON AST node count exceeds the supported limit")
         if not isinstance(node, dict):
             raise ValueError("safe MathJSON node must be an object")
         node_type = node.get("type")
@@ -795,12 +850,9 @@ def _m2_complexity_metrics(ast: dict[str, object]) -> tuple[Decimal | None, int]
             if child_key == "args":
                 if not isinstance(child, list) or len(child) < 2:
                     raise ValueError("safe MathJSON operation arguments are invalid")
-                for argument in child:
-                    visit(argument)
+                stack.extend((argument, depth + 1) for argument in reversed(child))
             else:
-                visit(child)
-
-    visit(ast)
+                stack.append((child, depth + 1))
     return (
         None if maximum_numeric_value is None else maximum_numeric_value,
         operation_nodes,
@@ -829,6 +881,9 @@ def _safe_ast_number_value(value: object) -> Decimal:
 def _m2_findings(
     rule_json: dict[str, object],
     policy_version: object,
+    explanation: object,
+    assertions: object,
+    assertions_required: bool,
     grader_client: VerificationGraderClient,
 ) -> tuple[list[VerificationFinding], dict[str, object] | None]:
     if policy_version != "2":
@@ -851,6 +906,16 @@ def _m2_findings(
             ],
             None,
         )
+    if assertions_required or assertions is not None:
+        consistency_findings = _m2_consistency_findings(
+            rule_json,
+            explanation,
+            assertions,
+            normalized_m2_ast,
+            grader_client,
+        )
+        if consistency_findings:
+            return consistency_findings, normalized_m2_ast
     max_score = float(rule_json.get("max_score", 1))
     first_failure: str | None = None
     for probe in _m2_probes(expected):
@@ -895,6 +960,89 @@ def _m2_findings(
             normalized_m2_ast,
         )
     return [], normalized_m2_ast
+
+
+def _m2_consistency_findings(
+    rule_json: dict[str, object],
+    explanation: object,
+    assertions: object,
+    expected_ast: dict[str, object],
+    grader_client: VerificationGraderClient,
+) -> list[VerificationFinding]:
+    assertion_values = _assertion_values(assertions, question_type="M2")
+    if isinstance(assertion_values, VerificationFinding):
+        return [assertion_values]
+    final_answer_text, final_answer_mathjson, declared_max_score = assertion_values
+    assert final_answer_mathjson is not None
+    try:
+        asserted_mathjson = json.loads(final_answer_mathjson)
+        asserted_ast = grader_client.normalize_math_answer(
+            {"mathjson": asserted_mathjson, "variables": rule_json.get("variables", [])}
+        )
+        _m2_complexity_metrics(asserted_ast)
+    except Exception:
+        return [_unsupported_consistency_finding("M2", "final_answer_mathjson")]
+    findings: list[VerificationFinding] = []
+    if asserted_ast != expected_ast:
+        findings.append(_answer_explanation_inconsistent_finding("M2", "final_answer_mathjson"))
+    if not _has_explanation_suffix(explanation, final_answer_text):
+        findings.append(_answer_explanation_inconsistent_finding("M2", "explanation_suffix"))
+    maximum_score = rule_json.get("max_score", 1)
+    if not _is_finite_number(maximum_score) or not math.isclose(
+        declared_max_score, float(maximum_score), rel_tol=0, abs_tol=1e-9
+    ):
+        findings.append(_score_total_inconsistent_finding("M2"))
+    return findings
+
+
+def _assertion_values(
+    assertions: object, *, question_type: str
+) -> tuple[str, str | None, float] | VerificationFinding:
+    if not isinstance(assertions, dict):
+        return _unsupported_consistency_finding(question_type, "verification_assertions")
+    final_answer_text = assertions.get("final_answer_text")
+    final_answer_mathjson = assertions.get("final_answer_mathjson")
+    declared_max_score = assertions.get("declared_max_score")
+    if not isinstance(final_answer_text, str) or not final_answer_text.strip():
+        return _unsupported_consistency_finding(question_type, "final_answer_text")
+    if question_type == "M1" and final_answer_mathjson is not None:
+        return _unsupported_consistency_finding(question_type, "final_answer_mathjson")
+    if question_type == "M2" and not isinstance(final_answer_mathjson, str):
+        return _unsupported_consistency_finding(question_type, "final_answer_mathjson")
+    if not _is_finite_number(declared_max_score):
+        return _unsupported_consistency_finding(question_type, "declared_max_score")
+    return final_answer_text, final_answer_mathjson, float(declared_max_score)
+
+
+def _has_explanation_suffix(explanation: object, final_answer_text: str) -> bool:
+    if not isinstance(explanation, str):
+        return False
+    suffix = _normalize_text(f"Final answer: {final_answer_text}")
+    return _normalize_text(explanation).endswith(suffix)
+
+
+def _answer_explanation_inconsistent_finding(question_type: str, field: str) -> VerificationFinding:
+    return _blocked(
+        "answer_explanation_inconsistent",
+        {"question_type": question_type, "field": field},
+        "Make the structured final answer, explanation conclusion, and grading rule agree.",
+    )
+
+
+def _score_total_inconsistent_finding(question_type: str) -> VerificationFinding:
+    return _blocked(
+        "score_total_inconsistent",
+        {"question_type": question_type, "field": "declared_max_score"},
+        "Make the declared total score match the grading rule.",
+    )
+
+
+def _unsupported_consistency_finding(question_type: str, field: str) -> VerificationFinding:
+    return _blocked(
+        "unsupported_consistency_structure",
+        {"question_type": question_type, "field": field},
+        "Provide a supported structured assertion before validating this candidate.",
+    )
 
 
 def _m2_probes(expected: object) -> tuple[_M2Probe, ...]:

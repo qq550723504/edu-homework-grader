@@ -51,7 +51,7 @@ class GenerationServiceError(ValueError):
 
 
 GENERATION_POLICY_CATALOG_VERSION = "2026.07"
-GENERATION_PROMPT_VERSION = "generator-v2"
+GENERATION_PROMPT_VERSION = "generator-v3"
 _DIFFICULTY_BAND_FRACTIONS = {"foundation": 0.2, "standard": 0.5, "stretch": 0.8}
 # Provider-authored estimates within five percentage points remain aligned to the plan target.
 _TARGET_DIFFICULTY_TOLERANCE = 0.05

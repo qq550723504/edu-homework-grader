@@ -1,0 +1,31 @@
+{
+  "policy_id": "ai-evaluation-gate-policy-v1",
+  "approved_model_ids": [
+    "gpt-5.6-terra"
+  ],
+  "approved_prompt_versions": [
+    "generator-v3"
+  ],
+  "thresholds": {
+    "schema_pass_rate_min": 0.98,
+    "math_answer_error_rate_max": 0.005,
+    "grade_mismatch_rate_max": 0.02,
+    "duplicate_or_similarity_rate_max": 0.03,
+    "teacher_direct_accept_rate_min": 0.6,
+    "teacher_modified_accept_rate_min": 0.85,
+    "published_without_teacher_review_max": 0
+  },
+  "evidence_requirements": {
+    "required_question_types": [
+      "M1",
+      "M2",
+      "E1",
+      "E2",
+      "E3",
+      "E4"
+    ],
+    "minimum_total_records": 120,
+    "minimum_records_per_question_type": 20,
+    "minimum_reviewed_records_per_question_type": 20
+  }
+}

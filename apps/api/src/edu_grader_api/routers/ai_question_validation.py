@@ -70,6 +70,7 @@ _PUBLIC_FINDING_EVIDENCE_SCALAR_KEYS = (
     "category",
     "rule_id",
     "policy_version",
+    "field",
 )
 _PUBLIC_FINDING_EVIDENCE_STRING_LIST_KEYS = ("allowed_question_types",)
 _PRIVATE_FEATURE_KEY_PARTS = ("digest", "fingerprint", "hash")

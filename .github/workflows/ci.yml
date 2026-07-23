@@ -55,6 +55,9 @@ jobs:
       - name: Test Python packages
         if: needs.changes.outputs.non_docs == 'true'
         run: make test
+      - name: Run deterministic verification corpus
+        if: needs.changes.outputs.non_docs == 'true'
+        run: make verification-regression
 
   migrations:
     needs: changes

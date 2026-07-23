@@ -62,6 +62,16 @@ class GenerationRequest(BaseModel):
             raise ValueError("generation request must be de-identified") from exc
 
 
+class VerificationAssertions(BaseModel):
+    """Structured declarations used by deterministic candidate verification."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    final_answer_text: str = Field(min_length=1, max_length=2_000)
+    final_answer_mathjson: str | None = Field(default=None, max_length=20_000)
+    declared_max_score: float = Field(gt=0, le=100)
+
+
 class GeneratedCandidate(BaseModel):
     """Strict platform candidate schema shared by every model provider."""
 
@@ -75,6 +85,7 @@ class GeneratedCandidate(BaseModel):
     explanation: str = Field(min_length=1, max_length=4_000)
     knowledge_point: str = Field(min_length=1, max_length=200)
     difficulty: float = Field(ge=0, le=1)
+    verification_assertions: VerificationAssertions | None = None
     reading_material: str | None = Field(
         default=None, max_length=8_000, json_schema_extra={"maxLength": 8_000}
     )
@@ -86,6 +97,25 @@ class GeneratedCandidate(BaseModel):
                 raise ValueError("E4 candidates require nonblank reading_material")
         elif self.reading_material is not None:
             raise ValueError("only E4 candidates may include reading_material")
+        if self.verification_assertions is not None:
+            if self.question_type not in {"M1", "M2"}:
+                raise ValueError(
+                    "only M1 and M2 candidates may include verification assertions"
+                )
+            if (
+                self.question_type == "M1"
+                and self.verification_assertions.final_answer_mathjson is not None
+            ):
+                raise ValueError(
+                    "M1 verification assertions require null final_answer_mathjson"
+                )
+            if (
+                self.question_type == "M2"
+                and self.verification_assertions.final_answer_mathjson is None
+            ):
+                raise ValueError(
+                    "M2 verification assertions require final_answer_mathjson"
+                )
         return self
 
 

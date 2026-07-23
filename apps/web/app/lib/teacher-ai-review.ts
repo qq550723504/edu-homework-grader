@@ -27,6 +27,12 @@ export interface TeacherAiGenerationJob {
   finished_at?: string | null
 }
 
+export interface TeacherAiVerificationAssertions {
+  final_answer_text: string
+  final_answer_mathjson: string | null
+  declared_max_score: number
+}
+
 export interface TeacherAiCandidate {
   objective_revision_id: string
   question_type: TeacherAiQuestionType
@@ -36,6 +42,7 @@ export interface TeacherAiCandidate {
   explanation: string
   knowledge_point: string
   difficulty: number
+  verification_assertions?: TeacherAiVerificationAssertions | null
   reading_material: string | null
 }
 
@@ -133,11 +140,17 @@ export function candidateEditInput(
     throw new Error('Only E4 candidates may include reading material')
   }
 
-  return {
+  const verificationAssertions = synchronizeVerificationAssertions(current, ruleJson)
+  const rawExplanation = edits.explanation ?? current.explanation
+  const explanation = verificationAssertions
+    ? synchronizeExplanation(rawExplanation, verificationAssertions.final_answer_text)
+    : rawExplanation
+
+  const updated: TeacherAiCandidate = {
     ...current,
     prompt: edits.prompt ?? current.prompt,
     rule_json: ruleJson,
-    explanation: edits.explanation ?? current.explanation,
+    explanation,
     knowledge_point: edits.knowledge_point ?? current.knowledge_point,
     difficulty,
     reading_material: readingMaterial,
@@ -146,6 +159,10 @@ export function candidateEditInput(
     question_type: current.question_type,
     policy_version: current.policy_version,
   }
+  if (verificationAssertions !== null || current.verification_assertions !== undefined) {
+    updated.verification_assertions = verificationAssertions
+  }
+  return updated
 }
 
 export function saveAiCandidateRevision(
@@ -233,6 +250,58 @@ export function canAcceptCandidate(input: {
     && input.validation !== null
     && input.validation?.status !== 'blocked'
     && (input.validation?.status !== 'warning' || input.warningConfirmed)
+}
+
+function synchronizeVerificationAssertions(
+  current: TeacherAiCandidate,
+  ruleJson: Record<string, unknown>,
+): TeacherAiVerificationAssertions | null {
+  if (current.question_type === 'M1') {
+    const expected = ruleJson.expected
+    if (typeof expected !== 'number' || !Number.isFinite(expected)) {
+      return current.verification_assertions ?? null
+    }
+    return {
+      final_answer_text: String(expected),
+      final_answer_mathjson: null,
+      declared_max_score: 1,
+    }
+  }
+
+  if (current.question_type === 'M2') {
+    const expected = ruleJson.expected
+    if (expected === undefined) return current.verification_assertions ?? null
+    const maximumScore = numericScore(ruleJson.max_score ?? 1)
+    return {
+      final_answer_text: displayAnswer(expected),
+      final_answer_mathjson: JSON.stringify(expected),
+      declared_max_score: maximumScore,
+    }
+  }
+
+  return null
+}
+
+function synchronizeExplanation(explanation: string, finalAnswerText: string): string {
+  const marker = 'final answer:'
+  const lower = explanation.toLocaleLowerCase()
+  const markerIndex = lower.lastIndexOf(marker)
+  const body = (markerIndex >= 0 ? explanation.slice(0, markerIndex) : explanation).trimEnd()
+  return `${body}${body ? '\n\n' : ''}Final answer: ${finalAnswerText}`
+}
+
+function displayAnswer(value: unknown): string {
+  if (typeof value === 'string') return value
+  const encoded = JSON.stringify(value)
+  if (!encoded) throw new Error('M2 expected answer must be JSON serializable')
+  return encoded
+}
+
+function numericScore(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 100) {
+    throw new Error('Maximum score must be between 0 and 100')
+  }
+  return value
 }
 
 function parseRuleJson(value: string | Record<string, unknown>): Record<string, unknown> {

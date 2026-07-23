@@ -1,0 +1,34 @@
+name: AI evaluation gate
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-evaluation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ai-evaluation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install Python packages
+        run: make install-python
+      - name: Run AI evaluation release gate
+        run: make ai-evaluation
+      - name: Upload AI evaluation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-evaluation-report
+          path: artifacts/ai-evaluation/
+          if-no-files-found: error
+          retention-days: 14

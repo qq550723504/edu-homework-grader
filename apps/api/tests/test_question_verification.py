@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from copy import deepcopy
 from decimal import Decimal
 from uuid import uuid4
@@ -594,6 +595,7 @@ def generation_draft(
     candidate_json: dict[str, object] | None = None,
     allowed_question_types: list[str] | None = None,
     revision_status: CurriculumRevisionStatus = CurriculumRevisionStatus.ACTIVE,
+    prompt_version: str | None = None,
     ordinal: int = 1,
 ) -> GeneratedQuestionDraft:
     tenant = Tenant(slug=f"pilot-{uuid4()}", name="Pilot")
@@ -657,6 +659,7 @@ def generation_draft(
         idempotency_key=str(uuid4()),
         status=GenerationJobStatus.READY_FOR_REVIEW,
         requested_count=2,
+        prompt_version=prompt_version,
     )
     session.add(job)
     session.flush()
@@ -665,7 +668,7 @@ def generation_draft(
         attempt_number=1,
         provider_name="fake",
         model_version="fake-v1",
-        prompt_version="generator-v1",
+        prompt_version=prompt_version or "generator-v1",
         status="succeeded",
     )
     session.add(attempt)
@@ -845,6 +848,68 @@ def valid_m1_candidate(prompt: str) -> dict[str, object]:
         "explanation": "Add the two whole numbers.",
         "knowledge_point": "whole-number addition",
     }
+
+
+def test_m1_assertion_conflicting_with_rule_is_blocked(session: Session) -> None:
+    candidate = valid_m1_candidate("What is 2 + 2?")
+    candidate["verification_assertions"] = {
+        "final_answer_text": "5",
+        "final_answer_mathjson": None,
+        "declared_max_score": 1,
+    }
+    candidate["explanation"] = "Add the two whole numbers. Final answer: 5"
+    draft = generation_draft(session, candidate_json=candidate)
+
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
+
+    finding = finding_by_code(run, "answer_explanation_inconsistent")
+    assert finding.evidence_json == {"question_type": "M1", "field": "final_answer_text"}
+
+
+def test_m2_assertion_score_and_mathjson_mismatches_are_blocked(session: Session) -> None:
+    class DistinguishingM2Grader(PassingM2Grader):
+        def normalize_math_answer(self, answer_json: dict[str, object]) -> dict[str, object]:
+            self.normalization_requests.append(answer_json)
+            if answer_json["mathjson"] == ["Add", "x", 2]:
+                return {
+                    "type": "add",
+                    "args": [
+                        {"type": "symbol", "name": "x"},
+                        {"type": "number", "value": "2"},
+                    ],
+                }
+            return super().normalize_math_answer(answer_json)
+
+    candidate = valid_m2_candidate()
+    candidate["verification_assertions"] = {
+        "final_answer_text": "x + 2",
+        "final_answer_mathjson": json.dumps(["Add", "x", 2], separators=(",", ":")),
+        "declared_max_score": 3,
+    }
+    candidate["explanation"] = "The expression is already expanded. Final answer: x + 2"
+    draft = generation_draft(
+        session,
+        allowed_question_types=["M2"],
+        candidate_json=candidate,
+    )
+
+    run = verify_current_revision(session, draft=draft, grader_client=DistinguishingM2Grader())
+
+    assert {"answer_explanation_inconsistent", "score_total_inconsistent"} <= finding_codes(run)
+
+
+def test_m1_without_structured_assertions_fails_closed(session: Session) -> None:
+    candidate = valid_m1_candidate("What is 2 + 2?")
+    draft = generation_draft(
+        session,
+        candidate_json=candidate,
+        prompt_version="generator-v3",
+    )
+
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
+
+    finding = finding_by_code(run, "unsupported_consistency_structure")
+    assert finding.evidence_json == {"question_type": "M1", "field": "verification_assertions"}
 
 
 def test_validation_uses_selected_revision_not_provider_original(session: Session) -> None:
@@ -2498,6 +2563,22 @@ def test_m2_unexpected_safe_ast_is_blocked_before_grader_probe(session: Session)
     finding = next(item for item in run.findings if item.code == "m2_mathjson_invalid")
     assert run.status is ValidationRunStatus.BLOCKED
     assert finding.evidence_json == {"probe": "expected_mathjson"}
+    assert grader.grade_requests == []
+
+
+def test_m2_deep_safe_ast_is_blocked_before_grader_probe(session: Session) -> None:
+    ast: dict[str, object] = {"type": "symbol", "name": "x"}
+    for _ in range(21):
+        ast = {"type": "neg", "arg": ast}
+    draft = generation_draft(
+        session, allowed_question_types=["M2"], candidate_json=valid_m2_candidate()
+    )
+    grader = SafeAstM2Grader(ast)
+
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
+
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding_codes(run) == {"m2_mathjson_invalid"}
     assert grader.grade_requests == []
 
 
