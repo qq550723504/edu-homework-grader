@@ -47,27 +47,39 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          generation = Path("apps/api/src/edu_grader_api/services/generation.py")
-          text = generation.read_text(encoding="utf-8")
-          old = 'GENERATION_PROMPT_VERSION = "generator-v2"'
-          assert text.count(old) == 1
-          generation.write_text(text.replace(old, 'GENERATION_PROMPT_VERSION = "generator-v3"'), encoding="utf-8")
+          def replace(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              target.write_text(text.replace(old, new), encoding="utf-8")
 
-          api_test = Path("apps/api/tests/test_ai_question_generation_api.py")
-          text = api_test.read_text(encoding="utf-8")
-          old = 'assert job.prompt_version == "generator-v2"'
-          assert text.count(old) == 1
-          api_test.write_text(text.replace(old, 'assert job.prompt_version == "generator-v3"'), encoding="utf-8")
+          replace(
+              "apps/api/src/edu_grader_api/services/generation.py",
+              'GENERATION_PROMPT_VERSION = "generator-v2"',
+              'GENERATION_PROMPT_VERSION = "generator-v3"',
+          )
+          replace(
+              "apps/api/tests/test_ai_question_generation_api.py",
+              'assert job.prompt_version == "generator-v2"',
+              'assert job.prompt_version == "generator-v3"',
+          )
+          replace(
+              "apps/api/tests/test_generation_service.py",
+              'assert job.prompt_version == "generator-v2"',
+              'assert job.prompt_version == "generator-v3"',
+          )
+          replace(
+              "apps/api/tests/test_generation_service.py",
+              'resolve_prompt_template("generator-v2", ["M1"])',
+              'resolve_prompt_template("generator-v3", ["M1"])',
+          )
 
-          service_test = Path("apps/api/tests/test_generation_service.py")
-          text = service_test.read_text(encoding="utf-8")
-          assertion = 'assert job.prompt_version == "generator-v2"'
-          resolver = 'resolve_prompt_template("generator-v2", ["M1"])'
-          assert text.count(assertion) == 1
-          assert text.count(resolver) == 2
-          text = text.replace(assertion, 'assert job.prompt_version == "generator-v3"')
-          text = text.replace(resolver, 'resolve_prompt_template("generator-v3", ["M1"])')
-          service_test.write_text(text, encoding="utf-8")
+          generation = Path("apps/api/src/edu_grader_api/services/generation.py").read_text(
+              encoding="utf-8"
+          )
+          if 'GENERATION_PROMPT_VERSION = "generator-v3"' not in generation:
+              raise SystemExit("generator-v3 contract was not restored")
+          if "assert_generation_pipeline_allowed" not in generation:
+              raise SystemExit("main governance enforcement was not preserved")
           PY
 
           rm -f .github/workflows/pr84-sync-automation.yml
