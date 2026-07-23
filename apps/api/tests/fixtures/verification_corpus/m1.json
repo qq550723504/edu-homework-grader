@@ -3,9 +3,24 @@
   "question_type": "M1",
   "cases": [
     {"id": "m1-correct", "scenario": "correct", "expected_status": "passed", "expected_codes": []},
+    {"id": "m1-numeric-equivalent", "scenario": "numeric_equivalent", "expected_status": "passed", "expected_codes": []},
+    {"id": "m1-whitespace-normalized", "scenario": "whitespace_normalized", "expected_status": "passed", "expected_codes": []},
+    {"id": "m1-zero-answer", "scenario": "zero_answer", "expected_status": "passed", "expected_codes": []},
+    {"id": "m1-negative-decimal", "scenario": "negative_decimal", "expected_status": "passed", "expected_codes": []},
+    {"id": "m1-tolerance-boundaries", "scenario": "tolerance_boundaries", "expected_status": "passed", "expected_codes": []},
+    {"id": "m1-fractional-tolerance", "scenario": "fractional_tolerance", "expected_status": "passed", "expected_codes": []},
+    {"id": "m1-large-integer", "scenario": "large_integer", "expected_status": "passed", "expected_codes": []},
     {"id": "m1-incorrect", "scenario": "incorrect", "expected_status": "blocked", "expected_codes": ["answer_explanation_inconsistent"]},
+    {"id": "m1-common-misconception", "scenario": "common_misconception", "expected_status": "blocked", "expected_codes": ["answer_explanation_inconsistent"]},
     {"id": "m1-empty", "scenario": "empty", "expected_status": "blocked", "expected_codes": ["unsupported_consistency_structure"]},
-    {"id": "m1-boundary", "scenario": "boundary", "expected_status": "passed", "expected_codes": []},
-    {"id": "m1-common-misconception", "scenario": "common_misconception", "expected_status": "blocked", "expected_codes": ["answer_explanation_inconsistent"]}
+    {"id": "m1-non-numeric-answer", "scenario": "non_numeric_answer", "expected_status": "blocked", "expected_codes": ["unsupported_consistency_structure"]},
+    {"id": "m1-explanation-mismatch", "scenario": "explanation_mismatch", "expected_status": "blocked", "expected_codes": ["answer_explanation_inconsistent"]},
+    {"id": "m1-score-mismatch", "scenario": "score_mismatch", "expected_status": "blocked", "expected_codes": ["score_total_inconsistent"]},
+    {"id": "m1-unexpected-mathjson", "scenario": "unexpected_mathjson", "expected_status": "blocked", "expected_codes": ["unsupported_consistency_structure"]},
+    {"id": "m1-missing-assertions", "scenario": "missing_assertions", "expected_status": "blocked", "expected_codes": ["unsupported_consistency_structure"]},
+    {"id": "m1-boolean-score", "scenario": "boolean_score", "expected_status": "blocked", "expected_codes": ["unsupported_consistency_structure"]},
+    {"id": "m1-invalid-expected-rule", "scenario": "invalid_expected_rule", "expected_status": "blocked", "expected_codes": ["policy_schema_invalid"]},
+    {"id": "m1-negative-tolerance", "scenario": "negative_tolerance", "expected_status": "blocked", "expected_codes": ["policy_schema_invalid"]},
+    {"id": "m1-non-finite-tolerance", "scenario": "non_finite_tolerance", "expected_status": "blocked", "expected_codes": ["m1_answer_invalid"]}
   ]
 }

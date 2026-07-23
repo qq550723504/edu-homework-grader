@@ -3,9 +3,24 @@
   "question_type": "M2",
   "cases": [
     {"id": "m2-correct", "scenario": "correct", "expected_status": "passed", "expected_codes": []},
+    {"id": "m2-alternate-display", "scenario": "alternate_display", "expected_status": "passed", "expected_codes": []},
+    {"id": "m2-whitespace-mathjson", "scenario": "whitespace_mathjson", "expected_status": "passed", "expected_codes": []},
+    {"id": "m2-commutative-normalization", "scenario": "commutative_normalization", "expected_status": "passed", "expected_codes": []},
+    {"id": "m2-fractional-max-score", "scenario": "fractional_max_score", "expected_status": "passed", "expected_codes": []},
+    {"id": "m2-higher-max-score", "scenario": "higher_max_score", "expected_status": "passed", "expected_codes": []},
     {"id": "m2-incorrect", "scenario": "incorrect", "expected_status": "blocked", "expected_codes": ["answer_explanation_inconsistent"]},
+    {"id": "m2-common-misconception", "scenario": "common_misconception", "expected_status": "blocked", "expected_codes": ["answer_explanation_inconsistent"]},
     {"id": "m2-empty", "scenario": "empty", "expected_status": "blocked", "expected_codes": ["unsupported_consistency_structure"]},
-    {"id": "m2-boundary", "scenario": "boundary", "expected_status": "passed", "expected_codes": []},
-    {"id": "m2-resource-limit", "scenario": "resource_limit", "expected_status": "blocked", "expected_codes": ["m2_grader_probe_failed"]}
+    {"id": "m2-malformed-mathjson", "scenario": "malformed_mathjson", "expected_status": "blocked", "expected_codes": ["unsupported_consistency_structure"]},
+    {"id": "m2-scalar-mathjson", "scenario": "scalar_mathjson", "expected_status": "blocked", "expected_codes": ["unsupported_consistency_structure"]},
+    {"id": "m2-missing-assertions", "scenario": "missing_assertions", "expected_status": "blocked", "expected_codes": ["unsupported_consistency_structure"]},
+    {"id": "m2-empty-answer-text", "scenario": "empty_answer_text", "expected_status": "blocked", "expected_codes": ["unsupported_consistency_structure"]},
+    {"id": "m2-null-mathjson", "scenario": "null_mathjson", "expected_status": "blocked", "expected_codes": ["unsupported_consistency_structure"]},
+    {"id": "m2-explanation-mismatch", "scenario": "explanation_mismatch", "expected_status": "blocked", "expected_codes": ["answer_explanation_inconsistent"]},
+    {"id": "m2-score-mismatch", "scenario": "score_mismatch", "expected_status": "blocked", "expected_codes": ["score_total_inconsistent"]},
+    {"id": "m2-invalid-score", "scenario": "invalid_score", "expected_status": "blocked", "expected_codes": ["unsupported_consistency_structure"]},
+    {"id": "m2-resource-limit", "scenario": "resource_limit", "expected_status": "blocked", "expected_codes": ["m2_grader_probe_failed"]},
+    {"id": "m2-unexpected-decision", "scenario": "unexpected_decision", "expected_status": "blocked", "expected_codes": ["m2_grader_probe_failed"]},
+    {"id": "m2-non-finite-score", "scenario": "non_finite_score", "expected_status": "blocked", "expected_codes": ["m2_grader_probe_failed"]}
   ]
 }
