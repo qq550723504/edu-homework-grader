@@ -1,119 +1,126 @@
 # AI Question Evaluation Design
 
-**Issue:** #42
-**Status:** approved design; implementation has not started
-**Scope:** release-candidate quality evidence for AI question generation
+**Issue:** #42  
+**Status:** Offline release-gate foundation implemented; online evaluation remains open  
+**Scope:** Reproducible, de-identified release evidence for AI question generation
 
-## Problem
+## Purpose
 
-The repository has deterministic candidate verification and a mature English grader calibration utility. Neither produces a single, versioned release gate for generated questions. The existing calibration report only summarizes E1--E4 grading decisions and cannot show generation correctness, curriculum fit, similarity, teacher outcomes, or whether a candidate model/Prompt is eligible to become the default.
+The repository now has two complementary quality controls:
 
-The evaluation gate must be reproducible in CI, must not include real student answers or other minor personal data, and must not require a live operational database. A report that merely renders successfully is insufficient: known bad data must cause a non-zero command exit.
+1. `make verification-regression` reruns the current production candidate verifier against a deterministic six-type corpus.
+2. `make ai-evaluation` evaluates de-identified, teacher-adjudicated outcome snapshots against a versioned release policy.
 
-## Chosen Architecture
-
-`make ai-evaluation` will run an offline evaluator over a versioned JSONL golden dataset and a versioned policy file. It writes:
-
-```text
-artifacts/ai-evaluation/report.json
-artifacts/ai-evaluation/report.html
-```
-
-The evaluator is a small, pure Python module in the Core API package. Its input contract is a snapshot of generation and teacher-review facts rather than a direct database reader. This makes the same dataset usable in CI, locally, and for exported pilot feedback while keeping data selection and access control outside the release gate.
-
-Existing `edu_grader.calibration` remains the owner of E1--E4 grader calibration. The new evaluator consumes the same kind of teacher-adjudicated facts and may include its summary in the report; it does not duplicate the grader's score comparison logic.
-
-Direct operational reporting, dashboard filters, tenant permissions, canary routing, and changing the default model are not part of this slice. #43 owns those control-plane actions. This evaluator provides only reproducible evidence and `promotion_eligible` advice.
+Neither control promotes a model, Prompt, or curriculum revision. #43 owns promotion, canary routing, rollback, budget controls, and kill switches. #31 owns release-environment end-to-end acceptance.
 
 ## Inputs
 
-### Evaluation policy
+### Versioned policy
 
-The committed policy file has a policy identifier and these versioned values:
+The policy contains:
 
 - approved immutable model IDs;
 - approved Prompt versions;
-- blocking thresholds;
-- optional minimum sample size for a release decision.
+- blocking quality thresholds;
+- required question types;
+- minimum total evidence;
+- minimum evidence per question type; and
+- minimum reviewed evidence per question type.
 
-The first policy version carries these thresholds, as configuration rather than hard-coded evaluator constants:
+The gate requires M1, M2, E1, E2, E3, and E4. Empty input, a missing type, or insufficient reviewed evidence fails closed with stable violation codes.
 
-| Metric | Release condition |
-| --- | ---: |
-| Structural schema pass rate | >= 98% |
-| Mathematics answer error rate | <= 0.5% |
-| Obvious grade mismatch rate | <= 2% |
-| Exact or high-similarity rate | <= 3% |
-| Teacher direct-accept rate | >= 60% |
-| Teacher modified-then-accept rate | >= 85% |
-| Published without teacher review | 0 |
+### Evaluation records
 
-### Golden evaluation record
-
-Each JSONL record is original or authorized evaluation data and carries one candidate outcome. It contains:
+Each JSONL record is an original or authorised, de-identified outcome snapshot. It contains:
 
 - stable record and run IDs;
-- curriculum profile, grade, subject, question type (`M1`, `M2`, `E1`--`E4`), and difficulty band;
-- immutable model ID, Prompt version, validator version, and deterministic seed/parameter snapshot;
-- structural-schema result, mathematics-answer result when applicable, grade-fit result, and duplicate/similarity result;
-- teacher outcome (`accepted_directly`, `accepted_after_edit`, `rejected`, or `pending_review`) plus a structured rejection category when present;
-- publication state, review evidence flag, cost, and end-to-end duration.
+- profile, grade, subject, question type, and difficulty band;
+- immutable model, Prompt, and validator versions;
+- deterministic seed and parameter metadata;
+- schema, mathematics-answer, grade-fit, duplicate, and similarity outcomes;
+- teacher acceptance, edit, rejection, publication, and review-evidence state;
+- cost and duration metadata; and
+- an opaque content fingerprint.
 
-The record stores no raw student answer, student identity, or raw candidate body. For repeatability it uses an opaque content fingerprint and stable finding/rejection codes. The generated-question tables already provide the source facts for future exports: job/attempt model and Prompt snapshots, draft revision/fingerprints, validation runs, and review decisions.
+Records cannot contain raw student answers, student identity, class identity, raw candidate content, provider credentials, or system Prompt text.
 
-## Evaluation Semantics
+## Cross-field consistency
 
-The evaluator validates every input record before calculating metrics. An invalid record, duplicate record ID, unknown question type, non-immutable model, or missing version field is a data-quality violation and blocks promotion. A floating or otherwise unapproved model, and an unapproved Prompt version, each produce a stable version-approval violation.
+The release gate rejects contradictory records, including:
 
-For each population and stratum, the evaluator computes numerator, denominator, rate, threshold, and pass/fail state. Zero denominators are reported as `not_applicable`; required global metrics with no evidence block promotion rather than silently passing. Exact duplicates and similarity matches share one denominator (evaluated candidates) and one release metric; a record is counted at most once in that metric.
+- `accepted_after_edit` without a teacher edit;
+- `accepted_directly` marked as edited;
+- rejected or pending records marked as published;
+- rejected records without a rejection category;
+- non-rejected records with a rejection category;
+- completed reviews without review evidence;
+- English records carrying mathematics-answer outcomes; and
+- mathematics records without mathematics-answer outcomes.
 
-Teacher metrics are intentionally separated:
+These are data-quality violations, not ordinary threshold failures.
 
-- direct acceptance is accepted without a teacher edit divided by reviewed candidates;
-- modified acceptance is accepted after an edit divided by all candidates that received a teacher edit;
-- publication without teacher review is the count of published records whose required review evidence is absent.
+## Metrics and thresholds
 
-`pending_review` never counts as accepted or as a reviewed publication. This preserves the E3/E4 teacher-review invariant established by #83.
+The evaluator calculates global and stratified metrics for:
 
-The report includes a global summary and an explicit strata table keyed by:
+- structural schema pass rate;
+- mathematics answer error rate;
+- obvious grade mismatch rate;
+- exact or high-similarity rate;
+- direct teacher acceptance rate;
+- modified-then-accepted rate; and
+- publication without teacher review.
+
+Strata are keyed by:
 
 ```text
 curriculum_profile, grade, subject, question_type,
 model_id, prompt_version, validator_version, difficulty_band
 ```
 
-It also reports rejection categories, cost per final accepted question, and end-to-end duration for observed records. A stratum does not replace the global gate: every failing populated stratum is a release violation, so an overall average cannot hide a profile, grade, or question-type regression.
+A populated failing stratum blocks promotion eligibility. An overall average cannot hide a failing grade, profile, or question type.
 
-## Output and Exit Contract
+## Output and exit behavior
 
-`report.json` is the machine-readable source of truth. It contains input and policy identifiers, aggregate metrics, strata, stable violations, and:
+`make ai-evaluation` writes:
 
-```json
-{
-  "promotion_eligible": false
-}
+```text
+artifacts/ai-evaluation/report.json
+artifacts/ai-evaluation/report.html
 ```
 
-when any structural, threshold, data-quality, or version-approval violation exists. It contains `true` only when all required evidence passes the policy. `report.html` is a deterministic, escaped presentation of the same report; it introduces no additional logic.
+The command exits zero only when:
 
-The command writes both artifacts before returning. It exits zero only when `promotion_eligible` is true and exits non-zero otherwise. Consequently CI retains diagnostic artifacts even for an expected blocking failure.
+- evidence requirements are satisfied;
+- record states are internally consistent;
+- model and Prompt versions are approved; and
+- all global and populated-stratum thresholds pass.
 
-The evaluator does not promote anything. #43 must require a passing, identified report before a canary candidate is moved to `active`.
+It exits non-zero for empty input, insufficient evidence, inconsistent records, unapproved versions, threshold failures, or publication without review. Diagnostic artifacts are still uploaded by CI.
 
-## Regression Evidence
+## CI boundary
 
-The repository will ship an authorized, synthetic golden fixture covering all six question types and their profile/grade/subject/difficulty strata. Tests will demonstrate that the baseline passes and that each of these independent mutations causes a non-zero evaluation result with a stable violation code:
+The dedicated `AI evaluation gate` workflow:
 
-1. a wrong M1/M2 answer;
-2. an out-of-curriculum or age-inappropriate item;
-3. an exact or high-similarity duplicate;
-4. a floating or policy-unapproved model ID;
-5. a policy-unapproved Prompt version;
-6. publication without teacher review.
+- installs the repository Python packages;
+- runs `make ai-evaluation`; and
+- uploads the JSON/HTML report even when the gate fails.
 
-Tests also assert that the JSON report contains every required stratum key, the HTML output is produced, and the report exposes enough counts to compare two versioned runs without relying on an overall average.
+The ordinary CI workflow separately runs the deterministic verification corpus, so the committed snapshot booleans are not the only evidence that current verifier behavior is sound.
 
-## Acceptance Boundaries
+## Real Provider boundary
 
-This slice is complete when the single Make target produces both artifacts from a deterministic dataset, passing baseline results are reproducible, and all listed bad-data probes fail in CI. It is not proof of isolated release environment acceptance, teacher shadow-mode approval, production-school deployment, or a replacement for #43 governance controls.
+The controlled live integration test uses the production default `generator-v3` contract and requests representative M1, M2, E1, and E4 candidates. It verifies strict Structured Outputs, M1/M2 verification assertions, and E4 reading material. The test remains opt-in because it requires an approved provider credential and immutable model ID.
 
+## Deferred #42 work
+
+This PR does not close all of #42. Follow-up work remains for:
+
+- governed exports from operational generation and review tables;
+- teacher-feedback dashboards and post-publication metrics;
+- baseline selection and version-to-version regression reports;
+- teacher-reviewed calibration of final blocking thresholds;
+- shadow/canary evidence integration; and
+- pilot-end quality, cost, and rejection analysis.
+
+A passing offline report is required release evidence, but it is not proof of production readiness or school-pilot approval.
