@@ -57,19 +57,26 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["created_by_user_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.CheckConstraint(
-            "is_global OR tenant_id IS NOT NULL",
-            name="ck_generation_governance_requires_tenant_for_tenant_scope",
+            "(is_global = true AND tenant_id IS NULL) OR "
+            "(is_global = false AND tenant_id IS NOT NULL)",
+            name="ck_generation_governance_scope_is_consistent",
         ),
     )
     op.create_index(
-        "ix_generation_governance_scope",
+        "uq_generation_governance_global_target",
         "generation_governance_entries",
-        ["tenant_id", "is_global", "target_type", "target_key"],
+        ["target_type", "target_key"],
+        unique=True,
+        postgresql_where=sa.text("is_global"),
+        sqlite_where=sa.text("is_global = 1"),
     )
     op.create_index(
-        "ix_generation_governance_global_scope",
+        "uq_generation_governance_tenant_target",
         "generation_governance_entries",
-        ["is_global", "target_type", "target_key"],
+        ["tenant_id", "target_type", "target_key"],
+        unique=True,
+        postgresql_where=sa.text("NOT is_global"),
+        sqlite_where=sa.text("is_global = 0"),
     )
 
 
