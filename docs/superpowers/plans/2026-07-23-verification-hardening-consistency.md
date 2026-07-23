@@ -278,3 +278,11 @@ git commit -m "docs: record verification hardening evidence"
 - `make verification-regression` with the same source paths: exit 0; M1 total=5 passed=5 failed=0 and M2 total=5 passed=5 failed=0.
 - `python -m ruff check services/generator apps/api` and `python -m ruff format --check services/generator apps/api`: exit 0.
 - `git diff --check`: exit 0; the slice adds no migration and does not change E3/E4 acceptance paths.
+
+## Final verification hardening evidence — 2026-07-23
+
+- Deterministic corpus: M1=21, M2=21, E1=20, E2=20, E3=20, E4=20. It includes rule/assertion conflicts, grader and LanguageTool failures, similarity client timeout/invalid responses, malicious deep safe ASTs, overlong text, and Unicode normalization conflicts.
+- E3 and E4 corpus cases assert `pending_review` after every validation run; blocked candidates remain rejected by existing review-boundary tests.
+- Full explicit-source affected suite: exit 0; 342 passed across generator contracts, generation, review, question verification, and corpus tests.
+- `make verification-regression`: exit 0; every corpus case reports its expected status and stable Finding Codes.
+- `python -m ruff check services/generator apps/api`, `python -m ruff format --check services/generator apps/api`, and `git diff --check`: exit 0.
