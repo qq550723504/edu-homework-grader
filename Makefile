@@ -1,4 +1,4 @@
-.PHONY: install-python test lint format api-test api-lint api-migrate question-test calibration-report ai-evaluation ai-evaluation-operational verification-regression web-install web-test web-build web-e2e dev down
+.PHONY: install-python test lint format api-test api-lint api-migrate question-test calibration-report ai-evaluation ai-evaluation-operational verification-regression docs-check web-install web-test web-build web-e2e dev down
 
 install-python:
 	python -m pip install -e packages/processor-policy -e "services/generator[openai,dev]" -e "apps/api[dev]" -e "services/grader[dev]"
@@ -31,6 +31,9 @@ ai-evaluation-operational:
 
 verification-regression:
 	python -m pytest apps/api/tests/test_verification_corpus.py -q -s
+
+docs-check:
+	python scripts/check_docs_status.py
 
 lint:
 	python -m ruff format --check packages/processor-policy services/generator apps/api services/grader
