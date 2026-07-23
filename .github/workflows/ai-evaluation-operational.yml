@@ -52,7 +52,7 @@ jobs:
           fi
           mkdir -p artifacts/ai-evaluation-operational
           printf '%s' "$OPERATIONAL_EVALUATION_SPEC_JSON" \
-            > artifacts/ai-evaluation-operational/spec.json
+            > "$RUNNER_TEMP/operational-evaluation-spec.json"
 
       - name: Install Python packages
         run: make install-python
@@ -60,7 +60,7 @@ jobs:
       - name: Export facts and compare explicit versions
         run: |
           python -m edu_grader_api.services.ai_evaluation_operational \
-            artifacts/ai-evaluation-operational/spec.json \
+            "$RUNNER_TEMP/operational-evaluation-spec.json" \
             artifacts/ai-evaluation-operational/report
 
       - name: Upload operational evaluation evidence
@@ -68,6 +68,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: operational-ai-evaluation-${{ github.run_id }}
-          path: artifacts/ai-evaluation-operational
+          path: artifacts/ai-evaluation-operational/report
           if-no-files-found: warn
           retention-days: 30
