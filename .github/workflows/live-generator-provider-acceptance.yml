@@ -1,0 +1,133 @@
+name: Live generator provider acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Branch, tag, or commit SHA to validate
+        required: true
+        default: main
+        type: string
+  issue_comment:
+    types:
+      - created
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: live-generator-provider-${{ github.event.issue.number || inputs.target_ref }}
+  cancel-in-progress: false
+
+jobs:
+  resolve-target:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       github.event.comment.body == '/run-live-generator-provider-acceptance' &&
+       github.event.comment.author_association == 'OWNER')
+    runs-on: ubuntu-latest
+    outputs:
+      target_ref: ${{ steps.resolve.outputs.target_ref }}
+      pull_request_number: ${{ steps.resolve.outputs.pull_request_number }}
+    steps:
+      - name: Resolve trusted target
+        id: resolve
+        uses: actions/github-script@v7
+        with:
+          script: |
+            if (context.eventName === 'workflow_dispatch') {
+              const targetRef = context.payload.inputs.target_ref;
+              if (!targetRef || !targetRef.trim()) {
+                core.setFailed('target_ref is required');
+                return;
+              }
+              core.setOutput('target_ref', targetRef.trim());
+              core.setOutput('pull_request_number', '');
+              return;
+            }
+
+            const pullNumber = context.payload.issue.number;
+            const { data: pull } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pullNumber,
+            });
+            const expectedRepository = `${context.repo.owner}/${context.repo.repo}`;
+            if (pull.head.repo.full_name !== expectedRepository) {
+              core.setFailed('Live Provider acceptance only runs for same-repository pull requests');
+              return;
+            }
+            core.setOutput('target_ref', pull.head.sha);
+            core.setOutput('pull_request_number', String(pullNumber));
+
+  acceptance:
+    name: generator-v3 M1/M2/E1/E4
+    needs: resolve-target
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ai-provider-acceptance
+    env:
+      LIVE_OPENAI_GENERATION: "1"
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || secrets.GENERATOR_OPENAI_API_KEY }}
+      GENERATOR_OPENAI_MODEL: ${{ vars.GENERATOR_OPENAI_MODEL || secrets.GENERATOR_OPENAI_MODEL }}
+      GENERATOR_OPENAI_BASE_URL: ${{ vars.GENERATOR_OPENAI_BASE_URL || secrets.GENERATOR_OPENAI_BASE_URL || 'https://api.openai.com/v1' }}
+      GENERATOR_PROVIDER_ALLOWED_HOSTS: ${{ vars.GENERATOR_PROVIDER_ALLOWED_HOSTS || secrets.GENERATOR_PROVIDER_ALLOWED_HOSTS || 'api.openai.com' }}
+    steps:
+      - name: Check out exact target
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-target.outputs.target_ref }}
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Validate protected configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+            echo "OPENAI_API_KEY or GENERATOR_OPENAI_API_KEY is not configured in ai-provider-acceptance." >&2
+            exit 1
+          fi
+          if [[ -z "${GENERATOR_OPENAI_MODEL:-}" ]]; then
+            echo "GENERATOR_OPENAI_MODEL is not configured in ai-provider-acceptance." >&2
+            exit 1
+          fi
+          if [[ "${GENERATOR_OPENAI_MODEL}" == "latest" || "${GENERATOR_OPENAI_MODEL}" == "gpt-5.6" ]]; then
+            echo "GENERATOR_OPENAI_MODEL must be an approved immutable model ID, not a floating alias." >&2
+            exit 1
+          fi
+          {
+            echo "## Live generator Provider acceptance"
+            echo
+            echo "- Target: \`${{ needs.resolve-target.outputs.target_ref }}\`"
+            echo "- Pull request: \`${{ needs.resolve-target.outputs.pull_request_number || 'manual dispatch' }}\`"
+            echo "- Contract: \`generator-v3\`"
+            echo "- Coverage: M1, M2, E1, E4"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install Python packages
+        run: make install-python
+
+      - name: Run controlled real-Provider acceptance
+        run: |
+          mkdir -p artifacts/live-generator-provider
+          python -m pytest apps/api/tests/test_openai_generation_integration.py \
+            -q \
+            --junitxml=artifacts/live-generator-provider/junit.xml
+
+      - name: Upload acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-generator-provider-${{ needs.resolve-target.outputs.target_ref }}
+          path: artifacts/live-generator-provider
+          if-no-files-found: warn
+          retention-days: 30
