@@ -280,3 +280,12 @@ Before reporting completion, run the Task 4 verification block plus:
     git log --oneline -4
 
 Record the exact passed-test count, make ai-evaluation result, artifact locations, and the stable codes observed for each intentional regression in this plan. Do not equate that evidence with isolated-environment acceptance, teacher shadow-mode release, production deployment, or closure of GitHub issue #42.
+
+## Delivery Verification — 2026-07-23
+
+- Red tests first established missing evaluator imports, version/strata fields, CLI entry point, and golden fixture coverage before their corresponding implementation slices.
+- `python -m pytest apps/api/tests/test_ai_evaluation.py apps/api/tests/test_generation_service.py apps/api/tests/test_ai_question_review.py apps/api/tests/test_question_verification.py -q`: exit 0; 276 passed.
+- `make ai-evaluation`: exit 0; wrote `artifacts/ai-evaluation/report.json` and `artifacts/ai-evaluation/report.html`. The baseline report records `promotion_eligible=true`, zero violations, six question-type strata, and one approved model/Prompt/validator version summary.
+- `python -m ruff check apps/api/src/edu_grader_api/services/ai_evaluation.py apps/api/tests/test_ai_evaluation.py`, `python -m ruff format --check apps/api/src/edu_grader_api/services/ai_evaluation.py apps/api/tests/test_ai_evaluation.py`, and `git diff --check`: exit 0.
+- CLI-level injected probes each exit 1 after writing both artifacts and include the stated stable code: wrong mathematics answer (`evaluation_math_answer_error_rate_above_threshold`), grade mismatch (`evaluation_grade_mismatch_rate_above_threshold`), duplicate/similarity (`evaluation_similarity_rate_above_threshold`), unapproved model (`evaluation_unapproved_model`), unapproved Prompt (`evaluation_unapproved_prompt`), and publication without review (`evaluation_published_without_teacher_review`).
+- This evidence proves deterministic offline quality-gate behavior only. It does not prove isolated release-environment acceptance, teacher shadow-mode approval, production-school deployment, or GitHub issue closure.

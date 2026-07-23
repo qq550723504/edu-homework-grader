@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -247,3 +248,54 @@ def test_main_writes_artifacts_when_quality_gate_blocks(tmp_path: Path) -> None:
     assert exit_code == 1
     assert (output_directory / "report.json").is_file()
     assert (output_directory / "report.html").is_file()
+
+
+@pytest.mark.parametrize(
+    ("mutate", "code"),
+    [
+        (_wrong_math_answer, "evaluation_math_answer_error_rate_above_threshold"),
+        (_out_of_grade, "evaluation_grade_mismatch_rate_above_threshold"),
+        (_duplicate_candidate, "evaluation_similarity_rate_above_threshold"),
+        (_unapproved_model, "evaluation_unapproved_model"),
+        (_unapproved_prompt, "evaluation_unapproved_prompt"),
+        (_published_without_review, "evaluation_published_without_teacher_review"),
+    ],
+)
+def test_main_writes_artifacts_for_each_blocking_probe(tmp_path: Path, mutate, code) -> None:
+    records_path = tmp_path / "records.jsonl"
+    output_directory = tmp_path / "report"
+    _write_records(records_path, mutate(_passing_records()))
+
+    exit_code = evaluation.main(
+        [str(_FIXTURE_DIRECTORY / "policy-v1.json"), str(records_path), str(output_directory)]
+    )
+
+    assert exit_code == 1
+    report = json.loads((output_directory / "report.json").read_text(encoding="utf-8"))
+    assert code in {violation["code"] for violation in report["violations"]}
+    assert (output_directory / "report.html").is_file()
+
+
+def test_golden_fixture_covers_six_types_without_sensitive_candidate_fields() -> None:
+    fixture_path = _FIXTURE_DIRECTORY / "golden-v1.jsonl"
+    records = evaluation.load_records(fixture_path)
+    raw_records = [
+        json.loads(line)
+        for line in fixture_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    report = evaluation.evaluate_records(records, _policy())
+
+    assert Counter(record.question_type for record in records) == {
+        "M1": 20,
+        "M2": 20,
+        "E1": 20,
+        "E2": 20,
+        "E3": 20,
+        "E4": 20,
+    }
+    assert report.promotion_eligible is True
+    assert all(
+        {"student", "student_answer", "candidate_body", "prompt"}.isdisjoint(record)
+        for record in raw_records
+    )
