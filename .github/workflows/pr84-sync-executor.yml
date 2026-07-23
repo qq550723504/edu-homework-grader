@@ -24,9 +24,60 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin main
-          git merge --no-commit --no-ff -X ours origin/main
+
+          # Retain PR #84 for ordinary conflict hunks. Explicitly reconcile the
+          # three overlapping generator files below so governance from main and
+          # the generator-v3 contract are both preserved.
+          git merge --no-commit --no-ff -X ours origin/main || true
+
+          while IFS= read -r -d '' path; do
+            if git show ":2:${path}" >/dev/null 2>&1; then
+              git checkout --ours -- "${path}"
+              git add "${path}"
+            else
+              git rm -f --ignore-unmatch -- "${path}"
+            fi
+          done < <(git diff --name-only --diff-filter=U -z)
+
+          git checkout origin/main -- \
+            apps/api/src/edu_grader_api/services/generation.py \
+            apps/api/tests/test_ai_question_generation_api.py \
+            apps/api/tests/test_generation_service.py
+
+          python - <<'PY'
+          from pathlib import Path
+
+          generation = Path("apps/api/src/edu_grader_api/services/generation.py")
+          text = generation.read_text(encoding="utf-8")
+          old = 'GENERATION_PROMPT_VERSION = "generator-v2"'
+          assert text.count(old) == 1
+          generation.write_text(text.replace(old, 'GENERATION_PROMPT_VERSION = "generator-v3"'), encoding="utf-8")
+
+          api_test = Path("apps/api/tests/test_ai_question_generation_api.py")
+          text = api_test.read_text(encoding="utf-8")
+          old = 'assert job.prompt_version == "generator-v2"'
+          assert text.count(old) == 1
+          api_test.write_text(text.replace(old, 'assert job.prompt_version == "generator-v3"'), encoding="utf-8")
+
+          service_test = Path("apps/api/tests/test_generation_service.py")
+          text = service_test.read_text(encoding="utf-8")
+          assertion = 'assert job.prompt_version == "generator-v2"'
+          resolver = 'resolve_prompt_template("generator-v2", ["M1"])'
+          assert text.count(assertion) == 1
+          assert text.count(resolver) == 2
+          text = text.replace(assertion, 'assert job.prompt_version == "generator-v3"')
+          text = text.replace(resolver, 'resolve_prompt_template("generator-v3", ["M1"])')
+          service_test.write_text(text, encoding="utf-8")
+          PY
+
           rm -f .github/workflows/pr84-sync-automation.yml
           rm -f .github/workflows/sync-main-verification-hardening.yml
+
+          if git diff --name-only --diff-filter=U | grep -q .; then
+            git status --short
+            exit 1
+          fi
+
           git add -A
           git commit -m "merge: sync AI governance stack into verification hardening"
           git push origin HEAD:codex/verification-hardening-consistency
