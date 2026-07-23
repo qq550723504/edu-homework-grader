@@ -13,6 +13,7 @@ from test_question_verification import (
     FailingE2Grader,
     FailingE3Grader,
     FailingE4Grader,
+    FailingGrader,
     MalformedE3FeedbackGrader,
     MissingSemanticGrader,
     NonFiniteE4Grader,
@@ -113,6 +114,7 @@ _M1_SCENARIOS = frozenset(
         "invalid_expected_rule",
         "negative_tolerance",
         "non_finite_tolerance",
+        "grader_failure",
     }
 )
 
@@ -556,7 +558,8 @@ def _run_case(
             candidate_json=_m1_candidate(scenario),
             prompt_version="generator-v3",
         )
-        run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
+        grader = FailingGrader() if scenario == "grader_failure" else PassingGrader()
+        run = verify_current_revision(session, draft=draft, grader_client=grader)
     elif question_type == "M2":
         grader: PassingM2Grader
         if scenario == "resource_limit":

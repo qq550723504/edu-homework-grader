@@ -22,5 +22,6 @@
     {"id": "m1-invalid-expected-rule", "scenario": "invalid_expected_rule", "expected_status": "blocked", "expected_codes": ["policy_schema_invalid"]},
     {"id": "m1-negative-tolerance", "scenario": "negative_tolerance", "expected_status": "blocked", "expected_codes": ["policy_schema_invalid"]},
     {"id": "m1-non-finite-tolerance", "scenario": "non_finite_tolerance", "expected_status": "blocked", "expected_codes": ["m1_answer_invalid"]}
+    ,{"id": "m1-grader-failure", "scenario": "grader_failure", "expected_status": "blocked", "expected_codes": ["m1_grader_probe_failed"]}
   ]
 }
