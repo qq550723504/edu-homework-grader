@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
+from edu_generator.providers import FakeGenerationProvider
 from edu_grader_api.auth import (
     CurrentPrincipal,
     VerifiedIdentity,
@@ -31,8 +32,11 @@ from edu_grader_api.models import (
     CurriculumProfileStatus,
     CurriculumRevisionStatus,
     CurriculumSourceRecord,
+    GenerationControlState,
+    GenerationGovernanceTargetType,
     GenerationJob,
     GenerationBatchAcceptance,
+    GenerationGovernanceEntry,
     GenerationJobStatus,
     GeneratedQuestionDraft,
     GeneratedQuestionDraftRevision,
@@ -49,6 +53,7 @@ from edu_grader_api.models import (
 from edu_grader_api.settings import settings
 import edu_grader_api.routers.ai_question_validation as validation_router
 import edu_grader_api.routers.ai_question_generation as generation_router
+from edu_grader_api.services.generation import GENERATION_PROMPT_VERSION
 import edu_grader_api.services.question_verification as question_verification
 from edu_generator.prompt_templates import resolve_prompt_template
 
@@ -119,6 +124,18 @@ def assert_public_validation_payload_is_sanitized(
     visit(payload)
     for forbidden in forbidden_values:
         assert all(forbidden not in value for value in string_values)
+
+
+class FailIfCalledProvider:
+    provider_name = "fake"
+    model_version = "fake-v1"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate(self, request: object) -> object:
+        self.calls += 1
+        raise AssertionError("provider should not be called when governance blocks the run")
 
 
 def test_public_validation_feature_summary_uses_recursive_allowlist() -> None:
@@ -248,6 +265,28 @@ def teacher_and_e4_objective(session: Session) -> tuple[User, CurriculumObjectiv
     return teacher, revision
 
 
+def add_governance_entry(
+    session: Session,
+    *,
+    tenant_id: UUID | None,
+    target_type: GenerationGovernanceTargetType,
+    target_key: str,
+    control_state: GenerationControlState,
+    is_global: bool = False,
+    created_by_user_id: UUID | None = None,
+) -> None:
+    session.add(
+        GenerationGovernanceEntry(
+            tenant_id=tenant_id if not is_global else None,
+            target_type=target_type,
+            target_key=target_key,
+            control_state=control_state,
+            is_global=is_global,
+            created_by_user_id=created_by_user_id,
+        )
+    )
+
+
 def create_and_fetch_e4_draft(client: TestClient, session: Session) -> object:
     teacher, revision = teacher_and_e4_objective(session)
     headers = authorize(client, teacher) | {"Idempotency-Key": "e4-reading-material"}
@@ -354,7 +393,7 @@ def test_generation_create_derives_course_and_versions_from_active_objective(
     assert job.grade == revision.objective.grade_mapping.internal_level
     assert job.subject == revision.objective.subject
     assert job.policy_version == "2026.07"
-    assert job.prompt_version == "generator-v2"
+    assert job.prompt_version == GENERATION_PROMPT_VERSION
 
 
 def test_generation_difficulty_plan_rejects_client_target_difficulty(
@@ -403,6 +442,88 @@ def test_generation_rejects_type_count_mismatch_with_a_stable_public_error(
 
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "generation_distribution_invalid"
+
+
+@pytest.mark.parametrize(
+    "state",
+    [GenerationControlState.CANARY, GenerationControlState.PAUSED, GenerationControlState.RETIRED],
+)
+def test_generation_create_with_globally_blocked_prompt_does_not_call_provider(
+    client: TestClient,
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    state: GenerationControlState,
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    add_governance_entry(
+        session,
+        tenant_id=teacher.tenant_id,
+        target_type=GenerationGovernanceTargetType.PROMPT_VERSION,
+        target_key=GENERATION_PROMPT_VERSION,
+        control_state=state,
+        is_global=True,
+    )
+    blocking_provider = FailIfCalledProvider()
+    monkeypatch.setattr(generation_router, "_generation_provider", lambda: blocking_provider)
+
+    response = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=authorize(client, teacher) | {"Idempotency-Key": "global-governance-blocked"},
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "items": [{"question_type": "M1", "difficulty_band": "standard"}],
+            "requested_count": 1,
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": {"code": "generation_request_rejected"}}
+    assert session.query(GenerationJob).count() == 0
+    assert blocking_provider.calls == 0
+
+
+def test_generation_create_with_tenant_canary_override_on_global_prompt_canary(
+    client: TestClient, session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    add_governance_entry(
+        session,
+        tenant_id=teacher.tenant_id,
+        target_type=GenerationGovernanceTargetType.PROMPT_VERSION,
+        target_key=GENERATION_PROMPT_VERSION,
+        control_state=GenerationControlState.CANARY,
+        is_global=True,
+    )
+    add_governance_entry(
+        session,
+        tenant_id=teacher.tenant_id,
+        target_type=GenerationGovernanceTargetType.PROMPT_VERSION,
+        target_key=GENERATION_PROMPT_VERSION,
+        control_state=GenerationControlState.CANARY,
+        is_global=False,
+    )
+    monkeypatch.setattr(
+        generation_router,
+        "_generation_provider",
+        lambda: FakeGenerationProvider(seed=7),
+    )
+
+    response = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=authorize(client, teacher) | {"Idempotency-Key": "tenant-canary-override"},
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "items": [{"question_type": "M1", "difficulty_band": "standard"}],
+            "requested_count": 1,
+        },
+    )
+
+    assert response.status_code == 201
+    job = session.get(GenerationJob, UUID(response.json()["id"]))
+    assert job is not None
+    assert job.status is GenerationJobStatus.READY_FOR_REVIEW
+    assert job.failure_code is None
+    assert len(job.drafts) == 1
 
 
 def test_generation_create_rejects_client_owned_course_and_version_fields(
