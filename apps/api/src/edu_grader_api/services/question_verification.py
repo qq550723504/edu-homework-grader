@@ -48,6 +48,9 @@ _DUPLICATE_REMEDIATION = "Revise the prompt to make the candidate meaningfully d
 _WHITESPACE = re.compile(r"\s+")
 _E2_TERMINAL_PUNCTUATION = re.compile(r"[.!?。！？]+$")
 _M1_PROBE_TEXT_LIMIT = 100
+# Mirrors the Grader's public safe-AST contract without importing its service package.
+_M2_SAFE_AST_MAX_DEPTH = 20
+_M2_SAFE_AST_MAX_NODES = 100
 _LEXICAL_UNITS = re.compile(
     r"[A-Za-z0-9\u00c0-\u024f\u1e00-\u1eff\u2c60-\u2c7f\ua720-\ua7ff\uab30-\uab6f]+(?:'[A-Za-z0-9\u00c0-\u024f\u1e00-\u1eff\u2c60-\u2c7f\ua720-\ua7ff\uab30-\uab6f]+)*|[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002ebef\U00030000-\U000323af]"
 )
@@ -811,8 +814,15 @@ def _m2_complexity_metrics(ast: dict[str, object]) -> tuple[Decimal | None, int]
         "symbol": (),
     }
 
-    def visit(node: object) -> None:
-        nonlocal maximum_numeric_value, operation_nodes
+    stack: list[tuple[object, int]] = [(ast, 0)]
+    safe_ast_nodes = 0
+    while stack:
+        node, depth = stack.pop()
+        if depth > _M2_SAFE_AST_MAX_DEPTH:
+            raise ValueError("safe MathJSON AST depth exceeds the supported limit")
+        safe_ast_nodes += 1
+        if safe_ast_nodes > _M2_SAFE_AST_MAX_NODES:
+            raise ValueError("safe MathJSON AST node count exceeds the supported limit")
         if not isinstance(node, dict):
             raise ValueError("safe MathJSON node must be an object")
         node_type = node.get("type")
@@ -840,12 +850,9 @@ def _m2_complexity_metrics(ast: dict[str, object]) -> tuple[Decimal | None, int]
             if child_key == "args":
                 if not isinstance(child, list) or len(child) < 2:
                     raise ValueError("safe MathJSON operation arguments are invalid")
-                for argument in child:
-                    visit(argument)
+                stack.extend((argument, depth + 1) for argument in reversed(child))
             else:
-                visit(child)
-
-    visit(ast)
+                stack.append((child, depth + 1))
     return (
         None if maximum_numeric_value is None else maximum_numeric_value,
         operation_nodes,

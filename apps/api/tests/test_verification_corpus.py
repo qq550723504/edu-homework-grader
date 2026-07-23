@@ -24,6 +24,7 @@ from test_question_verification import (
     PartialE4Grader,
     UnexpectedE3DecisionGrader,
     UnexpectedE4DecisionGrader,
+    SafeAstM2Grader,
     finding_codes,
     generation_draft,
     valid_e2_candidate,
@@ -131,6 +132,7 @@ _M2_SCENARIOS = frozenset(
         "explanation_mismatch",
         "score_mismatch",
         "invalid_score",
+        "deep_safe_ast",
         "resource_limit",
         "unexpected_decision",
         "non_finite_score",
@@ -556,6 +558,11 @@ def _run_case(
         grader: PassingM2Grader
         if scenario == "resource_limit":
             grader = PassingM2Grader(failing_probe_index=4, failure_kind="exception")
+        elif scenario == "deep_safe_ast":
+            ast: dict[str, object] = {"type": "symbol", "name": "x"}
+            for _ in range(21):
+                ast = {"type": "neg", "arg": ast}
+            grader = SafeAstM2Grader(ast)
         elif scenario == "unexpected_decision":
             grader = PassingM2Grader(failing_probe_index=1, failure_kind="unexpected_decision")
         elif scenario == "non_finite_score":

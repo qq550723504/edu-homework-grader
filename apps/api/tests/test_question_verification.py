@@ -2566,6 +2566,22 @@ def test_m2_unexpected_safe_ast_is_blocked_before_grader_probe(session: Session)
     assert grader.grade_requests == []
 
 
+def test_m2_deep_safe_ast_is_blocked_before_grader_probe(session: Session) -> None:
+    ast: dict[str, object] = {"type": "symbol", "name": "x"}
+    for _ in range(21):
+        ast = {"type": "neg", "arg": ast}
+    draft = generation_draft(
+        session, allowed_question_types=["M2"], candidate_json=valid_m2_candidate()
+    )
+    grader = SafeAstM2Grader(ast)
+
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
+
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding_codes(run) == {"m2_mathjson_invalid"}
+    assert grader.grade_requests == []
+
+
 def test_m2_rational_safe_ast_supports_numeric_complexity(session: Session) -> None:
     draft = generation_draft(
         session, allowed_question_types=["M2"], candidate_json=valid_m2_candidate()
