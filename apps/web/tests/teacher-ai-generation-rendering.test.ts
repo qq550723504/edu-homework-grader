@@ -97,7 +97,7 @@ describe('teacher AI generation request rendering', () => {
     await nextTick()
     expect((wrapper.get('select[aria-label="学科"]').element as HTMLSelectElement).value).toBe('')
     expect((wrapper.get('select[aria-label="课程目标"]').element as HTMLSelectElement).value).toBe('')
-    expect(wrapper.find('[data-testid="question-type-M1-decrement"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="question-type-M1-foundation-decrement"]').exists()).toBe(false)
   })
 
   it('shows only the active revision allowed types and its actual difficulty bounds', async () => {
@@ -106,21 +106,25 @@ describe('teacher AI generation request rendering', () => {
 
     expect(wrapper.get('[data-testid="difficulty-range"]').text()).toContain('0.2')
     expect(wrapper.get('[data-testid="difficulty-range"]').text()).toContain('0.6')
-    expect(wrapper.find('[data-testid="question-type-M1-increment"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="question-type-E2-increment"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="question-type-E4-increment"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="question-type-M1-foundation-increment"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="question-type-M1-standard-increment"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="question-type-M1-stretch-increment"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="question-type-E2-foundation-increment"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="question-type-E4-foundation-increment"]').exists()).toBe(false)
   })
 
   it('uses one idempotency key and navigates only to the public job URL after a successful request', async () => {
     const wrapper = await mountForm()
     await selectObjective(wrapper)
-    await wrapper.get('[data-testid="question-type-M1-increment"]').trigger('click')
+    await wrapper.get('[data-testid="question-type-M1-foundation-increment"]').trigger('click')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
     expect(mocks.createAiGenerationJob).toHaveBeenCalledWith(
       expect.any(Function), 'csrf-token', 'request-key', {
-        curriculum_objective_revision_id: 'objective-1', question_types: ['M1'], requested_count: 1,
+        curriculum_objective_revision_id: 'objective-1',
+        items: [{ question_type: 'M1', difficulty_band: 'foundation' }],
+        requested_count: 1,
       },
     )
     expect(crypto.randomUUID).toHaveBeenCalledTimes(1)
@@ -139,7 +143,7 @@ describe('teacher AI generation request rendering', () => {
     randomUUID.mockReturnValueOnce('request-key-1').mockReturnValueOnce('request-key-2')
     const wrapper = await mountForm()
     await selectObjective(wrapper)
-    await wrapper.get('[data-testid="question-type-M1-increment"]').trigger('click')
+    await wrapper.get('[data-testid="question-type-M1-foundation-increment"]').trigger('click')
 
     await wrapper.get('form').trigger('submit')
     await flushPromises()
@@ -168,7 +172,7 @@ describe('teacher AI generation request rendering', () => {
     randomUUID.mockReturnValueOnce('request-key-1').mockReturnValueOnce('request-key-2')
     const wrapper = await mountForm()
     await selectObjective(wrapper)
-    await wrapper.get('[data-testid="question-type-M1-increment"]').trigger('click')
+    await wrapper.get('[data-testid="question-type-M1-foundation-increment"]').trigger('click')
 
     await wrapper.get('form').trigger('submit')
     await flushPromises()

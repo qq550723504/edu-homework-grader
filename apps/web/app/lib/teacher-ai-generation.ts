@@ -6,6 +6,13 @@ type Request = <T>(url: string, options?: {
 
 export const teacherAiQuestionTypes = ['M1', 'M2', 'E1', 'E2', 'E3', 'E4'] as const
 export type TeacherAiQuestionType = typeof teacherAiQuestionTypes[number]
+export const teacherAiDifficultyBands = ['foundation', 'standard', 'stretch'] as const
+export type TeacherAiDifficultyBand = typeof teacherAiDifficultyBands[number]
+
+export interface TeacherAiGenerationPlanItem {
+  question_type: TeacherAiQuestionType
+  difficulty_band: TeacherAiDifficultyBand
+}
 
 export interface CurriculumProfile {
   code: string
@@ -41,7 +48,7 @@ export interface GenerationLimits {
 
 export interface CreateAiGenerationJobInput {
   curriculum_objective_revision_id: string
-  question_types: TeacherAiQuestionType[]
+  items: TeacherAiGenerationPlanItem[]
   requested_count: number
   teacher_constraint?: string
 }
@@ -50,13 +57,13 @@ export interface TeacherAiGenerationJobResult {
   id: string
 }
 
-export function expandQuestionTypeCounts(
-  counts: Partial<Record<TeacherAiQuestionType, number>>,
-): TeacherAiQuestionType[] {
-  return teacherAiQuestionTypes.flatMap((type) => Array.from(
-    { length: Math.max(0, counts[type] ?? 0) },
-    () => type,
-  ))
+export function expandGenerationPlanCounts(
+  counts: Partial<Record<TeacherAiQuestionType, Partial<Record<TeacherAiDifficultyBand, number>>>>,
+): TeacherAiGenerationPlanItem[] {
+  return teacherAiQuestionTypes.flatMap((questionType) => teacherAiDifficultyBands.flatMap((difficultyBand) => Array.from(
+    { length: Math.max(0, counts[questionType]?.[difficultyBand] ?? 0) },
+    () => ({ question_type: questionType, difficulty_band: difficultyBand }),
+  )))
 }
 
 export async function fetchCurriculumProfiles(request: Request): Promise<CurriculumProfile[]> {
@@ -97,7 +104,7 @@ export function createAiGenerationJob(
 ): Promise<TeacherAiGenerationJobResult> {
   const body = {
     curriculum_objective_revision_id: input.curriculum_objective_revision_id,
-    question_types: input.question_types,
+    items: input.items,
     requested_count: input.requested_count,
     ...(input.teacher_constraint === undefined ? {} : { teacher_constraint: input.teacher_constraint }),
   }

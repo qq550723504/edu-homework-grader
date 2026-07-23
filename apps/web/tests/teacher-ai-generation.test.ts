@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   createAiGenerationJob,
-  expandQuestionTypeCounts,
+  expandGenerationPlanCounts,
   fetchCurriculumGradeMappings,
   fetchCurriculumObjectives,
   fetchCurriculumProfiles,
@@ -10,11 +10,21 @@ import {
 } from '../app/lib/teacher-ai-generation'
 
 describe('teacher AI generation API', () => {
-  it('expands question type counts in a deterministic order and omits zero counts', () => {
-    const types = expandQuestionTypeCounts({ E2: 2, M2: 1, M1: 0, E1: 0, E3: 0, E4: 0 })
+  it('expands question-type difficulty-band counts in a deterministic order and omits zero counts', () => {
+    const items = expandGenerationPlanCounts({
+      M1: { foundation: 1, standard: 0, stretch: 1 },
+      M2: { foundation: 0, standard: 1 },
+      E2: { foundation: 0, standard: 2 },
+    })
 
-    expect(types).toEqual(['M2', 'E2', 'E2'])
-    expect(types).toHaveLength(3)
+    expect(items).toEqual([
+      { question_type: 'M1', difficulty_band: 'foundation' },
+      { question_type: 'M1', difficulty_band: 'stretch' },
+      { question_type: 'M2', difficulty_band: 'standard' },
+      { question_type: 'E2', difficulty_band: 'standard' },
+      { question_type: 'E2', difficulty_band: 'standard' },
+    ])
+    expect(items).toHaveLength(5)
   })
 
   it('reads the public curriculum catalog and generation limits through the same-origin BFF', async () => {
@@ -40,7 +50,10 @@ describe('teacher AI generation API', () => {
 
     await createAiGenerationJob(request, 'csrf-token', 'request-key', {
       curriculum_objective_revision_id: 'objective-revision-1',
-      question_types: ['M1', 'E2'],
+      items: [
+        { question_type: 'M1', difficulty_band: 'foundation' },
+        { question_type: 'E2', difficulty_band: 'stretch' },
+      ],
       requested_count: 2,
       teacher_constraint: '结合本周课堂练习。',
     })
@@ -50,7 +63,10 @@ describe('teacher AI generation API', () => {
       headers: { 'X-CSRF-Token': 'csrf-token', 'Idempotency-Key': 'request-key' },
       body: {
         curriculum_objective_revision_id: 'objective-revision-1',
-        question_types: ['M1', 'E2'],
+        items: [
+          { question_type: 'M1', difficulty_band: 'foundation' },
+          { question_type: 'E2', difficulty_band: 'stretch' },
+        ],
         requested_count: 2,
         teacher_constraint: '结合本周课堂练习。',
       },
@@ -68,7 +84,7 @@ describe('teacher AI generation API', () => {
     const request = vi.fn().mockResolvedValue({ id: 'job-1' })
     const untrustedInput = {
       curriculum_objective_revision_id: 'objective-revision-1',
-      question_types: ['M1'],
+      items: [{ question_type: 'M1', difficulty_band: 'foundation' }],
       requested_count: 1,
       teacher_constraint: '使用课堂词汇。',
       grade: 'forged-grade',
@@ -82,7 +98,7 @@ describe('teacher AI generation API', () => {
 
     expect(request.mock.calls[0][1].body).toEqual({
       curriculum_objective_revision_id: 'objective-revision-1',
-      question_types: ['M1'],
+      items: [{ question_type: 'M1', difficulty_band: 'foundation' }],
       requested_count: 1,
       teacher_constraint: '使用课堂词汇。',
     })

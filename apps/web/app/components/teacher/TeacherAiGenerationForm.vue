@@ -3,17 +3,19 @@ import { computed, onMounted, ref, watch } from 'vue'
 
 import {
   createAiGenerationJob,
-  expandQuestionTypeCounts,
+  expandGenerationPlanCounts,
   fetchCurriculumGradeMappings,
   fetchCurriculumObjectives,
   fetchCurriculumProfiles,
   fetchGenerationLimits,
+  teacherAiDifficultyBands,
   teacherAiQuestionTypes,
   type CurriculumGradeMapping,
   type CurriculumObjective,
   type CurriculumProfile,
   type CreateAiGenerationJobInput,
   type GenerationLimits,
+  type TeacherAiDifficultyBand,
   type TeacherAiQuestionType,
 } from '../../lib/teacher-ai-generation'
 import { fetchCurrentPrincipal } from '../../lib/student-api'
@@ -27,7 +29,12 @@ const selectedProfile = ref('')
 const selectedGrade = ref('')
 const selectedSubject = ref('')
 const selectedObjectiveRevisionId = ref('')
-const counts = ref<Partial<Record<TeacherAiQuestionType, number>>>({})
+type GenerationPlanCounts = Partial<Record<
+  TeacherAiQuestionType,
+  Partial<Record<TeacherAiDifficultyBand, number>>
+>>
+
+const counts = ref<GenerationPlanCounts>({})
 const teacherConstraint = ref('')
 const catalogLoading = ref(false)
 const limitsLoading = ref(false)
@@ -40,13 +47,14 @@ const selectedObjective = computed(() => objectives.value.find(
   (objective) => objective.revision.id === selectedObjectiveRevisionId.value,
 ) ?? null)
 const allowedTypes = computed(() => selectedObjective.value?.revision.allowed_question_types ?? [])
-const requestedTypes = computed(() => expandQuestionTypeCounts(counts.value))
-const requestedCount = computed(() => requestedTypes.value.length)
+const requestedItems = computed(() => expandGenerationPlanCounts(counts.value))
+const requestedCount = computed(() => requestedItems.value.length)
 const maximumCount = computed(() => limits.value
   ? Math.min(limits.value.max_batch_size, limits.value.remaining_count)
   : 0)
 const hasDisallowedType = computed(() => teacherAiQuestionTypes.some((type) => (
-  (counts.value[type] ?? 0) > 0 && !allowedTypes.value.includes(type)
+  Object.values(counts.value[type] ?? {}).some((count) => (count ?? 0) > 0)
+  && !allowedTypes.value.includes(type)
 )))
 const createDisabled = computed(() => catalogLoading.value
   || limitsLoading.value
@@ -167,13 +175,17 @@ function resetCounts() {
   counts.value = {}
 }
 
-function updateCount(type: TeacherAiQuestionType, amount: number) {
+function updateCount(type: TeacherAiQuestionType, difficultyBand: TeacherAiDifficultyBand, amount: number) {
   if (!allowedTypes.value.includes(type)) return
-  const next = Math.max(0, (counts.value[type] ?? 0) + amount)
+  const current = counts.value[type]?.[difficultyBand] ?? 0
+  const next = Math.max(0, current + amount)
   if (amount > 0 && requestedCount.value >= maximumCount.value) return
-  if (next === (counts.value[type] ?? 0)) return
+  if (next === current) return
   clearPendingGenerationRequest()
-  counts.value = { ...counts.value, [type]: next }
+  counts.value = {
+    ...counts.value,
+    [type]: { ...counts.value[type], [difficultyBand]: next },
+  }
 }
 
 watch(teacherConstraint, clearPendingGenerationRequest)
@@ -202,7 +214,7 @@ function generationInput(): CreateAiGenerationJobInput {
   const constraint = teacherConstraint.value.trim()
   return {
     curriculum_objective_revision_id: selectedObjective.value!.revision.id,
-    question_types: requestedTypes.value,
+    items: requestedItems.value,
     requested_count: requestedCount.value,
     ...(constraint ? { teacher_constraint: constraint } : {}),
   }
@@ -288,24 +300,27 @@ class MissingCsrfTokenError extends Error {}
         <h2 id="generation-options-heading">生成配置</h2>
         <p data-testid="difficulty-range">目标难度：{{ selectedObjective.revision.difficulty_min }} 至 {{ selectedObjective.revision.difficulty_max }}</p>
         <div class="ai-generation-form__counts">
-          <div v-for="type in allowedTypes" :key="type" class="ai-generation-form__count-control">
-            <span>{{ type }} 题</span>
-            <button
-              :aria-label="`减少 ${type} 题数量`"
-              :data-testid="`question-type-${type}-decrement`"
-              :disabled="submitting || !(counts[type] ?? 0)"
-              type="button"
-              @click="updateCount(type, -1)"
-            >−</button>
-            <output :aria-label="`${type} 题数量`">{{ counts[type] ?? 0 }}</output>
-            <button
-              :aria-label="`增加 ${type} 题数量`"
-              :data-testid="`question-type-${type}-increment`"
-              :disabled="submitting || requestedCount >= maximumCount"
-              type="button"
-              @click="updateCount(type, 1)"
-            >+</button>
-          </div>
+          <fieldset v-for="type in allowedTypes" :key="type" class="ai-generation-form__type-group">
+            <legend>{{ type }} 题</legend>
+            <div v-for="difficultyBand in teacherAiDifficultyBands" :key="difficultyBand" class="ai-generation-form__count-control">
+              <span>{{ difficultyBand }}</span>
+              <button
+                :aria-label="`减少 ${type} ${difficultyBand} 难度题数量`"
+                :data-testid="`question-type-${type}-${difficultyBand}-decrement`"
+                :disabled="submitting || !(counts[type]?.[difficultyBand] ?? 0)"
+                type="button"
+                @click="updateCount(type, difficultyBand, -1)"
+              >−</button>
+              <output :aria-label="`${type} ${difficultyBand} 难度题数量`">{{ counts[type]?.[difficultyBand] ?? 0 }}</output>
+              <button
+                :aria-label="`增加 ${type} ${difficultyBand} 难度题数量`"
+                :data-testid="`question-type-${type}-${difficultyBand}-increment`"
+                :disabled="submitting || requestedCount >= maximumCount"
+                type="button"
+                @click="updateCount(type, difficultyBand, 1)"
+              >+</button>
+            </div>
+          </fieldset>
         </div>
         <p>本次共 {{ requestedCount }} 题，当前可生成上限 {{ maximumCount }} 题。</p>
       </section>
@@ -324,6 +339,13 @@ class MissingCsrfTokenError extends Error {}
 .ai-generation-form__counts {
   display: grid;
   gap: 12px;
+}
+
+.ai-generation-form__type-group {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 12px;
 }
 
 .ai-generation-form__count-control {
