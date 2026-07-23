@@ -47,19 +47,39 @@ Excluded:
 
 ## Design
 
-### Consistency findings
+### Structured assertions and consistency findings
 
-The verification service will add narrow, deterministic helpers that operate
-only on supported policy shapes. Every helper returns an existing finding value
-object, so the orchestrator persists it as an immutable finding and derives the
-existing `blocked`/`warning` status normally.
+Free-form `explanation` has no machine-readable final conclusion in the current
+candidate contract. The validator must not use a natural-language parser or a
+regular expression to guess one. `GeneratedCandidate` therefore gains a
+strict, JSON-schema-visible `verification_assertions` object:
+
+- `final_answer_text`: the short final conclusion shown at the end of the
+  explanation;
+- `final_answer_mathjson`: a JSON-encoded MathJSON conclusion for M2, and null
+  for M1;
+- `declared_max_score`: the candidate's explicit total score.
+
+M1 and M2 require this object. The generator prompt requires the explanation
+to end with `Final answer: <final_answer_text>`, and M2 requires the encoded
+MathJSON assertion to normalize to the same safe AST as `rule_json.expected`.
+M1 requires the final-answer text to parse as the same finite Decimal as
+`rule_json.expected`; both types require `declared_max_score` to agree with the
+policy's effective maximum score. E1-E4 keep the field null in this PR; their
+typed assertion contract is introduced only in their own regression slice.
+
+The verification service adds narrow helpers that operate only on these
+supported shapes. Every helper returns an existing finding value object, so the
+orchestrator persists it as an immutable finding and derives the existing
+`blocked`/`warning` status normally. A legacy M1/M2 candidate without the
+assertions is blocked, never silently treated as consistent.
 
 New blocked codes use a stable, type-neutral vocabulary unless a type-specific
 reason is necessary:
 
 | Code | Meaning |
 | --- | --- |
-| `answer_explanation_inconsistent` | The explanation's declared conclusion conflicts with a canonical answer representation. |
+| `answer_explanation_inconsistent` | A required final-answer assertion is absent from the explanation suffix or conflicts with the canonical rule answer. |
 | `score_total_inconsistent` | A declared total does not equal the deterministic sum of supported scoring points. |
 | `scoring_point_invalid` | A required scoring-point structure is empty, non-finite, or semantically incomplete. |
 | `answer_form_inconsistent` | M1/M2 policy requirements conflict with the candidate answer representation. |
@@ -70,8 +90,8 @@ rule versions. It must not echo prompts, answer text, MathJSON, system prompts,
 provider responses, or raw exceptions.
 
 The helpers deliberately do not infer mathematical or linguistic meaning from
-free-form prose. They compare only explicit, canonical values that the policy
-and candidate schemas already own. Ambiguous structures receive
+free-form prose. They compare only the structured assertion, the required
+explanation suffix, and explicit policy values. Ambiguous structures receive
 `unsupported_consistency_structure` rather than a false pass.
 
 ### M1/M2 regression corpus
