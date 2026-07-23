@@ -12,6 +12,10 @@ def _parse_allowed_hosts(hosts: str) -> frozenset[str]:
     return frozenset(item.strip().casefold() for item in hosts.split(",") if item.strip())
 
 
+def _parse_subjects(subjects: str) -> frozenset[str]:
+    return frozenset(item.strip() for item in subjects.split(",") if item.strip())
+
+
 def _require_production_security_controls(
     *,
     app_env: str,
@@ -75,6 +79,7 @@ class Settings(BaseSettings):
     bootstrap_admin_sub: str = ""
     bootstrap_admin_tenant_slug: str = ""
     curriculum_admin_subjects: str = ""
+    generation_governance_admin_subjects: str = ""
     audit_hmac_key: str = DEFAULT_AUDIT_HMAC_KEY
     audit_hmac_key_version: str = "dev-1"
     processor_allowed_hosts: str = "grader,languagetool,localhost"
@@ -133,9 +138,11 @@ class Settings(BaseSettings):
 
     @property
     def curriculum_admin_subject_set(self) -> frozenset[str]:
-        return frozenset(
-            item.strip() for item in self.curriculum_admin_subjects.split(",") if item.strip()
-        )
+        return _parse_subjects(self.curriculum_admin_subjects)
+
+    @property
+    def generation_governance_admin_subject_set(self) -> frozenset[str]:
+        return _parse_subjects(self.generation_governance_admin_subjects)
 
     @property
     def allowed_generator_provider_hosts(self) -> frozenset[str]:
