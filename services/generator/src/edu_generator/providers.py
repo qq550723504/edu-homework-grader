@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from hashlib import sha256
+import json
 from typing import Protocol
 
 from .contracts import (
@@ -30,16 +31,23 @@ class FakeGenerationProvider:
         for ordinal, item in enumerate(request.items, start=1):
             question_type = item.question_type
             stable_value = self._stable_value(request, ordinal)
+            rule_json = _rule_for(question_type, stable_value)
             candidates.append(
                 {
                     "objective_revision_id": str(request.objective_revision_id),
                     "question_type": question_type,
                     "policy_version": _default_policy_version_for(question_type),
                     "prompt": f"{request.subject} {question_type} practice item {stable_value}.",
-                    "rule_json": _rule_for(question_type, stable_value),
-                    "explanation": f"Generated for {request.grade} using objective practice.",
+                    "rule_json": rule_json,
+                    "explanation": (
+                        f"Generated for {request.grade} using objective practice. "
+                        f"Final answer: {stable_value}"
+                    ),
                     "knowledge_point": f"{request.subject} objective practice",
                     "difficulty": item.target_difficulty,
+                    "verification_assertions": _verification_assertions(
+                        question_type, rule_json, stable_value
+                    ),
                     "reading_material": (
                         "The student gave a complete response about the practice item."
                         if question_type == "E4"
@@ -80,6 +88,26 @@ def _rule_for(question_type: str, stable_value: int) -> dict[str, object]:
             }
         ]
     }
+
+
+def _verification_assertions(
+    question_type: str, rule_json: dict[str, object], stable_value: int
+) -> dict[str, object] | None:
+    if question_type == "M1":
+        return {
+            "final_answer_text": str(stable_value),
+            "final_answer_mathjson": None,
+            "declared_max_score": 1,
+        }
+    if question_type == "M2":
+        return {
+            "final_answer_text": str(stable_value),
+            "final_answer_mathjson": json.dumps(
+                rule_json["expected"], separators=(",", ":")
+            ),
+            "declared_max_score": float(rule_json.get("max_score", 1)),
+        }
+    return None
 
 
 def _default_policy_version_for(question_type: str) -> str:

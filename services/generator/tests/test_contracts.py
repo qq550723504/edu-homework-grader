@@ -72,7 +72,34 @@ def test_generator_v2_requires_ordered_candidate_for_each_plan_item() -> None:
 
 def test_template_resolver_rejects_unknown_versions() -> None:
     with pytest.raises(ValueError, match="unknown prompt template version"):
-        resolve_prompt_template("generator-v3", ["M1"])
+        resolve_prompt_template("generator-v4", ["M1"])
+
+
+def test_generator_v3_requires_structured_m1_m2_assertions() -> None:
+    with pytest.raises(ValueError, match="null final_answer_mathjson"):
+        GeneratedCandidate.model_validate(
+            {
+                "objective_revision_id": str(uuid4()),
+                "question_type": "M1",
+                "policy_version": "1",
+                "prompt": "What is 2 + 2?",
+                "rule_json": {"expected": 4, "tolerance": 0},
+                "explanation": "Add the two numbers. Final answer: 4",
+                "knowledge_point": "addition",
+                "difficulty": 0.1,
+                "reading_material": None,
+                "verification_assertions": {
+                    "final_answer_text": "4",
+                    "final_answer_mathjson": json.dumps(["Add", 2, 2]),
+                    "declared_max_score": 1,
+                },
+            }
+        )
+
+    template = resolve_prompt_template("generator-v3", ["M1", "M2"])
+
+    assert template.schema_version == "generated_question_candidates-v2"
+    assert "Final answer:" in template.system_instructions
 
 
 def test_template_resolver_rejects_question_types_outside_template_scope() -> None:
