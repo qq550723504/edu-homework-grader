@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "status_as_of": "2026-07-24",
+  "evidence_base_commit": "475fc786076c4e744a89a8f4711cf6899ea9f6b7",
+  "latest_full_ci": {
+    "tested_head": "678194d86d0b385248c8181912dc6e02a2918fbc",
+    "workflow": "CI",
+    "run_number": 254,
+    "run_id": 30030354646,
+    "conclusion": "success",
+    "required_jobs": [
+      "changes",
+      "python",
+      "migrations",
+      "compose",
+      "live-grader-integration",
+      "web",
+      "browser-e2e"
+    ]
+  },
+  "ai_evaluation": {
+    "workflow": "AI evaluation gate",
+    "run_number": 33,
+    "run_id": 30030354483,
+    "conclusion": "success",
+    "operational_exporter_version": "operational-ai-evaluation-export-v1"
+  },
+  "live_generator_provider_acceptance": {
+    "run_id": 30024119371,
+    "conclusion": "success",
+    "contract": "generator-v3",
+    "question_types": ["M1", "M2", "E1", "E4"]
+  },
+  "generation_contract": {
+    "prompt_version": "generator-v3",
+    "validator_version": "verification-v5",
+    "ruleset_version": "rules-v5"
+  },
+  "default_question_policies": [
+    "M1@1",
+    "M2@2",
+    "E1@2",
+    "E2@1",
+    "E3@1",
+    "E4@2"
+  ],
+  "english_embedding_model": {
+    "model_id": "sentence-transformers/all-MiniLM-L6-v2",
+    "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+    "tree_digest": "sha256:84714cdabb16d132cbe6e1a4cbd21167abd09eccbdaf69dd053136ae68cc7c17",
+    "container_build_verified": true,
+    "live_grader_http_verified": true
+  },
+  "release_state": {
+    "code_implemented": true,
+    "repository_ci_verified": true,
+    "release_environment_full_stack_verified": false,
+    "school_pilot_environment_deployed": false,
+    "backup_restore_drill_verified": false,
+    "production_live": false
+  },
+  "open_release_blockers": [31, 32, 33, 34, 42, 43, 76, 83, 99]
+}
