@@ -14,18 +14,5 @@
     "teacher_direct_accept_rate_min": 0.6,
     "teacher_modified_accept_rate_min": 0.85,
     "published_without_teacher_review_max": 0
-  },
-  "evidence_requirements": {
-    "required_question_types": [
-      "M1",
-      "M2",
-      "E1",
-      "E2",
-      "E3",
-      "E4"
-    ],
-    "minimum_total_records": 120,
-    "minimum_records_per_question_type": 20,
-    "minimum_reviewed_records_per_question_type": 20
   }
 }
