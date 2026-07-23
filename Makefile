@@ -23,7 +23,7 @@ calibration-report:
 	python -m edu_grader.calibration services/grader/tests/fixtures/english_calibration.jsonl
 
 ai-evaluation:
-	python -m edu_grader_api.services.ai_evaluation apps/api/tests/fixtures/ai_evaluation/policy-v1.json apps/api/tests/fixtures/ai_evaluation/golden-v1.jsonl artifacts/ai-evaluation
+	python -m edu_grader_api.services.ai_evaluation_gate apps/api/tests/fixtures/ai_evaluation/policy-v1.json apps/api/tests/fixtures/ai_evaluation/golden-v1.jsonl artifacts/ai-evaluation
 
 verification-regression:
 	python -m pytest apps/api/tests/test_verification_corpus.py -q -s
