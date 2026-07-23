@@ -19,6 +19,7 @@ from edu_grader_api.models import (
     Tenant,
     User,
 )
+from edu_grader_api.services.generation import GENERATION_PROMPT_VERSION
 from edu_grader_api.services.generation_governance import (
     GenerationGovernanceError,
     assert_generation_pipeline_allowed,
@@ -94,7 +95,7 @@ def add_entry(
     is_global: bool,
     state: GenerationControlState,
     target_type: GenerationGovernanceTargetType = GenerationGovernanceTargetType.PROMPT_VERSION,
-    target_key: str = "generator-v2",
+    target_key: str = GENERATION_PROMPT_VERSION,
 ) -> None:
     session.add(
         GenerationGovernanceEntry(
@@ -131,7 +132,7 @@ def test_global_kill_switch_cannot_be_overridden(
             session,
             tenant_id=admin.tenant_id,
             curriculum_profile_id="profile-1",
-            prompt_version="generator-v2",
+            prompt_version=GENERATION_PROMPT_VERSION,
             provider_name="fake",
             model_version="fake-v1",
         )
@@ -151,7 +152,7 @@ def test_global_canary_requires_explicit_tenant_canary(session: Session) -> None
             session,
             tenant_id=admin.tenant_id,
             curriculum_profile_id="profile-1",
-            prompt_version="generator-v2",
+            prompt_version=GENERATION_PROMPT_VERSION,
             provider_name="fake",
             model_version="fake-v1",
         )
@@ -166,7 +167,7 @@ def test_global_canary_requires_explicit_tenant_canary(session: Session) -> None
         session,
         tenant_id=admin.tenant_id,
         curriculum_profile_id="profile-1",
-        prompt_version="generator-v2",
+        prompt_version=GENERATION_PROMPT_VERSION,
         provider_name="fake",
         model_version="fake-v1",
     )
@@ -182,7 +183,7 @@ def test_tenant_admin_write_is_committed_and_audited(
         json={
             "is_global": False,
             "target_type": "prompt_version",
-            "target_key": "generator-v2",
+            "target_key": GENERATION_PROMPT_VERSION,
             "control_state": "paused",
             "note": "Tenant maintenance window",
         },
