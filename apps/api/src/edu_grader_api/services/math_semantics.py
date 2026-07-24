@@ -171,6 +171,8 @@ def unavailable_math_semantics_signal(reason: str) -> dict[str, object]:
 def _evaluate_m1(
     policy_version: str | None, rule_json: dict[str, object]
 ) -> MathSemanticsEvaluation:
+    if "expected" not in rule_json:
+        return _schema_owned_evaluation("M1", policy_version)
     expected = rule_json.get("expected")
     if isinstance(expected, bool):
         return _generic_unsupported("M1", policy_version)
@@ -208,6 +210,8 @@ def _evaluate_m1(
 def _evaluate_m2(
     policy_version: str | None, rule_json: dict[str, object]
 ) -> MathSemanticsEvaluation:
+    if "expected" not in rule_json:
+        return _schema_owned_evaluation("M2", policy_version)
     expected = rule_json.get("expected")
     classified = _classify_m2_value(expected, variables=_declared_variables(rule_json))
     if classified is None:
@@ -347,6 +351,19 @@ def _blocked_evaluation(
         semantic_class=semantic_class,
         trigger_operator=trigger_operator,
         findings=(MathSemanticsFinding(code=code, evidence=evidence, remediation=remediation),),
+    )
+
+
+def _schema_owned_evaluation(
+    question_type: str, policy_version: str | None
+) -> MathSemanticsEvaluation:
+    return MathSemanticsEvaluation(
+        question_type=question_type,
+        policy_version=policy_version,
+        support_status="not_applicable",
+        semantic_class="not_applicable",
+        trigger_operator=None,
+        findings=(),
     )
 
 
