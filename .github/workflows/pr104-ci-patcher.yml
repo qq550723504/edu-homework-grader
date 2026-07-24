@@ -26,23 +26,23 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          path = Path('.github/workflows/ci.yml')
-          text = path.read_text(encoding='utf-8')
-          replacements = {
-              'run: python -m ruff format --check packages/processor-policy services/generator apps/api services/grader':
-                  'run: make ruff-version-check && python -m ruff format --check packages/processor-policy services/generator apps/api services/grader',
-              'run: python -m ruff check packages/processor-policy services/generator apps/api services/grader':
-                  'run: python -m ruff check --config ruff.toml packages/processor-policy services/generator apps/api services/grader',
-          }
-          for old, new in replacements.items():
-              if text.count(old) != 1:
-                  raise SystemExit(f'expected exactly one CI command: {old}')
-              text = text.replace(old, new, 1)
-          path.write_text(text, encoding='utf-8')
+          path = Path(".github/workflows/ci.yml")
+          text = path.read_text(encoding="utf-8")
+          old_format = "run: python -m ruff format --check packages/processor-policy services/generator apps/api services/grader"
+          new_format = "run: make ruff-version-check && python -m ruff format --check packages/processor-policy services/generator apps/api services/grader"
+          old_lint = "run: python -m ruff check packages/processor-policy services/generator apps/api services/grader"
+          new_lint = "run: python -m ruff check --config ruff.toml packages/processor-policy services/generator apps/api services/grader"
+          if text.count(old_format) != 1 or text.count(old_lint) != 1:
+              raise SystemExit("CI Ruff commands did not match the expected baseline")
+          path.write_text(
+              text.replace(old_format, new_format, 1).replace(old_lint, new_lint, 1),
+              encoding="utf-8",
+          )
           PY
-          rm -f .github/workflows/pr104-ci-patcher.yml
+          git rm .github/workflows/pr104-ci-patcher.yml
+          git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .github/workflows/ci.yml .github/workflows/pr104-ci-patcher.yml
+          git add -A
           git commit -m 'ci: enforce the pinned Ruff policy'
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
