@@ -17,11 +17,10 @@ from ..models import (
     GenerationValidationRun,
     Role,
 )
-from .ai_question_generation import _actor, _authorized_draft
+from ..services.budget_aware_verification import run_budget_aware_candidate_verification
 from ..services.grader import HttpGraderClient
-from ..services.question_verification import run_candidate_verification
 from ..settings import settings
-
+from .ai_question_generation import _actor, _authorized_draft
 
 router = APIRouter(prefix="/v1", tags=["AI question validation"])
 _PUBLIC_SUMMARY_SCALAR_KEYS = (
@@ -39,6 +38,13 @@ _PUBLIC_DIFFICULTY_SCALAR_KEYS = (
 )
 _PUBLIC_DIFFICULTY_RANGE_KEYS = ("min", "max")
 _PUBLIC_DIFFICULTY_FEATURE_KEYS = ("type", "value", "contribution")
+_PUBLIC_CAPACITY_SCALAR_KEYS = ("availability", "version", "reason", "load_bucket")
+_PUBLIC_BUDGET_SCALAR_KEYS = (
+    "availability",
+    "version",
+    "total_budget_seconds",
+    "status",
+)
 _PUBLIC_COMPARISON_COUNT_KEYS = ("published_question", "batch_candidate")
 _PUBLIC_EMBEDDING_DEPENDENCY_KEYS = ("id", "revision")
 _PUBLIC_FINDING_EVIDENCE_SCALAR_KEYS = (
@@ -71,8 +77,13 @@ _PUBLIC_FINDING_EVIDENCE_SCALAR_KEYS = (
     "rule_id",
     "policy_version",
     "field",
+    "ruleset_version",
+    "load_bucket",
+    "stage",
+    "dependency",
+    "total_budget_seconds",
 )
-_PUBLIC_FINDING_EVIDENCE_STRING_LIST_KEYS = ("allowed_question_types",)
+_PUBLIC_FINDING_EVIDENCE_STRING_LIST_KEYS = ("allowed_question_types", "violations")
 _PRIVATE_FEATURE_KEY_PARTS = ("digest", "fingerprint", "hash")
 _PUBLIC_FINDING_REMEDIATION = {
     "blocked": "Resolve this validation finding and run validation again.",
@@ -94,7 +105,7 @@ def create_validation_run_route(
     revision = session.get(GeneratedQuestionDraftRevision, draft.current_revision_id)
     if revision is None or revision.generated_question_draft_id != draft.id:
         raise RuntimeError("current candidate revision is unavailable")
-    run = run_candidate_verification(
+    run = run_budget_aware_candidate_verification(
         session,
         draft=draft,
         revision=revision,
@@ -195,6 +206,12 @@ def _public_feature_summary(summary: dict[str, object]) -> dict[str, object]:
     difficulty_signal = summary.get("difficulty_signal")
     if isinstance(difficulty_signal, dict):
         public_summary["difficulty_signal"] = _public_difficulty_signal(difficulty_signal)
+    capacity_signal = summary.get("verification_capacity_signal")
+    if isinstance(capacity_signal, dict):
+        public_summary["verification_capacity_signal"] = _public_capacity_signal(capacity_signal)
+    budget_signal = summary.get("verification_budget_signal")
+    if isinstance(budget_signal, dict):
+        public_summary["verification_budget_signal"] = _public_budget_signal(budget_signal)
     comparison_counts = summary.get("comparison_counts")
     if isinstance(comparison_counts, dict):
         public_summary["comparison_counts"] = _public_scalar_fields(
@@ -225,6 +242,18 @@ def _public_difficulty_signal(signal: dict[object, object]) -> dict[str, object]
             if isinstance(feature, dict)
         ]
     return public_signal
+
+
+def _public_capacity_signal(signal: dict[object, object]) -> dict[str, object]:
+    public_signal = _public_scalar_fields(signal, _PUBLIC_CAPACITY_SCALAR_KEYS)
+    violations = signal.get("violations")
+    if isinstance(violations, list) and all(isinstance(item, str) for item in violations):
+        public_signal["violations"] = list(violations)
+    return public_signal
+
+
+def _public_budget_signal(signal: dict[object, object]) -> dict[str, object]:
+    return _public_scalar_fields(signal, _PUBLIC_BUDGET_SCALAR_KEYS)
 
 
 def _public_scalar_fields(
