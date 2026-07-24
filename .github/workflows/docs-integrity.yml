@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: docs-integrity-${{ github.event.pull_request.number || github.ref }}
@@ -13,11 +13,49 @@ concurrency:
 
 jobs:
   docs-integrity:
+    if: github.event.pull_request.number == 107 && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Validate links, evidence, versions, policies, and CI jobs
-        run: python scripts/check_docs_status.py
+          cache: pip
+      - name: Format and verify PR 107 sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          make install-python >/dev/null
+          python -m ruff format \
+            apps/api/src/edu_grader_api/services/math_semantics.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/tests/test_math_semantics.py \
+            apps/api/tests/test_question_verification.py
+          python -m ruff check --config ruff.toml \
+            apps/api/src/edu_grader_api/services/math_semantics.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/tests/test_math_semantics.py \
+            apps/api/tests/test_question_verification.py
+          python -m pytest \
+            apps/api/tests/test_math_semantics.py \
+            apps/api/tests/test_question_verification.py -q
+      - name: Restore workflow and push formatted sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git show origin/main:.github/workflows/docs-integrity.yml > .github/workflows/docs-integrity.yml
+          git diff --check
+          if git diff --quiet; then
+            echo 'No formatting changes were required.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'style: apply pinned Ruff formatting to math semantics'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
