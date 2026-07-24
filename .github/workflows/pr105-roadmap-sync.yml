@@ -1,4 +1,4 @@
-name: PR 105 roadmap synchronization
+name: PR 105 finalization
 
 on:
   push:
@@ -9,38 +9,86 @@ permissions:
   contents: write
 
 jobs:
-  sync:
+  finalize:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/objective-prerequisite-verification-v1
+          fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Update roadmap and remove this workflow
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Align E2E fixture and roadmap
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
 
-          path = Path('docs/roadmap.md')
-          text = path.read_text(encoding='utf-8')
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+              return text.replace(old, new, 1)
+
+          e2e = Path('apps/api/src/edu_grader_api/e2e_support.py')
+          text = e2e.read_text(encoding='utf-8')
+          text = replace_once(
+              text,
+              '            knowledge_point="arithmetic and expression practice",',
+              '            knowledge_point="E2E G7 M1 M2 review batch objective practice",',
+              'E2E prerequisite knowledge-point fixture',
+          )
+          e2e.write_text(text, encoding='utf-8')
+
+          roadmap = Path('docs/roadmap.md')
+          text = roadmap.read_text(encoding='utf-8')
           old = '''- [x] PR #103：版本化 Profile/年级复杂度规则、E3/E4 语言篇幅信号、M1/M2 数值复杂度与 `verification-v6` / `rules-v6`；
 - [ ] #83：剩余 Objective prerequisite、数学多解/定义域/增根漏根语义和容量 SLO；'''
           new = '''- [x] PR #103：版本化 Profile/年级复杂度规则、E3/E4 语言篇幅信号与 M1/M2 数值复杂度；
 - [x] PR #105：Objective prerequisite 传递闭包门禁、稳定 finding 和 `verification-v7` / `rules-v7`；
 - [ ] #83：剩余数学多解/定义域/增根漏根语义和容量 SLO；'''
-          if text.count(old) != 1:
-              raise SystemExit('roadmap implementation status did not match expected baseline')
-          text = text.replace(old, new, 1)
-          text = text.replace('#83 课程/数学语义边界 ─┐', '#83 数学语义/容量边界 ─┐', 1)
-          path.write_text(text, encoding='utf-8')
+          text = replace_once(text, old, new, 'roadmap implementation status')
+          text = replace_once(
+              text,
+              '#83 课程/数学语义边界 ─┐',
+              '#83 数学语义/容量边界 ─┐',
+              'roadmap dependency label',
+          )
+          roadmap.write_text(text, encoding='utf-8')
           PY
+      - name: Format and run focused verification tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          make install-python >/dev/null
+          python -m ruff format \
+            apps/api/src/edu_grader_api/e2e_support.py \
+            apps/api/src/edu_grader_api/services/objective_prerequisites.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/tests/test_objective_prerequisites.py \
+            apps/api/tests/test_question_verification.py
+          python -m ruff check --config ruff.toml \
+            apps/api/src/edu_grader_api/e2e_support.py \
+            apps/api/src/edu_grader_api/services/objective_prerequisites.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/tests/test_objective_prerequisites.py \
+            apps/api/tests/test_question_verification.py
+          python -m pytest \
+            apps/api/tests/test_objective_prerequisites.py \
+            apps/api/tests/test_question_verification.py -q
+      - name: Commit final reviewable branch
+        shell: bash
+        run: |
+          set -euo pipefail
           git rm .github/workflows/pr105-roadmap-sync.yml
           git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
-          git commit -m 'docs: synchronize prerequisite verification roadmap'
+          git commit -m 'fix: finalize objective prerequisite verification'
           git push origin HEAD:agent/objective-prerequisite-verification-v1
