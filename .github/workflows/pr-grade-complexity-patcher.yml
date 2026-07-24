@@ -1,4 +1,4 @@
-name: PR grade complexity targeted diagnostics
+name: PR grade complexity targeted fixer
 
 on:
   pull_request:
@@ -8,7 +8,7 @@ permissions:
   contents: write
 
 jobs:
-  diagnose:
+  fix-and-test:
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.head.ref == 'agent/grade-complexity-rules-v1' &&
@@ -30,46 +30,43 @@ jobs:
       - name: Install Python packages
         run: make install-python
 
-      - name: Run targeted diagnostics
-        id: diagnostics
+      - name: Apply safe Ruff fixes and formatting
         shell: bash
         run: |
-          set +e
-          : > targeted-grade-complexity.log
-          python -m ruff check \
+          set -euo pipefail
+          python -m ruff check --fix --exit-zero \
             apps/api/src/edu_grader_api/services/curriculum_imports.py \
             apps/api/src/edu_grader_api/services/grade_complexity.py \
             apps/api/src/edu_grader_api/services/question_verification.py \
             apps/api/tests/test_grade_complexity.py \
-            apps/api/tests/test_question_verification.py \
-            >> targeted-grade-complexity.log 2>&1
-          lint_status=$?
-          python -m pytest \
+            apps/api/tests/test_question_verification.py
+          python -m ruff format \
+            apps/api/src/edu_grader_api/services/curriculum_imports.py \
+            apps/api/src/edu_grader_api/services/grade_complexity.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
             apps/api/tests/test_grade_complexity.py \
-            apps/api/tests/test_curriculum_imports.py \
-            apps/api/tests/test_question_verification.py -q \
-            >> targeted-grade-complexity.log 2>&1
-          test_status=$?
-          cat targeted-grade-complexity.log
-          status=$lint_status
-          if [[ $test_status -ne 0 ]]; then
-            status=$test_status
-          fi
-          echo "status=$status" >> "$GITHUB_OUTPUT"
-          exit 0
+            apps/api/tests/test_question_verification.py
 
-      - name: Persist diagnostic log
-        if: steps.diagnostics.outputs.status != '0'
+      - name: Persist safe fixes
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -f targeted-grade-complexity.log
-          git commit -m 'chore: capture targeted grade complexity failures'
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
-          exit 1
+          git add \
+            apps/api/src/edu_grader_api/services/curriculum_imports.py \
+            apps/api/src/edu_grader_api/services/grade_complexity.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/tests/test_grade_complexity.py \
+            apps/api/tests/test_question_verification.py
+          if ! git diff --cached --quiet; then
+            git commit -m 'style: normalize grade complexity slice'
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          fi
 
-      - name: Confirm targeted checks
-        if: steps.diagnostics.outputs.status == '0'
-        run: rm -f targeted-grade-complexity.log
+      - name: Run targeted tests
+        run: |
+          python -m pytest \
+            apps/api/tests/test_grade_complexity.py \
+            apps/api/tests/test_curriculum_imports.py \
+            apps/api/tests/test_question_verification.py -q
