@@ -16,7 +16,7 @@ dependencies = [
 openai = ["openai>=1.66,<3"]
 dev = [
   "pytest>=8.4,<10",
-  "ruff==0.15.14",
+  "ruff==0.16.0",
 ]
 
 [tool.setuptools.packages.find]
