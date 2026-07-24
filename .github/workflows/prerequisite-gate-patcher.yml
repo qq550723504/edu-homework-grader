@@ -4,10 +4,6 @@ on:
   push:
     branches:
       - agent/objective-prerequisite-verification-v1
-  pull_request:
-    branches:
-      - main
-    types: [synchronize]
 
 permissions:
   contents: write
@@ -18,10 +14,7 @@ concurrency:
 
 jobs:
   patch:
-    if: >-
-      github.actor != 'github-actions[bot]' &&
-      (github.event_name != 'pull_request' ||
-       github.event.pull_request.head.ref == 'agent/objective-prerequisite-verification-v1')
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,189 +25,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-          cache: pip
-      - name: Integrate prerequisite evidence into candidate verification
+      - name: Apply, format, and commit the integration
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-
-          def replace_once(text: str, old: str, new: str, label: str) -> str:
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"{label}: expected one match, found {count}")
-              return text.replace(old, new, 1)
-
-          path = Path("apps/api/src/edu_grader_api/services/question_verification.py")
-          text = path.read_text(encoding="utf-8")
-          text = replace_once(
-              text,
-              """from .grade_complexity import (\n    evaluate_grade_complexity,\n    unavailable_grade_complexity_signal,\n)\nfrom .grader import EmbeddingDependencyVersion, SemanticSimilarityResult\n""",
-              """from .grade_complexity import (\n    evaluate_grade_complexity,\n    unavailable_grade_complexity_signal,\n)\nfrom .grader import EmbeddingDependencyVersion, SemanticSimilarityResult\nfrom .objective_prerequisites import (\n    evaluate_objective_prerequisite_alignment,\n    unavailable_objective_prerequisite_signal,\n)\n""",
-              "prerequisite import",
-          )
-          text = replace_once(
-              text,
-              'VALIDATOR_VERSION = "verification-v6"\nRULESET_VERSION = "rules-v6"',
-              'VALIDATOR_VERSION = "verification-v7"\nRULESET_VERSION = "rules-v7"',
-              "version bump",
-          )
-          text = replace_once(
-              text,
-              """    difficulty_signal: dict[str, object]\n    grade_complexity_signal: dict[str, object]\n""",
-              """    difficulty_signal: dict[str, object]\n    grade_complexity_signal: dict[str, object]\n    objective_prerequisite_signal: dict[str, object]\n""",
-              "candidate evaluation signal",
-          )
-          text = replace_once(
-              text,
-              """            grade_complexity_signal=unavailable_grade_complexity_signal("validator_unavailable"),\n""",
-              """            grade_complexity_signal=unavailable_grade_complexity_signal("validator_unavailable"),\n            objective_prerequisite_signal=unavailable_objective_prerequisite_signal(\n                "validator_unavailable"\n            ),\n""",
-              "validator unavailable signal",
-          )
-          text = replace_once(
-              text,
-              """        difficulty_signal=evaluation.difficulty_signal,\n        grade_complexity_signal=evaluation.grade_complexity_signal,\n""",
-              """        difficulty_signal=evaluation.difficulty_signal,\n        grade_complexity_signal=evaluation.grade_complexity_signal,\n        objective_prerequisite_signal=evaluation.objective_prerequisite_signal,\n""",
-              "persist call signal",
-          )
-          text = replace_once(
-              text,
-              """    findings: list[VerificationFinding] = []\n    grade_complexity_signal = unavailable_grade_complexity_signal("candidate_not_evaluated")\n""",
-              """    findings: list[VerificationFinding] = []\n    grade_complexity_signal = unavailable_grade_complexity_signal("candidate_not_evaluated")\n    objective_prerequisite_signal = unavailable_objective_prerequisite_signal(\n        "candidate_not_evaluated"\n    )\n""",
-              "candidate signal initialization",
-          )
-          text = replace_once(
-              text,
-              """    difficulty = candidate.get("difficulty")\n""",
-              """    prerequisite_evaluation = evaluate_objective_prerequisite_alignment(\n        session,\n        target_revision=revision,\n        candidate_knowledge_point=candidate.get("knowledge_point"),\n    )\n    findings.extend(\n        VerificationFinding(\n            code=finding.code,\n            severity=ValidationFindingSeverity(finding.severity),\n            evidence=finding.evidence,\n            remediation=finding.remediation,\n        )\n        for finding in prerequisite_evaluation.findings\n    )\n    objective_prerequisite_signal = prerequisite_evaluation.feature_summary()\n\n    difficulty = candidate.get("difficulty")\n""",
-              "candidate prerequisite evaluation",
-          )
-          text = replace_once(
-              text,
-              """        grade_complexity_signal=grade_complexity_signal,\n    )\n""",
-              """        grade_complexity_signal=grade_complexity_signal,\n        objective_prerequisite_signal=objective_prerequisite_signal,\n    )\n""",
-              "candidate evaluation return",
-          )
-          text = replace_once(
-              text,
-              """    difficulty_signal: dict[str, object],\n    grade_complexity_signal: dict[str, object],\n) -> GenerationValidationRun:\n""",
-              """    difficulty_signal: dict[str, object],\n    grade_complexity_signal: dict[str, object],\n    objective_prerequisite_signal: dict[str, object],\n) -> GenerationValidationRun:\n""",
-              "persist signature",
-          )
-          text = replace_once(
-              text,
-              """            "difficulty_signal": difficulty_signal,\n            "grade_complexity_signal": grade_complexity_signal,\n            **duplicate_feature_summary,\n""",
-              """            "difficulty_signal": difficulty_signal,\n            "grade_complexity_signal": grade_complexity_signal,\n            "objective_prerequisite_signal": objective_prerequisite_signal,\n            **duplicate_feature_summary,\n""",
-              "feature summary signal",
-          )
-          path.write_text(text, encoding="utf-8")
-
-          test_path = Path("apps/api/tests/test_question_verification.py")
-          tests = test_path.read_text(encoding="utf-8")
-          tests = replace_once(
-              tests,
-              """    CurriculumObjective,\n    CurriculumObjectiveRevision,\n    CurriculumProfile,\n""",
-              """    CurriculumObjective,\n    CurriculumObjectiveRevision,\n    CurriculumPrerequisite,\n    CurriculumProfile,\n""",
-              "test prerequisite import",
-          )
-          tests = tests.replace('"verification-v6"', '"verification-v7"')
-          tests = tests.replace('"rules-v6"', '"rules-v7"')
-          tests = tests.replace(
-              '{"difficulty_signal", "grade_complexity_signal"}',
-              '{"difficulty_signal", "grade_complexity_signal", "objective_prerequisite_signal"}',
-          )
-          marker = "def test_verification_persists_objective_prerequisite_signal"
-          if marker in tests:
-              raise SystemExit("integration tests already present")
-          tests += r'''
-
-
-def test_verification_persists_objective_prerequisite_signal(session: Session) -> None:
-    draft = generation_draft(session)
-    job = session.get(GenerationJob, draft.job_id)
-    assert job is not None
-    target_revision = job.curriculum_objective_revision
-    target_revision.objective.knowledge_point = "whole-number addition"
-    session.flush()
-
-    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
-
-    signal = run.feature_summary_json["objective_prerequisite_signal"]
-    assert signal == {
-        "availability": "available",
-        "version": "objective-prerequisite-v1",
-        "target_objective_code": target_revision.objective.code,
-        "resolution": "target",
-        "candidate_alias_digest": signal["candidate_alias_digest"],
-        "matched_objective_code": target_revision.objective.code,
-        "prerequisite_depth": 0,
-        "allowed_objective_count": 1,
-        "prerequisite_revision_count": 0,
-    }
-    assert str(signal["candidate_alias_digest"]).startswith("sha256:")
-    assert "whole-number addition" not in json.dumps(signal)
-
-
-def test_verification_blocks_known_objective_outside_prerequisite_closure(
-    session: Session,
-) -> None:
-    candidate = valid_m1_candidate("What is 2 + 2?")
-    candidate["knowledge_point"] = "fraction division"
-    draft = generation_draft(session, candidate_json=candidate)
-    job = session.get(GenerationJob, draft.job_id)
-    assert job is not None
-    target_revision = job.curriculum_objective_revision
-    target_revision.objective.knowledge_point = "whole-number addition"
-    outside_objective = CurriculumObjective(
-        profile=target_revision.objective.profile,
-        grade_mapping=target_revision.objective.grade_mapping,
-        code=f"MATH-G6-FRACTION-{uuid4()}",
-        subject="mathematics",
-        domain="number",
-        knowledge_point="fraction division",
-        status=CurriculumProfileStatus.ACTIVE,
-    )
-    outside_revision = CurriculumObjectiveRevision(
-        objective=outside_objective,
-        revision_number=1,
-        text="Divide fractions.",
-        source_locator="section outside",
-        allowed_question_types=["M1"],
-        difficulty_min=0,
-        difficulty_max=1,
-        activity_type=CurriculumActivityType.SCORED_QUESTION,
-        status=CurriculumRevisionStatus.ACTIVE,
-    )
-    session.add(outside_revision)
-    session.flush()
-
-    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
-
-    finding = finding_by_code(run, "objective_prerequisite_out_of_scope")
-    assert run.status is ValidationRunStatus.BLOCKED
-    assert finding.severity.value == "blocked"
-    assert finding.evidence_json["matched_objective_code"] == outside_objective.code
-    assert finding.evidence_json["ruleset_version"] == "objective-prerequisite-v1"
-    assert "fraction division" not in json.dumps(finding.evidence_json)
-'''
-          test_path.write_text(tests, encoding="utf-8")
-          PY
-          python -m pip install -e packages/processor-policy -e "services/generator[openai,dev]" -e "apps/api[dev]" -e "services/grader[dev]" >/dev/null
+          python scripts/apply_objective_prerequisite_integration.py
+          python -m pip install ruff==0.16.0 >/dev/null
           python -m ruff format \
             apps/api/src/edu_grader_api/services/objective_prerequisites.py \
             apps/api/src/edu_grader_api/services/question_verification.py \
             apps/api/tests/test_objective_prerequisites.py \
             apps/api/tests/test_question_verification.py
-          python -m ruff check --config ruff.toml \
-            apps/api/src/edu_grader_api/services/objective_prerequisites.py \
-            apps/api/src/edu_grader_api/services/question_verification.py \
-            apps/api/tests/test_objective_prerequisites.py \
-            apps/api/tests/test_question_verification.py
-          python -m pytest \
-            apps/api/tests/test_objective_prerequisites.py \
-            apps/api/tests/test_question_verification.py -q
-          git rm .github/workflows/prerequisite-gate-patcher.yml
+          git rm \
+            .github/workflows/prerequisite-gate-patcher.yml \
+            scripts/apply_objective_prerequisite_integration.py
           git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
