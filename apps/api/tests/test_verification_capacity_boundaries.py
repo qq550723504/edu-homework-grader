@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
+from edu_grader_api.services import verification_capacity as capacity
 from edu_grader_api.services.verification_capacity import (
+    MAX_JSON_NODES,
     MAX_PROMPT_CHARS,
     VERIFICATION_CAPACITY_RULESET_VERSION,
     evaluate_verification_capacity,
@@ -38,3 +42,35 @@ def test_lone_unicode_surrogate_fails_closed_without_content() -> None:
         "ruleset_version": VERIFICATION_CAPACITY_RULESET_VERSION,
         "reason": "candidate_not_serializable",
     }
+
+
+def test_node_limit_short_circuits_json_sizing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    value = candidate(prompt="bounded traversal")
+    value["extra_nodes"] = list(range(MAX_JSON_NODES + 100))
+
+    def fail_if_sized(value: object, limit: int) -> int:
+        raise AssertionError("structurally oversized payload must not be serialized")
+
+    monkeypatch.setattr(capacity, "_bounded_json_size", fail_if_sized)
+
+    evaluation = evaluate_verification_capacity(value)
+
+    assert evaluation.blocked is True
+    assert evaluation.observations["json_nodes"] == MAX_JSON_NODES + 1
+    assert evaluation.violations == ("json_nodes",)
+
+
+def test_json_size_saturates_at_limit_without_full_materialization() -> None:
+    assert capacity._bounded_json_size("x" * 10_000, 32) == 33
+
+
+def test_non_string_nested_json_key_fails_closed() -> None:
+    value = candidate(prompt="invalid JSON key")
+    value["rule_json"] = {1: "not a JSON object key"}
+
+    evaluation = evaluate_verification_capacity(value)
+
+    assert evaluation.load_bucket == "invalid"
+    assert evaluation.findings[0].evidence["reason"] == "candidate_not_serializable"
