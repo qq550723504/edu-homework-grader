@@ -26,9 +26,9 @@
 | 学生端 | 作业、草稿隔离、同步、提交、反馈、申诉与订正入口已实现；快速浏览器 E2E 使用隔离 SQLite、固定测试身份和确定性判卷替身 | #32 仍需完成网络/401/403/409/422/429/5xx 分类、冲突处理和页面生命周期清理；真实学生试点需 #31/#33 |
 | 教师端 | 英语 E1–E4 引导建题、多题作业、题目测试/发布、复核、成绩发布、申诉处理和 AI 出题工作台已实现 | 教师影子模式需 #31 的统一发布环境验收和 #42 的教师校准质量证据 |
 | Core API | 课程目录、题库、作业、审核、隐私、名册、监护人同意、Generator、验证、治理和生产评估导出已实现 | 发布环境中的身份、数据库、审计和故障降级仍需统一验证 |
-| Grader | M1/M2、E1–E4、受限 MathJSON、LanguageTool 和固定英语嵌入模型已实现；E3/E4 保持教师最终复核 | 性能容量、学校网络和发布环境持续运行由 #31/#33 验收 |
+| Grader | M1/M2、E1–E4、受限 MathJSON、LanguageTool 和固定英语嵌入模型已实现；E3/E4 保持教师最终复核；内部 HTTP 调用已有显式超时 | 细分依赖预算、P95/P99、学校网络和发布环境持续运行由 #83/#31/#33 验收 |
 | OIDC/BFF | Nuxt BFF、CSRF、HttpOnly 会话和开发 Keycloak 路径已实现 | 学校托管 HTTPS OIDC、真实角色映射和会话策略需 #31/#33 |
-| AI 出题 | 课程约束、真实 Provider、`generator-v3`、候选验证、编辑/重验、拒绝/重生成、原子批量接受和安全转草稿已实现；验证器已加入版本化年级复杂度、Objective prerequisite 图门禁和显式数学语义支持矩阵 | 未经审核直接发布仍禁止；容量 SLO、正式阈值、生产报告和发布环境验收仍缺 |
+| AI 出题 | 课程约束、真实 Provider、`generator-v3`、候选验证、编辑/重验、拒绝/重生成、原子批量接受和安全转草稿已实现；生产验证入口已加入年级复杂度、Objective prerequisite、数学语义和 `verification-capacity-v1` 载荷预检 | 未经审核直接发布仍禁止；总验证预算、P95 基线、正式阈值、生产报告和发布环境验收仍缺 |
 | AI 治理 | 全局/租户 `active`、`canary`、`paused`、`retired`、Kill Switch、权限和审计基础已实现 | #43 仍需默认版本晋级/回滚、预算、Provider 合规、版权下架和事故手册 |
 | AI 评估 | 离线 fail-closed 门禁和生产形态只读导出/显式版本比较已实现 | #99 需首次真实只读数据库报告；#42 需教师黄金集、最终阈值、线上反馈和 shadow/canary 证据 |
 | 部署 | Compose、Kubernetes 清单和 SHA 镜像发布工作流存在 | 清单存在不等于环境已部署；#33 的实际 rollout、监控、备份恢复和回滚尚未验收 |
@@ -55,7 +55,7 @@ CI Run #404（Run ID `30094998343`）成功，包含：
 
 AI evaluation gate Run #183（Run ID `30094998330`）成功。Docs integrity Run #150（Run ID `30094998328`）成功。
 
-这些结果证明仓库基线通过自动化门禁，**不证明学校发布环境已经验收或生产已上线**。
+这些结果证明已合并仓库基线通过自动化门禁。PR #109 的容量切片必须在精确最终 head 重新取得同等证据后才能合并，**上述结果不证明学校发布环境已经验收或生产已上线**。
 
 ### 真实 AI Provider
 
@@ -76,13 +76,30 @@ generator-v3
 | 项目 | 当前值 |
 | --- | --- |
 | Prompt | `generator-v3` |
-| Validator | `verification-v8` |
-| Ruleset | `rules-v8` |
+| Core Validator | `verification-v8` |
+| Core Ruleset | `rules-v8` |
+| Capacity-aware production Validator | `verification-v9` |
+| Capacity-aware production Ruleset | `rules-v9` |
+| Verification capacity rules | `verification-capacity-v1` |
+| Grader HTTP timeout | `10s`，可由 `GRADER_REQUEST_TIMEOUT_SECONDS` 覆盖 |
 | Grade complexity rules | `grade-complexity-v1`（历史平面规则归一为 `grade-complexity-legacy-v0`） |
 | Objective prerequisite rules | `objective-prerequisite-v1` |
 | Math semantics rules | `math-semantics-v1` |
 | Operational evaluation exporter | `operational-ai-evaluation-export-v1` |
 | 默认策略 | `M1@1`、`M2@2`、`E1@2`、`E2@1`、`E3@1`、`E4@2` |
+
+### 容量预检边界
+
+`verification-capacity-v1` 在题干指纹、重复查询、MathJSON 规范化和 Grader/LanguageTool/相似度调用之前执行，并限制：
+
+- 候选总 JSON 字节数；
+- 题干、解析和阅读材料长度；
+- 规则与验证断言字节数；
+- JSON 深度与节点数；
+- 评分点、证据短语及单短语长度；
+- 控制字符和异常连续组合字符。
+
+超限、不可序列化或预检异常均 fail closed，只保存载荷桶、数值观测、限制和稳定 violation code；不保存题干、答案、阅读材料或原始规则正文。教师编辑重验、拒绝补验和直接验证 API 均通过同一容量入口。
 
 ### 英语嵌入模型
 
@@ -109,18 +126,19 @@ Grader Dockerfile 两个阶段均固定上述值。Compose/CI 已成功构建真
 | #41 | 教师 AI 出题工作台已完成。 |
 | #42 | 开放：教师黄金集、正式阈值、线上反馈和 shadow/canary。 |
 | #43 | 开放：运营治理剩余项。 |
-| #83 | 开放：年级复杂度、Objective prerequisite 与数学语义门禁已实现；仍缺容量边界。 |
+| #83 | 开放：载荷预检和 Grader HTTP timeout 已实现；仍缺总验证预算、细分依赖超时和 P95/P99 基线。 |
 | #99 | 开放：首次真实只读数据库评估、成本完整性和发布后修正映射。 |
+| #108 | 开放：首个确定性预检切片由 PR #109 实现，剩余总预算与性能报告继续跟踪。 |
 | #76 | 开放：AI Authoring Teacher Shadow MVP 里程碑。 |
 
 ## 当前发布阻断顺序
 
 ```text
-#83 验证容量边界 ─────┐
-#99 正式生产评估 ──────┼→ #42 教师阈值与线上证据 ─┐
-#43 运营治理 ──────────┘                          ├→ #31 统一全栈验收
-#32 学生同步可靠性 ──────────────────────────────┤
-                                                    └→ #33 学校试点部署
+#83 / #108 总预算与性能 ┐
+#99 正式生产评估 ────────┼→ #42 教师阈值与线上证据 ─┐
+#43 运营治理 ────────────┘                          ├→ #31 统一全栈验收
+#32 学生同步可靠性 ────────────────────────────────┤
+                                                      └→ #33 学校试点部署
 ```
 
 #34 已完成，后续状态漂移由 `Docs integrity` 自动阻止。
