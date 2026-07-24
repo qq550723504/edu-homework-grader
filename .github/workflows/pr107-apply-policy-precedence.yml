@@ -1,3 +1,4 @@
+# One-shot finalizer trigger.
 name: PR 107 policy precedence finalizer
 
 on:
