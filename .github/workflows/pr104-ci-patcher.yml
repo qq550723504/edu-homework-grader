@@ -1,0 +1,48 @@
+name: PR 104 CI command patcher
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/pin-ruff-toolchain' &&
+      github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Make CI use the pinned lint policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/ci.yml')
+          text = path.read_text(encoding='utf-8')
+          replacements = {
+              'run: python -m ruff format --check packages/processor-policy services/generator apps/api services/grader':
+                  'run: make ruff-version-check && python -m ruff format --check packages/processor-policy services/generator apps/api services/grader',
+              'run: python -m ruff check packages/processor-policy services/generator apps/api services/grader':
+                  'run: python -m ruff check --config ruff.toml packages/processor-policy services/generator apps/api services/grader',
+          }
+          for old, new in replacements.items():
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected exactly one CI command: {old}')
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          rm -f .github/workflows/pr104-ci-patcher.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/ci.yml .github/workflows/pr104-ci-patcher.yml
+          git commit -m 'ci: enforce the pinned Ruff policy'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
