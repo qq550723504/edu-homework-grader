@@ -1,0 +1,46 @@
+name: PR 105 roadmap synchronization
+
+on:
+  push:
+    branches:
+      - agent/objective-prerequisite-verification-v1
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/objective-prerequisite-verification-v1
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Update roadmap and remove this workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('docs/roadmap.md')
+          text = path.read_text(encoding='utf-8')
+          old = '''- [x] PR #103：版本化 Profile/年级复杂度规则、E3/E4 语言篇幅信号、M1/M2 数值复杂度与 `verification-v6` / `rules-v6`；
+- [ ] #83：剩余 Objective prerequisite、数学多解/定义域/增根漏根语义和容量 SLO；'''
+          new = '''- [x] PR #103：版本化 Profile/年级复杂度规则、E3/E4 语言篇幅信号与 M1/M2 数值复杂度；
+- [x] PR #105：Objective prerequisite 传递闭包门禁、稳定 finding 和 `verification-v7` / `rules-v7`；
+- [ ] #83：剩余数学多解/定义域/增根漏根语义和容量 SLO；'''
+          if text.count(old) != 1:
+              raise SystemExit('roadmap implementation status did not match expected baseline')
+          text = text.replace(old, new, 1)
+          text = text.replace('#83 课程/数学语义边界 ─┐', '#83 数学语义/容量边界 ─┐', 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          git rm .github/workflows/pr105-roadmap-sync.yml
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'docs: synchronize prerequisite verification roadmap'
+          git push origin HEAD:agent/objective-prerequisite-verification-v1
