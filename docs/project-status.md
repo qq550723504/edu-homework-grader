@@ -3,7 +3,7 @@
 机器可读证据见 [`status-evidence.json`](status-evidence.json)。本页的证据基线提交为：
 
 ```text
-3b24d698c04ddb20c2a92d144cc62fb1eb844350
+668c315fd85ab16cf6ea455d1641b50cdecd0ef6
 ```
 
 ## 状态口径
@@ -37,25 +37,25 @@
 
 ### 最近完整 CI
 
-PR #107 的最终代码测试提交：
+PR #109 的最终代码测试提交：
 
 ```text
-3b24d698c04ddb20c2a92d144cc62fb1eb844350
+668c315fd85ab16cf6ea455d1641b50cdecd0ef6
 ```
 
-CI Run #404（Run ID `30094998343`）成功，包含：
+CI Run #438（Run ID `30102154827`）成功，包含：
 
 - `changes`
-- `python`：固定 Ruff 0.16.0、显式规则配置、完整 Python 测试和六题型确定性验证语料
+- `python`：固定 Ruff 0.16.0、完整 Python 测试和六题型确定性验证语料
 - `migrations`：PostgreSQL upgrade/downgrade/re-upgrade
 - `compose`：配置校验和 API/Web 镜像构建
 - `live-grader-integration`：真实 Grader/LanguageTool HTTP 适配器
 - `web`：单元测试、Nuxt production build 和 E2E 进程管理
 - `browser-e2e`：Chromium 学生/教师快速垂直链路
 
-AI evaluation gate Run #183（Run ID `30094998330`）成功。Docs integrity Run #150（Run ID `30094998328`）成功。
+AI evaluation gate Run #217（Run ID `30102154800`）成功。Docs integrity Run #184（Run ID `30102154856`）成功。
 
-这些结果证明已合并仓库基线通过自动化门禁。PR #109 的容量切片必须在精确最终 head 重新取得同等证据后才能合并，**上述结果不证明学校发布环境已经验收或生产已上线**。
+这些结果证明本容量切片在精确代码提交上通过仓库自动化门禁，**不证明学校发布环境已经验收或生产已上线**。
 
 ### 真实 AI Provider
 
