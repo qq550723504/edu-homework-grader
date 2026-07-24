@@ -19,5 +19,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+          cache: pip
+      - name: Install pinned Python toolchain
+        run: make install-python >/dev/null
+      - name: Capture full Python test log
+        shell: bash
+        run: |
+          set +e
+          mkdir -p pr107-full-test
+          make test > pr107-full-test/pytest.log 2>&1
+          status=$?
+          printf '%s\n' "$status" > pr107-full-test/exit-status.txt
+          exit 0
+      - name: Upload full Python test log
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr107-full-python-test-log
+          path: pr107-full-test
       - name: Validate links, evidence, versions, policies, and CI jobs
         run: python scripts/check_docs_status.py
