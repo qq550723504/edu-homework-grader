@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "status_as_of": "2026-07-24",
-  "evidence_base_commit": "668c315fd85ab16cf6ea455d1641b50cdecd0ef6",
+  "evidence_base_commit": "1dbe669d97c81cf815e81f5d2cb5f20b1e5e9611",
   "latest_full_ci": {
-    "tested_head": "668c315fd85ab16cf6ea455d1641b50cdecd0ef6",
+    "tested_head": "1dbe669d97c81cf815e81f5d2cb5f20b1e5e9611",
     "workflow": "CI",
-    "run_number": 438,
-    "run_id": 30102154827,
+    "run_number": 459,
+    "run_id": 30106268432,
     "conclusion": "success",
     "required_jobs": [
       "changes",
@@ -20,8 +20,8 @@
   },
   "ai_evaluation": {
     "workflow": "AI evaluation gate",
-    "run_number": 217,
-    "run_id": 30102154800,
+    "run_number": 238,
+    "run_id": 30106268417,
     "conclusion": "success",
     "operational_exporter_version": "operational-ai-evaluation-export-v1"
   },
