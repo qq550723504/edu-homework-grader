@@ -1,0 +1,265 @@
+name: PR 111 owner finalize and branch cleanup
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: read
+  issues: read
+
+env:
+  TARGET_BRANCH: agent/verification-budget-v1
+  WORKFLOW_PATH: .github/workflows/pr111-owner-finalize-and-clean.yml
+
+jobs:
+  finalize-and-clean:
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.issue.number == 111 &&
+      github.actor == github.repository_owner &&
+      github.event.comment.body == '/finalize-pr111-and-clean-branches'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Synchronize current main
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git merge --no-edit -X ours origin/main
+
+      - name: Apply idempotent verification-budget integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          review_path = Path('apps/api/src/edu_grader_api/services/ai_question_review.py')
+          review = review_path.read_text(encoding='utf-8')
+          capacity_import = (
+              'from .capacity_aware_verification import '
+              'run_capacity_aware_candidate_verification'
+          )
+          budget_import = (
+              'from .budget_aware_verification import '
+              'run_budget_aware_candidate_verification'
+          )
+          if capacity_import in review:
+              review = review.replace(capacity_import, budget_import, 1)
+          elif budget_import not in review:
+              raise SystemExit('teacher review verification import is missing')
+          review = review.replace(
+              'run_capacity_aware_candidate_verification(',
+              'run_budget_aware_candidate_verification(',
+          )
+          if review.count('run_budget_aware_candidate_verification(') < 2:
+              raise SystemExit('teacher review budget calls are incomplete')
+          review_path.write_text(review, encoding='utf-8')
+
+          wrapper_path = Path(
+              'apps/api/src/edu_grader_api/services/budget_aware_verification.py'
+          )
+          wrapper = wrapper_path.read_text(encoding='utf-8')
+          old_terminal = '''    summary = dict(run.feature_summary_json)
+              summary["verification_capacity_signal"] = unavailable_verification_capacity_signal(
+                  "verification_timeout"
+              )
+          '''
+          new_terminal = '''    run.status = ValidationRunStatus.BLOCKED
+              summary = dict(run.feature_summary_json)
+              summary["verification_capacity_signal"] = unavailable_verification_capacity_signal(
+                  "verification_timeout"
+              )
+          '''
+          if old_terminal in wrapper:
+              wrapper = wrapper.replace(old_terminal, new_terminal, 1)
+
+          start = wrapper.index('def _finalize_run(')
+          end = wrapper.index('\ndef _finding_for_terminal_budget(', start)
+          finalize = '''def _finalize_run(
+              session: Session,
+              *,
+              run: GenerationValidationRun,
+              budget: VerificationBudget,
+              terminal_finding: core.VerificationFinding | None,
+          ) -> GenerationValidationRun:
+              added_terminal_finding = False
+              if terminal_finding is not None and not any(
+                  finding.code == terminal_finding.code for finding in run.findings
+              ):
+                  session.add(
+                      ValidationFinding(
+                          validation_run_id=run.id,
+                          code=terminal_finding.code,
+                          severity=terminal_finding.severity,
+                          evidence_json=terminal_finding.evidence,
+                          remediation=terminal_finding.remediation,
+                      )
+                  )
+                  added_terminal_finding = True
+              if terminal_finding is not None:
+                  run.status = ValidationRunStatus.BLOCKED
+
+              summary = dict(run.feature_summary_json)
+              summary["verification_budget_signal"] = budget.feature_summary()
+              if added_terminal_finding:
+                  summary["finding_count"] = int(summary.get("finding_count", 0)) + 1
+              run.feature_summary_json = summary
+              run.validator_version = BUDGET_AWARE_VALIDATOR_VERSION
+              run.ruleset_version = BUDGET_AWARE_RULESET_VERSION
+              session.flush()
+              return run
+
+          '''
+          wrapper = wrapper[:start] + finalize + wrapper[end + 1 :]
+          wrapper_path.write_text(wrapper, encoding='utf-8')
+
+          test_path = Path('apps/api/tests/test_budget_aware_verification.py')
+          tests = test_path.read_text(encoding='utf-8').replace(
+              'assert persisted.status is ValidationRunStatus.PASSED',
+              'assert persisted.status is ValidationRunStatus.BLOCKED',
+          )
+          test_path.write_text(tests, encoding='utf-8')
+          PY
+
+      - name: Remove temporary PR integration files
+        run: |
+          rm -f \
+            .github/workflows/pr111-integrate-budget.yml \
+            .github/workflows/pr111-budget-finalizer.yml \
+            .github/.pr111-budget-integration-trigger
+
+      - name: Format, lint, and run focused regression
+        run: |
+          set -euo pipefail
+          make install-python >/dev/null
+          python -m ruff format \
+            apps/api/src/edu_grader_api/routers/ai_question_validation.py \
+            apps/api/src/edu_grader_api/services/ai_question_review.py \
+            apps/api/src/edu_grader_api/services/verification_budget.py \
+            apps/api/src/edu_grader_api/services/budget_aware_verification.py \
+            apps/api/tests/test_verification_budget.py \
+            apps/api/tests/test_budget_aware_verification.py \
+            apps/api/tests/test_verification_budget_public_api.py \
+            apps/api/tests/test_verification_budget_settings.py
+          python -m ruff check --config ruff.toml \
+            apps/api/src/edu_grader_api/routers/ai_question_validation.py \
+            apps/api/src/edu_grader_api/services/ai_question_review.py \
+            apps/api/src/edu_grader_api/services/verification_budget.py \
+            apps/api/src/edu_grader_api/services/budget_aware_verification.py \
+            apps/api/tests/test_verification_budget.py \
+            apps/api/tests/test_budget_aware_verification.py \
+            apps/api/tests/test_verification_budget_public_api.py \
+            apps/api/tests/test_verification_budget_settings.py
+          python -m pytest \
+            apps/api/tests/test_verification_budget.py \
+            apps/api/tests/test_budget_aware_verification.py \
+            apps/api/tests/test_verification_budget_public_api.py \
+            apps/api/tests/test_verification_budget_settings.py \
+            apps/api/tests/test_ai_question_review.py \
+            apps/api/tests/test_ai_question_validation.py -q
+          git diff --check
+
+      - name: Commit finalized PR branch
+        run: |
+          set -euo pipefail
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No PR branch changes required.'
+          else
+            git commit -m 'feat: finalize shared verification timeout budget'
+            git push origin HEAD:${TARGET_BRANCH}
+          fi
+
+      - name: Safely clean stale remote branches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*' --prune
+          mapfile -t open_heads < <(
+            gh pr list --repo "$REPO" --state open --limit 1000 --json headRefName --jq '.[].headRefName'
+          )
+          is_open_head() {
+            local candidate="$1"
+            local item
+            for item in "${open_heads[@]}"; do
+              [[ "$item" == "$candidate" ]] && return 0
+            done
+            return 1
+          }
+
+          deleted=()
+          skipped=()
+          while IFS= read -r branch; do
+            [[ -z "$branch" ]] && continue
+            [[ "$branch" == 'main' || "$branch" == "$TARGET_BRANCH" ]] && continue
+            if is_open_head "$branch"; then
+              skipped+=("$branch:open-pr")
+              continue
+            fi
+
+            sha="$(git rev-parse "refs/remotes/origin/$branch")"
+            safe_reason=''
+            if git merge-base --is-ancestor "$sha" origin/main; then
+              safe_reason='ancestor-of-main'
+            else
+              exact_merged_count="$(
+                gh pr list --repo "$REPO" --state merged --head "$branch" --limit 100 \
+                  --json headRefOid --jq --arg sha "$sha" '[.[] | select(.headRefOid == $sha)] | length'
+              )"
+              if [[ "$exact_merged_count" != '0' ]]; then
+                safe_reason='exact-head-of-merged-pr'
+              elif [[ "$branch" == agent/pr84-sync-* || \
+                      "$branch" == agent/project-status-copy-patch || \
+                      "$branch" == agent/pr101-* ]]; then
+                closed_count="$(
+                  gh pr list --repo "$REPO" --state closed --head "$branch" --limit 100 \
+                    --json number --jq 'length'
+                )"
+                if [[ "$closed_count" != '0' ]]; then
+                  safe_reason='closed-one-shot-helper'
+                fi
+              fi
+            fi
+
+            if [[ -n "$safe_reason" ]]; then
+              git push origin --delete "$branch"
+              deleted+=("$branch:$safe_reason")
+            else
+              skipped+=("$branch:unverified-independent-work")
+            fi
+          done < <(
+            git for-each-ref --format='%(refname:strip=3)' refs/remotes/origin \
+              | grep -v '^HEAD$' \
+              | sort -u
+          )
+
+          printf 'Deleted branches (%s):\n' "${#deleted[@]}"
+          printf '  %s\n' "${deleted[@]:-none}"
+          printf 'Skipped branches (%s):\n' "${#skipped[@]}"
+          printf '  %s\n' "${skipped[@]:-none}"
+
+      - name: Remove one-shot workflow from main
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git checkout -B main origin/main
+          git rm -f "$WORKFLOW_PATH"
+          git commit -m 'chore: remove completed PR 111 maintenance workflow'
+          git push origin HEAD:main
