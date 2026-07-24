@@ -1,0 +1,62 @@
+name: PR 111 one-shot diagnostics
+
+on:
+  push:
+    branches:
+      - agent/verification-budget-v1
+
+permissions:
+  actions: read
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  diagnostics:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/verification-budget-v1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish failure log tails
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api -H 'Accept: application/vnd.github+json' \
+            "repos/$REPO/actions/jobs/89547030552/logs" > /tmp/python.log
+          gh api -H 'Accept: application/vnd.github+json' \
+            "repos/$REPO/actions/jobs/89547030559/logs" > /tmp/web.log
+          {
+            echo '### PR #111 failed-check diagnostics'
+            echo
+            echo '<details><summary>Python test tail</summary>'
+            echo
+            echo '```text'
+            tail -n 180 /tmp/python.log
+            echo '```'
+            echo '</details>'
+            echo
+            echo '<details><summary>Web process-supervisor tail</summary>'
+            echo
+            echo '```text'
+            tail -n 120 /tmp/web.log
+            echo '```'
+            echo '</details>'
+          } > /tmp/comment.md
+          gh pr comment 111 --repo "$REPO" --body-file /tmp/comment.md
+
+      - name: Remove diagnostic workflow
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/pr111-diagnostic-logs.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'chore: remove completed PR 111 diagnostic workflow'
+          git push origin HEAD:agent/verification-budget-v1
