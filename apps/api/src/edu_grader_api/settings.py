@@ -141,9 +141,7 @@ class Settings(BaseSettings):
             generation_provider=info.data["generation_provider"],
             openai_api_key=info.data["openai_api_key"],
             generator_openai_model=info.data["generator_openai_model"],
-            generator_provider_allowed_hosts=info.data[
-                "generator_provider_allowed_hosts"
-            ],
+            generator_provider_allowed_hosts=info.data["generator_provider_allowed_hosts"],
         )
         return ai_duplicate_similarity_threshold
 
