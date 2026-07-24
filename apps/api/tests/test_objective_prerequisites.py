@@ -121,7 +121,7 @@ def curriculum_graph(
     return CurriculumGraph(target=target, prerequisite=prerequisite, outside=outside)
 
 
-def test_target_and_transitive_prerequisite_aliases_are_allowed(session: Session) -> None:
+def test_target_and_prerequisite_aliases_are_allowed(session: Session) -> None:
     graph = curriculum_graph(session)
 
     target = evaluate_objective_prerequisite_alignment(
@@ -142,6 +142,52 @@ def test_target_and_transitive_prerequisite_aliases_are_allowed(session: Session
     assert prerequisite.prerequisite_depth == 1
     assert prerequisite.findings == ()
     assert prerequisite.feature_summary()["version"] == OBJECTIVE_PREREQUISITE_RULESET_VERSION
+
+
+def test_transitive_prerequisite_records_depth_without_persisting_text(session: Session) -> None:
+    graph = curriculum_graph(session)
+    foundation_objective = CurriculumObjective(
+        profile=graph.target.objective.profile,
+        grade_mapping=graph.target.objective.grade_mapping,
+        code="MATH-G3-COUNTING",
+        subject="mathematics",
+        domain="number",
+        knowledge_point="counting foundations",
+        status=CurriculumProfileStatus.ACTIVE,
+    )
+    foundation_revision = CurriculumObjectiveRevision(
+        objective=foundation_objective,
+        revision_number=1,
+        text="Count and compose whole numbers.",
+        source_locator="section foundation",
+        allowed_question_types=["M1"],
+        difficulty_min=0,
+        difficulty_max=1,
+        activity_type=CurriculumActivityType.SCORED_QUESTION,
+        status=CurriculumRevisionStatus.ACTIVE,
+    )
+    session.add(foundation_revision)
+    session.flush()
+    session.add(
+        CurriculumPrerequisite(
+            objective_revision_id=graph.prerequisite.id,
+            prerequisite_revision_id=foundation_revision.id,
+            relation_type="requires",
+        )
+    )
+    session.flush()
+
+    evaluation = evaluate_objective_prerequisite_alignment(
+        session,
+        target_revision=graph.target,
+        candidate_knowledge_point="counting foundations",
+    )
+
+    assert evaluation.resolution == "prerequisite"
+    assert evaluation.prerequisite_depth == 2
+    assert evaluation.prerequisite_revision_count == 2
+    assert evaluation.findings == ()
+    assert "counting foundations" not in json.dumps(evaluation.feature_summary())
 
 
 def test_known_objective_outside_prerequisite_closure_is_blocked_without_raw_text(
@@ -184,6 +230,16 @@ def test_unresolved_alias_warns_only_when_target_mapping_is_configured(session: 
         "objective_prerequisite_unresolved"
     ]
     assert configured_evaluation.findings[0].severity == "warning"
+
+    missing_evaluation = evaluate_objective_prerequisite_alignment(
+        session,
+        target_revision=configured.target,
+        candidate_knowledge_point=None,
+    )
+    assert [finding.code for finding in missing_evaluation.findings] == [
+        "objective_prerequisite_unresolved"
+    ]
+    assert missing_evaluation.candidate_alias_digest is None
 
     legacy = curriculum_graph(session, target_knowledge_point=None)
     legacy_evaluation = evaluate_objective_prerequisite_alignment(
@@ -228,7 +284,9 @@ def test_ambiguous_alias_produces_stable_warning(session: Session) -> None:
     )
 
     assert evaluation.resolution == "ambiguous"
-    assert [finding.code for finding in evaluation.findings] == ["objective_prerequisite_ambiguous"]
+    assert [finding.code for finding in evaluation.findings] == [
+        "objective_prerequisite_ambiguous"
+    ]
     assert evaluation.findings[0].evidence["match_count"] == 2
 
 
@@ -255,3 +313,85 @@ def test_cycle_in_reachable_graph_fails_closed(session: Session) -> None:
     ]
     assert evaluation.findings[0].severity == "blocked"
     assert evaluation.findings[0].evidence["reason"] == "cycle_detected"
+
+
+def test_unsupported_relation_fails_closed(session: Session) -> None:
+    graph = curriculum_graph(session)
+    graph_edge = session.query(CurriculumPrerequisite).filter_by(
+        objective_revision_id=graph.target.id,
+        prerequisite_revision_id=graph.prerequisite.id,
+    ).one()
+    graph_edge.relation_type = "recommended"
+    session.flush()
+
+    evaluation = evaluate_objective_prerequisite_alignment(
+        session,
+        target_revision=graph.target,
+        candidate_knowledge_point="whole-number addition",
+    )
+
+    assert evaluation.resolution == "graph_invalid"
+    assert evaluation.findings[0].evidence["reason"] == "unsupported_relation"
+
+
+def test_cross_profile_edge_fails_closed(session: Session) -> None:
+    graph = curriculum_graph(session)
+    source = CurriculumSourceRecord(
+        issuer="Other Board",
+        title="Other curriculum",
+        canonical_url=f"https://curriculum.example.test/{uuid4()}",
+        version_label="2026",
+    )
+    profile = CurriculumProfile(
+        code=f"other-{uuid4()}",
+        name="Other Mathematics",
+        jurisdiction="other",
+        version_label="2026",
+        status=CurriculumProfileStatus.ACTIVE,
+        source_record=source,
+    )
+    grade = CurriculumGradeMapping(
+        profile=profile,
+        internal_level="G4",
+        external_label="Grade 4",
+        position=4,
+    )
+    objective = CurriculumObjective(
+        profile=profile,
+        grade_mapping=grade,
+        code="OTHER-G4-ADDITION",
+        subject="mathematics",
+        domain="number",
+        knowledge_point="other addition",
+        status=CurriculumProfileStatus.ACTIVE,
+    )
+    revision = CurriculumObjectiveRevision(
+        objective=objective,
+        revision_number=1,
+        text="Other addition objective.",
+        source_locator="section other",
+        allowed_question_types=["M1"],
+        difficulty_min=0,
+        difficulty_max=1,
+        activity_type=CurriculumActivityType.SCORED_QUESTION,
+        status=CurriculumRevisionStatus.ACTIVE,
+    )
+    session.add(revision)
+    session.flush()
+    session.add(
+        CurriculumPrerequisite(
+            objective_revision_id=graph.target.id,
+            prerequisite_revision_id=revision.id,
+            relation_type="requires",
+        )
+    )
+    session.flush()
+
+    evaluation = evaluate_objective_prerequisite_alignment(
+        session,
+        target_revision=graph.target,
+        candidate_knowledge_point="multiplication",
+    )
+
+    assert evaluation.resolution == "graph_invalid"
+    assert evaluation.findings[0].evidence["reason"] == "cross_profile_edge"
