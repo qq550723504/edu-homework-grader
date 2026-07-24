@@ -9,6 +9,7 @@ from edu_grader.mathjson import normalize_mathjson
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+import edu_grader_api.services.question_verification as verification
 from edu_grader_api.e2e_support import DeterministicE2EGraderClient
 from edu_grader_api.models import (
     Base,
@@ -20,12 +21,12 @@ from edu_grader_api.models import (
     CurriculumProfileStatus,
     CurriculumRevisionStatus,
     CurriculumSourceRecord,
+    GeneratedQuestionDraft,
+    GeneratedQuestionDraftRevision,
     GenerationAttempt,
     GenerationJob,
     GenerationJobStatus,
     GenerationValidationRun,
-    GeneratedQuestionDraft,
-    GeneratedQuestionDraftRevision,
     GradingPolicy,
     Question,
     QuestionVersion,
@@ -35,14 +36,12 @@ from edu_grader_api.models import (
     ValidationRunStatus,
     VersionStatus,
 )
-from edu_grader_api.services.questions import GradeResult
 from edu_grader_api.services.grader import (
     EmbeddingDependencyVersion,
     SemanticSimilarityResult,
 )
 from edu_grader_api.services.question_fingerprints import fingerprint_prompt
-import edu_grader_api.services.question_verification as verification
-
+from edu_grader_api.services.questions import GradeResult
 
 DEFAULT_EMBEDDING = EmbeddingDependencyVersion(
     id="local-model",
@@ -2640,7 +2639,7 @@ def test_m2_safe_ast_contract_matches_grader_normalizer() -> None:
             {"type": "number", "value": "1"},
         ],
     }
-    assert verification._m2_complexity_metrics(ast) == (Decimal("1"), 1)
+    assert verification._m2_complexity_metrics(ast) == (Decimal(1), 1)
 
 
 def test_rule_based_difficulty_signal_uses_safe_m1_numeric_and_text_metrics() -> None:

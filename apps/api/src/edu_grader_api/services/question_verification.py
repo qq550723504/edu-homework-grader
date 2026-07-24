@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
-from dataclasses import dataclass
-from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 import json
 import math
 import re
-from typing import Callable, Literal, Protocol
 import unicodedata
+from collections.abc import Callable
+from copy import deepcopy
+from dataclasses import dataclass
+from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
+from typing import Literal, Protocol
 from uuid import UUID
 
 from sqlalchemy import and_, func, select
@@ -42,7 +43,6 @@ from .grade_complexity import (
 from .grader import EmbeddingDependencyVersion, SemanticSimilarityResult
 from .question_fingerprints import FINGERPRINT_VERSION, PromptFingerprints, fingerprint_prompt
 from .questions import GradeResult
-
 
 VALIDATOR_VERSION = "verification-v6"
 RULESET_VERSION = "rules-v6"
@@ -491,7 +491,7 @@ def _m1_consistency_findings(
     return []
 
 
-def _m1_probes(expected: int | float, tolerance: int | float) -> tuple[_M1Probe, ...]:
+def _m1_probes(expected: float, tolerance: float) -> tuple[_M1Probe, ...]:
     try:
         expected_decimal = Decimal(str(expected))
         tolerance_decimal = Decimal(str(tolerance))
@@ -793,7 +793,7 @@ def _unavailable_difficulty_signal() -> dict[str, object]:
 
 
 def _difficulty_feature(
-    feature_type: str, value: Decimal | int | float, contribution: float
+    feature_type: str, value: Decimal | float, contribution: float
 ) -> dict[str, int | float | str]:
     return {
         "type": feature_type,
