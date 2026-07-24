@@ -3,7 +3,7 @@
 机器可读证据见 [`status-evidence.json`](status-evidence.json)。本页的证据基线提交为：
 
 ```text
-668c315fd85ab16cf6ea455d1641b50cdecd0ef6
+148d574cc84ff196a58babcae043b23cc522d6c4
 ```
 
 ## 状态口径
@@ -40,10 +40,10 @@
 PR #109 的最终代码测试提交：
 
 ```text
-668c315fd85ab16cf6ea455d1641b50cdecd0ef6
+148d574cc84ff196a58babcae043b23cc522d6c4
 ```
 
-CI Run #438（Run ID `30102154827`）成功，包含：
+CI Run #457（Run ID `30106978142`）成功，包含：
 
 - `changes`
 - `python`：固定 Ruff 0.16.0、完整 Python 测试和六题型确定性验证语料
@@ -53,7 +53,7 @@ CI Run #438（Run ID `30102154827`）成功，包含：
 - `web`：单元测试、Nuxt production build 和 E2E 进程管理
 - `browser-e2e`：Chromium 学生/教师快速垂直链路
 
-AI evaluation gate Run #217（Run ID `30102154800`）成功。Docs integrity Run #184（Run ID `30102154856`）成功。
+AI evaluation gate Run #237（Run ID `30106978130`）成功。Docs integrity Run #204（Run ID `30106978137`）成功。
 
 这些结果证明本容量切片在精确代码提交上通过仓库自动化门禁，**不证明学校发布环境已经验收或生产已上线**。
 
