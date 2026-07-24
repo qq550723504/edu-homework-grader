@@ -3,5 +3,6 @@ repos:
     rev: v0.15.14
     hooks:
       - id: ruff-check
-        args: [--fix]
+        args: [--config, ruff.toml, --fix]
       - id: ruff-format
+        args: [--config, ruff.toml]
