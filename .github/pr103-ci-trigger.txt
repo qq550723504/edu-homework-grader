@@ -1,1 +1,0 @@
-One-shot protected-check trigger for PR #103.
