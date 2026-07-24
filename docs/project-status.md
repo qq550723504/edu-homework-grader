@@ -3,7 +3,7 @@
 机器可读证据见 [`status-evidence.json`](status-evidence.json)。本页的证据基线提交为：
 
 ```text
-475fc786076c4e744a89a8f4711cf6899ea9f6b7
+f6587492750b71f96fa0914942d1e1b72bd3e9be
 ```
 
 ## 状态口径
@@ -28,7 +28,7 @@
 | Core API | 课程目录、题库、作业、审核、隐私、名册、监护人同意、Generator、验证、治理和生产评估导出已实现 | 发布环境中的身份、数据库、审计和故障降级仍需统一验证 |
 | Grader | M1/M2、E1–E4、受限 MathJSON、LanguageTool 和固定英语嵌入模型已实现；E3/E4 保持教师最终复核 | 性能容量、学校网络和发布环境持续运行由 #31/#33 验收 |
 | OIDC/BFF | Nuxt BFF、CSRF、HttpOnly 会话和开发 Keycloak 路径已实现 | 学校托管 HTTPS OIDC、真实角色映射和会话策略需 #31/#33 |
-| AI 出题 | 课程约束、真实 Provider、`generator-v3`、候选验证、编辑/重验、拒绝/重生成、原子批量接受和安全转草稿已实现 | 未经审核直接发布仍禁止；正式阈值、生产报告和发布环境验收仍缺 |
+| AI 出题 | 课程约束、真实 Provider、`generator-v3`、候选验证、编辑/重验、拒绝/重生成、原子批量接受和安全转草稿已实现；验证器已加入版本化年级复杂度信号 | 未经审核直接发布仍禁止；先修图、数学语义边界、正式阈值、生产报告和发布环境验收仍缺 |
 | AI 治理 | 全局/租户 `active`、`canary`、`paused`、`retired`、Kill Switch、权限和审计基础已实现 | #43 仍需默认版本晋级/回滚、预算、Provider 合规、版权下架和事故手册 |
 | AI 评估 | 离线 fail-closed 门禁和生产形态只读导出/显式版本比较已实现 | #99 需首次真实只读数据库报告；#42 需教师黄金集、最终阈值、线上反馈和 shadow/canary 证据 |
 | 部署 | Compose、Kubernetes 清单和 SHA 镜像发布工作流存在 | 清单存在不等于环境已部署；#33 的实际 rollout、监控、备份恢复和回滚尚未验收 |
@@ -37,13 +37,13 @@
 
 ### 最近完整 CI
 
-PR #100 的最终测试提交：
+PR #101 的最终测试提交：
 
 ```text
-678194d86d0b385248c8181912dc6e02a2918fbc
+88f0b81c152bcf5166d9d216a7f3a115e322f59a
 ```
 
-CI Run #254（Run ID `30030354646`）成功，包含：
+CI Run #259（Run ID `30032846201`）成功，包含：
 
 - `changes`
 - `python`：Ruff、完整 Python 测试和六题型确定性验证语料
@@ -53,7 +53,7 @@ CI Run #254（Run ID `30030354646`）成功，包含：
 - `web`：单元测试、Nuxt production build 和 E2E 进程管理
 - `browser-e2e`：Chromium 学生/教师快速垂直链路
 
-AI evaluation gate Run #33（Run ID `30030354483`）成功。
+AI evaluation gate Run #38（Run ID `30032847548`）成功。
 
 这些结果证明仓库基线通过自动化门禁，**不证明学校发布环境已经验收或生产已上线**。
 
@@ -76,8 +76,9 @@ generator-v3
 | 项目 | 当前值 |
 | --- | --- |
 | Prompt | `generator-v3` |
-| Validator | `verification-v5` |
-| Ruleset | `rules-v5` |
+| Validator | `verification-v6` |
+| Ruleset | `rules-v6` |
+| Grade complexity rules | `grade-complexity-v1`（历史平面规则归一为 `grade-complexity-legacy-v0`） |
 | Operational evaluation exporter | `operational-ai-evaluation-export-v1` |
 | 默认策略 | `M1@1`、`M2@2`、`E1@2`、`E2@1`、`E3@1`、`E4@2` |
 
@@ -100,26 +101,27 @@ Grader Dockerfile 两个阶段均固定上述值。Compose/CI 已成功构建真
 | #31 | 开放：真实 Keycloak/OIDC、PostgreSQL、Provider、Grader 和浏览器统一验收。 |
 | #32 | 开放：学生同步错误分类、退避、冲突和页面生命周期。 |
 | #33 | 开放：实际试点部署、监控、备份恢复、容量、回滚和联合签署。 |
-| #34 | 进行中：本状态页、机器证据和文档完整性门禁。 |
+| #34 | 已完成：状态页、机器证据和文档完整性门禁已进入 `main`。 |
 | #39 | Generator 与真实 Provider 已完成。 |
 | #40 | 候选题验证主体已完成。 |
 | #41 | 教师 AI 出题工作台已完成。 |
 | #42 | 开放：教师黄金集、正式阈值、线上反馈和 shadow/canary。 |
 | #43 | 开放：运营治理剩余项。 |
-| #83 | 开放：课程复杂度/先修图和数学语义边界。 |
+| #83 | 开放：年级复杂度首个切片已实现；仍缺先修图、数学语义和容量边界。 |
 | #99 | 开放：首次真实只读数据库评估、成本完整性和发布后修正映射。 |
 | #76 | 开放：AI Authoring Teacher Shadow MVP 里程碑。 |
 
 ## 当前发布阻断顺序
 
 ```text
-#83 课程/语义边界 ─┐
-#99 正式生产评估 ───┼→ #42 教师阈值与线上证据 ─┐
-#43 运营治理 ────────┘                          ├→ #31 统一全栈验收
-#32 学生同步可靠性 ────────────────────────────┤
-                                                 ├→ #33 学校试点部署
-                                                 └→ #34 状态与证据固化
+#83 先修/数学语义边界 ─┐
+#99 正式生产评估 ──────┼→ #42 教师阈值与线上证据 ─┐
+#43 运营治理 ──────────┘                          ├→ #31 统一全栈验收
+#32 学生同步可靠性 ──────────────────────────────┤
+                                                    └→ #33 学校试点部署
 ```
+
+#34 已完成，后续状态漂移由 `Docs integrity` 自动阻止。
 
 ## 与 CI 一致的本地验证命令
 
