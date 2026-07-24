@@ -29,35 +29,45 @@ jobs:
 
       - name: Apply grade-complexity integration patch
         id: apply
-        continue-on-error: true
         shell: bash
         run: |
+          set +e
           set -o pipefail
           base64 --decode .patch_grade_complexity_slice.py.gz.b64 | gzip --decompress > /tmp/patch_grade_complexity_slice.py
+          decode_status=$?
           python /tmp/patch_grade_complexity_slice.py > patch-grade-complexity.log 2>&1
-          status=$?
+          patch_status=$?
+          status=$patch_status
+          if [[ $decode_status -ne 0 ]]; then
+            status=$decode_status
+            printf 'payload decode failed with status %s\n' "$decode_status" >> patch-grade-complexity.log
+          fi
           cat patch-grade-complexity.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
           if [[ $status -eq 0 ]]; then
             rm -f patch-grade-complexity.log
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add -f patch-grade-complexity.log
+            git add apps/api/src/edu_grader_api/services/curriculum_imports.py || true
+            git add apps/api/src/edu_grader_api/services/question_verification.py || true
+            git add apps/api/tests/test_question_verification.py || true
+            git commit -m 'chore: capture grade complexity patch failure'
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
           fi
-          exit $status
+          exit 0
 
-      - name: Persist patch diagnostics
-        if: steps.apply.outcome == 'failure'
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -f patch-grade-complexity.log
-          git commit -m 'chore: capture grade complexity patch failure'
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
-          exit 1
+      - name: Stop after captured patch failure
+        if: steps.apply.outputs.status != '0'
+        run: exit 1
 
       - name: Install Python packages
+        if: steps.apply.outputs.status == '0'
         run: make install-python
 
       - name: Format and validate targeted slice
+        if: steps.apply.outputs.status == '0'
         shell: bash
         run: |
           set -euo pipefail
@@ -79,11 +89,13 @@ jobs:
             apps/api/tests/test_question_verification.py -q
 
       - name: Remove one-shot patcher assets
+        if: steps.apply.outputs.status == '0'
         run: |
           rm -f .patch_grade_complexity_slice.py.gz.b64
           rm -f .github/workflows/pr-grade-complexity-patcher.yml
 
       - name: Commit integrated slice
+        if: steps.apply.outputs.status == '0'
         shell: bash
         run: |
           set -euo pipefail
