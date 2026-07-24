@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   integrate:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -59,7 +58,7 @@ jobs:
           text = replace_once(
               text,
               '            objective_prerequisite_signal=unavailable_objective_prerequisite_signal(\n                "validator_unavailable"\n            ),\n',
-              '            objective_prerequisite_signal=unavailable_objective_prerequisite_signal(\n                "validator_unavailable"\n            ),\n            math_semantics_signal=unavailable_math_semantics_signal("validator_unavailable"),\n',
+              '            objective_prerequisite_signal=unavailable_objective_prerequisite_signal(\n                "validator_unavailable"\n            ),\n            math_semantics_signal=unavailable_math_semantics_signal(\n                "validator_unavailable"\n            ),\n',
               'validator unavailable signal',
           )
           text = replace_once(
@@ -71,7 +70,7 @@ jobs:
           text = replace_once(
               text,
               '    objective_prerequisite_signal = unavailable_objective_prerequisite_signal(\n        "candidate_not_evaluated"\n    )\n',
-              '    objective_prerequisite_signal = unavailable_objective_prerequisite_signal(\n        "candidate_not_evaluated"\n    )\n    math_semantics_signal = unavailable_math_semantics_signal("candidate_not_evaluated")\n',
+              '    objective_prerequisite_signal = unavailable_objective_prerequisite_signal(\n        "candidate_not_evaluated"\n    )\n    math_semantics_signal = unavailable_math_semantics_signal(\n        "candidate_not_evaluated"\n    )\n',
               'signal initialization',
           )
           text = replace_once(
@@ -179,6 +178,22 @@ def test_verification_blocks_equation_semantics_before_m2_grader(
     assert grader.normalization_requests == []
     assert grader.grade_requests == []
     assert "x" not in json.dumps(finding.evidence_json)
+
+
+def test_verification_blocks_m1_multiple_solution_semantics_before_grader(
+    session: Session,
+) -> None:
+    candidate = valid_m1_candidate("Give all valid values.")
+    candidate["rule_json"] = {"expected": [2, 4], "tolerance": 0}
+    grader = RecordingM1Grader()
+    draft = generation_draft(session, candidate_json=candidate)
+
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
+
+    finding = finding_by_code(run, "m1_multiple_solution_semantics_unsupported")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json["semantic_class"] == "multiple_solution_set"
+    assert grader.grade_requests == []
 '''
           tests_path.write_text(tests, encoding='utf-8')
 
@@ -188,7 +203,10 @@ def test_verification_blocks_equation_semantics_before_m2_grader(
           contract['validator_version'] = 'verification-v8'
           contract['ruleset_version'] = 'rules-v8'
           contract['math_semantics_rules_version'] = 'math-semantics-v1'
-          evidence_path.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+          evidence_path.write_text(
+              json.dumps(evidence, ensure_ascii=False, indent=2) + '\n',
+              encoding='utf-8',
+          )
 
           status_path = Path('docs/project-status.md')
           status = status_path.read_text(encoding='utf-8')
@@ -202,15 +220,36 @@ def test_verification_blocks_equation_semantics_before_m2_grader(
               '验证器已加入版本化年级复杂度以及 Objective prerequisite 图门禁',
               '验证器已加入版本化年级复杂度、Objective prerequisite 图门禁和显式数学语义支持矩阵',
           )
+          status = status.replace(
+              '未经审核直接发布仍禁止；数学语义边界、容量 SLO、正式阈值、生产报告和发布环境验收仍缺',
+              '未经审核直接发布仍禁止；容量 SLO、正式阈值、生产报告和发布环境验收仍缺',
+          )
+          status = status.replace(
+              '| #83 | 开放：年级复杂度和 Objective prerequisite 门禁已实现；仍缺数学语义和容量边界。 |',
+              '| #83 | 开放：年级复杂度、Objective prerequisite 与数学语义门禁已实现；仍缺容量边界。 |',
+          )
+          status = status.replace(
+              '#83 数学语义/容量边界 ─┐',
+              '#83 验证容量边界 ─────┐',
+          )
           status_path.write_text(status, encoding='utf-8')
 
           roadmap_path = Path('docs/roadmap.md')
           roadmap = roadmap_path.read_text(encoding='utf-8')
-          old = '- [ ] #83：剩余数学多解/定义域/增根漏根语义和容量 SLO；'
-          new = '- [x] PR #107 / #106：`math-semantics-v1` 显式支持矩阵与专用阻断门禁；\n- [ ] #83：剩余验证容量、超时和 P95 SLO；'
+          old = '- [ ] #83：剩余 Objective prerequisite、数学多解/定义域/增根漏根语义和容量 SLO；'
+          new = (
+              '- [x] PR #105：`objective-prerequisite-v1` 传递先修图门禁与 `verification-v7` / `rules-v7`；\n'
+              '- [x] PR #107 / #106：`math-semantics-v1` 显式支持矩阵与专用阻断门禁；\n'
+              '- [ ] #83：剩余验证容量、超时和 P95 SLO；'
+          )
           if old not in roadmap:
               raise SystemExit('roadmap math semantics line not found')
           roadmap = roadmap.replace(old, new, 1)
+          roadmap = roadmap.replace(
+              '#83 课程/数学语义边界 ─┐',
+              '#83 验证容量边界 ─────┐',
+              1,
+          )
           roadmap_path.write_text(roadmap, encoding='utf-8')
           PY
       - name: Format and run focused tests
