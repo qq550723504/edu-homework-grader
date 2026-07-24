@@ -1,0 +1,54 @@
+name: PR 107 operator sanitization
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+
+permissions:
+  contents: write
+
+jobs:
+  sanitize:
+    if: github.event.pull_request.number == 107
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Sanitize operator evidence and run focused checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/pr107_sanitize_unknown_operator.py
+          make install-python >/dev/null
+          python -m ruff format \
+            apps/api/src/edu_grader_api/services/math_semantics.py \
+            apps/api/tests/test_math_semantics.py
+          python -m ruff check --config ruff.toml \
+            apps/api/src/edu_grader_api/services/math_semantics.py \
+            apps/api/tests/test_math_semantics.py
+          python -m pytest apps/api/tests/test_math_semantics.py -q
+      - name: Commit sanitized branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/pr107-sanitize-operator.yml
+          git rm scripts/pr107_sanitize_unknown_operator.py
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: sanitize unknown math operator evidence'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
