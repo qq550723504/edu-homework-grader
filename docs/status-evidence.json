@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "status_as_of": "2026-07-24",
-  "evidence_base_commit": "9b59ac3c922f16a9b723091f694fac5880735827",
+  "evidence_base_commit": "3b24d698c04ddb20c2a92d144cc62fb1eb844350",
   "latest_full_ci": {
-    "tested_head": "9b59ac3c922f16a9b723091f694fac5880735827",
+    "tested_head": "3b24d698c04ddb20c2a92d144cc62fb1eb844350",
     "workflow": "CI",
-    "run_number": 350,
-    "run_id": 30076897368,
+    "run_number": 404,
+    "run_id": 30094998343,
     "conclusion": "success",
     "required_jobs": [
       "changes",
@@ -20,8 +20,8 @@
   },
   "ai_evaluation": {
     "workflow": "AI evaluation gate",
-    "run_number": 129,
-    "run_id": 30076897377,
+    "run_number": 183,
+    "run_id": 30094998330,
     "conclusion": "success",
     "operational_exporter_version": "operational-ai-evaluation-export-v1"
   },
@@ -29,14 +29,20 @@
     "run_id": 30024119371,
     "conclusion": "success",
     "contract": "generator-v3",
-    "question_types": ["M1", "M2", "E1", "E4"]
+    "question_types": [
+      "M1",
+      "M2",
+      "E1",
+      "E4"
+    ]
   },
   "generation_contract": {
     "prompt_version": "generator-v3",
-    "validator_version": "verification-v7",
-    "ruleset_version": "rules-v7",
+    "validator_version": "verification-v8",
+    "ruleset_version": "rules-v8",
     "grade_complexity_rules_version": "grade-complexity-v1",
-    "objective_prerequisite_rules_version": "objective-prerequisite-v1"
+    "objective_prerequisite_rules_version": "objective-prerequisite-v1",
+    "math_semantics_rules_version": "math-semantics-v1"
   },
   "default_question_policies": [
     "M1@1",
@@ -61,5 +67,14 @@
     "backup_restore_drill_verified": false,
     "production_live": false
   },
-  "open_release_blockers": [31, 32, 33, 42, 43, 76, 83, 99]
+  "open_release_blockers": [
+    31,
+    32,
+    33,
+    42,
+    43,
+    76,
+    83,
+    99
+  ]
 }

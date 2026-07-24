@@ -41,6 +41,7 @@ from .grade_complexity import (
     unavailable_grade_complexity_signal,
 )
 from .grader import EmbeddingDependencyVersion, SemanticSimilarityResult
+from .math_semantics import evaluate_math_semantics, unavailable_math_semantics_signal
 from .objective_prerequisites import (
     evaluate_objective_prerequisite_alignment,
     unavailable_objective_prerequisite_signal,
@@ -48,8 +49,8 @@ from .objective_prerequisites import (
 from .question_fingerprints import FINGERPRINT_VERSION, PromptFingerprints, fingerprint_prompt
 from .questions import GradeResult
 
-VALIDATOR_VERSION = "verification-v7"
-RULESET_VERSION = "rules-v7"
+VALIDATOR_VERSION = "verification-v8"
+RULESET_VERSION = "rules-v8"
 _SEMANTIC_CHUNK_SIZE = 128
 _DUPLICATE_REMEDIATION = "Revise the prompt to make the candidate meaningfully distinct."
 _WHITESPACE = re.compile(r"\s+")
@@ -124,6 +125,7 @@ class _CandidateEvaluation:
     difficulty_signal: dict[str, object]
     grade_complexity_signal: dict[str, object]
     objective_prerequisite_signal: dict[str, object]
+    math_semantics_signal: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -196,6 +198,7 @@ def run_candidate_verification(
             objective_prerequisite_signal=unavailable_objective_prerequisite_signal(
                 "validator_unavailable"
             ),
+            math_semantics_signal=unavailable_math_semantics_signal("validator_unavailable"),
         )
     return _persist_run(
         session,
@@ -207,6 +210,7 @@ def run_candidate_verification(
         difficulty_signal=evaluation.difficulty_signal,
         grade_complexity_signal=evaluation.grade_complexity_signal,
         objective_prerequisite_signal=evaluation.objective_prerequisite_signal,
+        math_semantics_signal=evaluation.math_semantics_signal,
     )
 
 
@@ -227,6 +231,7 @@ def _evaluate_candidate(
     objective_prerequisite_signal = unavailable_objective_prerequisite_signal(
         "candidate_not_evaluated"
     )
+    math_semantics_signal = unavailable_math_semantics_signal("candidate_not_evaluated")
 
     if (
         revision.status is not CurriculumRevisionStatus.ACTIVE
@@ -295,6 +300,22 @@ def _evaluate_candidate(
 
     policy_version = candidate.get("policy_version")
     rule_json = candidate.get("rule_json")
+    math_semantics_evaluation = evaluate_math_semantics(
+        question_type=question_type,
+        policy_version=policy_version,
+        rule_json=rule_json,
+    )
+    findings.extend(
+        VerificationFinding(
+            code=finding.code,
+            severity=ValidationFindingSeverity.BLOCKED,
+            evidence=finding.evidence,
+            remediation=finding.remediation,
+        )
+        for finding in math_semantics_evaluation.findings
+    )
+    math_semantics_signal = math_semantics_evaluation.feature_summary()
+    math_semantics_blocked = bool(math_semantics_evaluation.findings)
     policy_errors = (
         validate_policy(question_type, policy_version, rule_json)
         if isinstance(question_type, str)
@@ -343,7 +364,12 @@ def _evaluate_candidate(
     )
     m2_findings: list[VerificationFinding] = []
     normalized_m2_ast: dict[str, object] | None = None
-    if question_type == "M2" and isinstance(rule_json, dict) and not policy_errors:
+    if (
+        question_type == "M2"
+        and isinstance(rule_json, dict)
+        and not policy_errors
+        and not math_semantics_blocked
+    ):
         m2_findings, normalized_m2_ast = _m2_findings(
             rule_json,
             policy_version,
@@ -364,7 +390,12 @@ def _evaluate_candidate(
                 _snapshot=duplicate_snapshot,
             )
         )
-    if not policy_errors and isinstance(rule_json, dict) and isinstance(prompt, str):
+    if (
+        not policy_errors
+        and not math_semantics_blocked
+        and isinstance(rule_json, dict)
+        and isinstance(prompt, str)
+    ):
         grade_level = revision.objective.grade_mapping.internal_level
         try:
             complexity_findings, grade_complexity_signal = _grade_complexity_evaluation(
@@ -388,7 +419,12 @@ def _evaluate_candidate(
         else:
             findings.extend(complexity_findings)
 
-    if question_type == "M1" and isinstance(rule_json, dict) and not policy_errors:
+    if (
+        question_type == "M1"
+        and isinstance(rule_json, dict)
+        and not policy_errors
+        and not math_semantics_blocked
+    ):
         findings.extend(
             _m1_findings(
                 rule_json,
@@ -426,6 +462,7 @@ def _evaluate_candidate(
         ),
         grade_complexity_signal=grade_complexity_signal,
         objective_prerequisite_signal=objective_prerequisite_signal,
+        math_semantics_signal=math_semantics_signal,
     )
 
 
@@ -1567,6 +1604,7 @@ def _persist_run(
     difficulty_signal: dict[str, object],
     grade_complexity_signal: dict[str, object],
     objective_prerequisite_signal: dict[str, object],
+    math_semantics_signal: dict[str, object],
 ) -> GenerationValidationRun:
     snapshot_changed_before_lock = draft.current_revision_id != evaluated_revision_id
 
@@ -1611,6 +1649,7 @@ def _persist_run(
             "difficulty_signal": difficulty_signal,
             "grade_complexity_signal": grade_complexity_signal,
             "objective_prerequisite_signal": objective_prerequisite_signal,
+            "math_semantics_signal": math_semantics_signal,
             **duplicate_feature_summary,
         },
     )

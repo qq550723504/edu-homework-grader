@@ -1038,7 +1038,12 @@ def test_semantic_published_question_is_blocked_without_raw_comparator(
         key: value
         for key, value in run.feature_summary_json.items()
         if key
-        not in {"difficulty_signal", "grade_complexity_signal", "objective_prerequisite_signal"}
+        not in {
+            "difficulty_signal",
+            "grade_complexity_signal",
+            "objective_prerequisite_signal",
+            "math_semantics_signal",
+        }
     } == {
         "finding_count": len(run.findings),
         "content_policy_version": "minor-content-policy-v1",
@@ -1145,7 +1150,12 @@ def test_duplicate_feature_summary_uses_the_gate_snapshot(
         key: value
         for key, value in run.feature_summary_json.items()
         if key
-        not in {"difficulty_signal", "grade_complexity_signal", "objective_prerequisite_signal"}
+        not in {
+            "difficulty_signal",
+            "grade_complexity_signal",
+            "objective_prerequisite_signal",
+            "math_semantics_signal",
+        }
     } == {
         "finding_count": 0,
         "content_policy_version": "minor-content-policy-v1",
@@ -2498,8 +2508,8 @@ def test_grade_complexity_reuses_m2_normalization_for_safe_metrics(session: Sess
         assert "ast" not in finding.evidence_json
         assert "args" not in finding.evidence_json
         assert "value" not in finding.evidence_json
-    assert run.validator_version == "verification-v7"
-    assert run.ruleset_version == "rules-v7"
+    assert run.validator_version == "verification-v8"
+    assert run.ruleset_version == "rules-v8"
 
 
 def test_grade_complexity_uses_stable_metric_order_and_skips_absent_rules(session: Session) -> None:
@@ -3145,8 +3155,8 @@ def test_content_policy_findings_are_sanitized_and_ordered(session: Session) -> 
         for sensitive_text in ("explicit adult content", "how to cut yourself")
         for value in persisted_values
     )
-    assert run.validator_version == "verification-v7"
-    assert run.ruleset_version == "rules-v7"
+    assert run.validator_version == "verification-v8"
+    assert run.ruleset_version == "rules-v8"
     assert run.feature_summary_json["content_policy_version"] == "minor-content-policy-v1"
 
 
@@ -3430,3 +3440,68 @@ def test_verification_blocks_known_objective_outside_prerequisite_closure(
     assert finding.evidence_json["matched_objective_code"] == outside_objective.code
     assert finding.evidence_json["ruleset_version"] == "objective-prerequisite-v1"
     assert "fraction division" not in json.dumps(finding.evidence_json)
+
+
+def test_verification_persists_supported_math_semantics_signal(session: Session) -> None:
+    draft = generation_draft(session)
+
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
+
+    assert run.feature_summary_json["math_semantics_signal"] == {
+        "availability": "available",
+        "version": "math-semantics-v1",
+        "question_type": "M1",
+        "policy_version": "1",
+        "support_status": "supported",
+        "semantic_class": "single_numeric_value",
+        "trigger_operator": None,
+    }
+    assert run.validator_version == "verification-v8"
+    assert run.ruleset_version == "rules-v8"
+
+
+def test_verification_blocks_equation_semantics_before_m2_grader(
+    session: Session,
+) -> None:
+    candidate = valid_m2_candidate()
+    candidate["rule_json"] = {
+        **candidate["rule_json"],
+        "expected": ["Equal", "x", 2],
+    }
+    draft = generation_draft(
+        session,
+        allowed_question_types=["M2"],
+        candidate_json=candidate,
+    )
+    grader = PassingM2Grader()
+
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
+
+    finding = finding_by_code(run, "m2_equation_semantics_unsupported")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {
+        "ruleset_version": "math-semantics-v1",
+        "question_type": "M2",
+        "policy_version": "2",
+        "semantic_class": "equation_or_inequality",
+        "trigger_operator": "Equal",
+    }
+    assert grader.normalization_requests == []
+    assert grader.grade_requests == []
+    assert "x" not in json.dumps(finding.evidence_json)
+
+
+def test_verification_blocks_m1_multiple_solution_semantics_before_grader(
+    session: Session,
+) -> None:
+    candidate = valid_m1_candidate("Give all valid values.")
+    candidate["rule_json"] = {"expected": [2, 4], "tolerance": 0}
+    grader = RecordingM1Grader()
+    draft = generation_draft(session, candidate_json=candidate)
+
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
+
+    finding = finding_by_code(run, "m1_multiple_solution_semantics_unsupported")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json["semantic_class"] == "multiple_solution_set"
+    assert grader.grade_requests == []

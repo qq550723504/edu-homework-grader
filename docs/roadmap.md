@@ -67,7 +67,9 @@ Epic：[#36](https://github.com/qq550723504/edu-homework-grader/issues/36)
 - [x] PR #100：生产形态事实导出、固定数据库水位和显式 baseline/candidate 分层比较；
 - [x] PR #104：固定 Ruff 0.16.0、显式 lint 规则以及 CI/pre-commit 工具链一致性；
 - [x] PR #103：版本化 Profile/年级复杂度规则、E3/E4 语言篇幅信号、M1/M2 数值复杂度与 `verification-v6` / `rules-v6`；
-- [ ] #83：剩余 Objective prerequisite、数学多解/定义域/增根漏根语义和容量 SLO；
+- [x] PR #105：`objective-prerequisite-v1` 传递先修图门禁与 `verification-v7` / `rules-v7`；
+- [x] PR #107 / #106：`math-semantics-v1` 显式支持矩阵与专用阻断门禁；
+- [ ] #83：剩余验证容量、超时和 P95 SLO；
 - [ ] #99：首次真实只读数据库报告、成本/usage 完整性和发布后修正映射；
 - [ ] #42：教师校准黄金集、正式 Blocking Threshold、线上反馈和 Shadow/Canary 证据；
 - [ ] #43：默认版本晋级/回滚、预算、Provider 合规、版权下架和事故响应；
@@ -101,7 +103,7 @@ Epic：[#36](https://github.com/qq550723504/edu-homework-grader/issues/36)
 
 ```text
 #37 → #38 → #39 → #40 → #41
-                         ├→ #83 课程/数学语义边界 ─┐
+                         ├→ #83 验证容量边界 ─────┐
                          ├→ #99 生产评估事实 ──────┼→ #42 教师阈值与线上证据 ─┐
                          └→ #43 运营治理 ──────────┘                          ├→ #31 真实全栈验收
 #29、#30 ────────────────────────────────────────────────────────────────────┘
