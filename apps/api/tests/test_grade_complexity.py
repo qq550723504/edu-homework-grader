@@ -2,6 +2,7 @@ from decimal import Decimal
 
 import pytest
 
+from edu_grader_api.services.curriculum_imports import ImportGradeMapping
 from edu_grader_api.services.grade_complexity import (
     CURRENT_GRADE_COMPLEXITY_RULESET_VERSION,
     LEGACY_GRADE_COMPLEXITY_RULESET_VERSION,
@@ -38,6 +39,31 @@ def test_versioned_grade_complexity_rules_are_normalized_with_explicit_defaults(
         "long_lexical_unit_threshold": 10,
         "max_long_lexical_units": 2,
         "max_reading_units": 80,
+    }
+
+
+def test_curriculum_grade_mapping_accepts_and_normalizes_versioned_rules() -> None:
+    mapping = ImportGradeMapping.model_validate(
+        {
+            "internal_level": "G8",
+            "external_label": "Grade 8",
+            "position": 8,
+            "complexity_rules": {
+                "version": CURRENT_GRADE_COMPLEXITY_RULESET_VERSION,
+                "enforcement": "blocked",
+                "long_lexical_unit_threshold": 9,
+                "max_reading_units": 180,
+                "max_reference_units": 30,
+            },
+        }
+    )
+
+    assert mapping.complexity_rules == {
+        "version": CURRENT_GRADE_COMPLEXITY_RULESET_VERSION,
+        "enforcement": "blocked",
+        "long_lexical_unit_threshold": 9,
+        "max_reading_units": 180,
+        "max_reference_units": 30,
     }
 
 
