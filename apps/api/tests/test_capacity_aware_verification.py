@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -185,7 +186,11 @@ def test_revision_must_belong_to_draft_before_preflight(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     current_revision = revision({"prompt": "What is 2 + 2?"})
-    draft = SimpleNamespace(id=uuid4(), job_id=uuid4(), current_revision_id=current_revision.id)
+    draft = SimpleNamespace(
+        id=uuid4(),
+        job_id=uuid4(),
+        current_revision_id=current_revision.id,
+    )
     monkeypatch.setattr(
         capacity_wrapper,
         "evaluate_verification_capacity",
@@ -201,3 +206,11 @@ def test_revision_must_belong_to_draft_before_preflight(
             revision=current_revision,  # type: ignore[arg-type]
             grader_client=SimpleNamespace(),  # type: ignore[arg-type]
         )
+
+
+def test_review_service_has_no_direct_core_verification_bypass() -> None:
+    from edu_grader_api.services import ai_question_review
+
+    source = inspect.getsource(ai_question_review)
+    assert "run_candidate_verification(" not in source
+    assert source.count("run_capacity_aware_candidate_verification(") == 2
