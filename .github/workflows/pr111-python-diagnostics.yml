@@ -1,0 +1,47 @@
+name: PR 111 Python diagnostics
+
+on:
+  push:
+    branches:
+      - agent/verification-budget-v1
+
+permissions:
+  actions: read
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  diagnostics:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/verification-budget-v1
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish Python failure tail
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api -H 'Accept: application/vnd.github+json' \
+            "repos/$REPO/actions/jobs/89549670796/logs" > /tmp/python.log
+          {
+            echo '### PR #111 latest Python failure diagnostics'
+            echo
+            echo '```text'
+            tail -n 220 /tmp/python.log
+            echo '```'
+          } > /tmp/comment.md
+          gh pr comment 111 --repo "$REPO" --body-file /tmp/comment.md
+      - name: Self-delete
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/pr111-python-diagnostics.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'chore: remove completed Python diagnostics'
+          git push origin HEAD:agent/verification-budget-v1
