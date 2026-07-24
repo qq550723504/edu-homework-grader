@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from decimal import Decimal
 import math
 import re
-from typing import Iterable, Literal, Mapping
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
+from typing import Literal
 
 CURRENT_GRADE_COMPLEXITY_RULESET_VERSION = "grade-complexity-v1"
 LEGACY_GRADE_COMPLEXITY_RULESET_VERSION = "grade-complexity-legacy-v0"
 LEXICAL_SIGNAL_VERSION = "lexical-length-v1"
 
 Enforcement = Literal["warning", "blocked"]
+NumericObservation = int | Decimal
 
 _LEGACY_LIMIT_KEYS = frozenset(
     {
@@ -66,7 +68,7 @@ class GradeComplexityRuleSet:
 @dataclass(frozen=True, slots=True)
 class GradeComplexityEvaluation:
     rule_set: GradeComplexityRuleSet
-    observations: Mapping[str, int | float]
+    observations: Mapping[str, NumericObservation]
     violations: tuple[str, ...]
     lexical_signal: Mapping[str, int | str]
 
@@ -79,7 +81,10 @@ class GradeComplexityEvaluation:
             "grade_level": grade_level,
             "question_type": question_type,
             "limits": dict(sorted(self.rule_set.limits.items())),
-            "observations": dict(sorted(self.observations.items())),
+            "observations": {
+                key: _json_safe_observation(value)
+                for key, value in sorted(self.observations.items())
+            },
             "violations": list(self.violations),
             "lexical_signal": dict(self.lexical_signal),
         }
@@ -89,7 +94,7 @@ def validate_grade_complexity_rules_document(value: object) -> dict[str, object]
     """Validate an imported rule document while preserving legacy payloads."""
 
     if not isinstance(value, dict):
-        raise ValueError("invalid complexity rules")
+        raise ValueError("invalid complexity rules")  # noqa: TRY004
     if "version" not in value:
         if set(value) - _LEGACY_LIMIT_KEYS:
             raise ValueError("invalid complexity rules")
@@ -149,7 +154,7 @@ def evaluate_grade_complexity(
     prompt: str,
     reading_material: str,
     reference_texts: Iterable[str],
-    maximum_numeric_absolute_value: int | float | Decimal | None,
+    maximum_numeric_absolute_value: object,
     math_operation_nodes: int | None,
 ) -> GradeComplexityEvaluation:
     rule_set = parse_grade_complexity_rules(rules_document)
@@ -161,7 +166,7 @@ def evaluate_grade_complexity(
     long_lexical_units = sum(
         len(unit) >= rule_set.long_lexical_unit_threshold for unit in latin_units
     )
-    observations: dict[str, int | float] = {
+    observations: dict[str, NumericObservation] = {
         "max_prompt_units": _lexical_unit_count(prompt),
         "max_sentence_units": _max_sentence_units(prompt),
         "max_reading_units": _lexical_unit_count(reading_material),
@@ -170,7 +175,7 @@ def evaluate_grade_complexity(
         "max_lexical_unit_length": max_lexical_length,
         "max_long_lexical_units": long_lexical_units,
     }
-    numeric_value = _finite_nonnegative_number(maximum_numeric_absolute_value)
+    numeric_value = _exact_nonnegative_number(maximum_numeric_absolute_value)
     if numeric_value is not None:
         observations["max_numeric_absolute_value"] = numeric_value
     if (
@@ -231,7 +236,9 @@ def unavailable_grade_complexity_signal(reason: str) -> dict[str, object]:
 
 def _validate_positive_integer_limits(limits: Mapping[str, object]) -> None:
     for limit in limits.values():
-        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise ValueError("invalid complexity limit")  # noqa: TRY004
+        if limit <= 0:
             raise ValueError("invalid complexity limit")
 
 
@@ -246,16 +253,30 @@ def _max_sentence_units(text: str) -> int:
     )
 
 
-def _finite_nonnegative_number(value: object) -> int | float | None:
+def _exact_nonnegative_number(value: object) -> NumericObservation | None:
     if isinstance(value, bool) or not isinstance(value, int | float | Decimal):
         return None
     try:
+        numeric = value if isinstance(value, Decimal) else Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    if not numeric.is_finite() or numeric < 0:
+        return None
+    if numeric == numeric.to_integral_value():
+        return int(numeric)
+    return numeric
+
+
+def _json_safe_observation(value: NumericObservation) -> int | float | str:
+    if isinstance(value, int):
+        return value
+    if value == value.to_integral_value():
+        return int(value)
+    try:
         numeric = float(value)
     except (OverflowError, ValueError):
-        return None
-    if not math.isfinite(numeric) or numeric < 0:
-        return None
-    return int(numeric) if numeric.is_integer() else numeric
+        return str(value)
+    return numeric if math.isfinite(numeric) else str(value)
 
 
 def _lexical_length_band(max_length: int, long_count: int, long_threshold: int) -> str:
