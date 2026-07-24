@@ -1,0 +1,69 @@
+    assert signal["observations"]["max_reference_units"] == 5
+    assert signal["lexical_signal"]["version"] == "lexical-length-v1"
+    assert "I went to the park" not in str(signal)
+    assert "travelled" not in str(signal)
+
+
+def test_versioned_e4_complexity_can_block_reading_and_reference_overflow(
+    session: Session,
+) -> None:
+    draft = generation_draft(
+        session, allowed_question_types=["E4"], candidate_json=valid_e4_candidate()
+    )
+    configure_grade_complexity_rules(
+        session,
+        draft,
+        {
+            "version": "grade-complexity-v1",
+            "enforcement": "blocked",
+            "max_reading_units": 4,
+            "max_reference_units": 3,
+        },
+    )
+
+    run = verify_current_revision(session, draft=draft, grader_client=PassingE4Grader())
+
+    assert run.status is ValidationRunStatus.BLOCKED
+    findings = [item for item in run.findings if item.code == "grade_complexity_blocked"]
+    assert [item.evidence_json["metric"] for item in findings] == [
+        "max_reading_units",
+        "max_reference_units",
+    ]
+    for finding in findings:
+        assert finding.evidence_json["ruleset_version"] == "grade-complexity-v1"
+        assert finding.evidence_json["enforcement"] == "blocked"
+    signal = run.feature_summary_json["grade_complexity_signal"]
+    assert signal["violations"] == ["max_reading_units", "max_reference_units"]
+    assert "bridge was closed" not in str(signal)
+    assert "arrived late" not in str(signal)
+
+
+def test_invalid_versioned_grade_complexity_rules_record_unavailable_signal(
+    session: Session,
+) -> None:
+    draft = generation_draft(session)
+    configure_grade_complexity_rules(
+        session,
+        draft,
+        {"version": "grade-complexity-latest", "max_prompt_units": 4},
+    )
+
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
+
+    assert finding_codes(run) == {"grade_complexity_rules_invalid"}
+    assert run.feature_summary_json["grade_complexity_signal"]["availability"] == "unavailable"
+    assert run.feature_summary_json["grade_complexity_signal"]["reason"] == "rules_invalid"
+'''
+    if "test_versioned_e3_complexity_persists_deidentified_reference_signal" not in text:
+        text += addition
+    path.write_text(text, encoding="utf-8")
+
+
+def main() -> None:
+    patch_curriculum_imports()
+    patch_question_verification()
+    patch_tests()
+
+
+if __name__ == "__main__":
+    main()
