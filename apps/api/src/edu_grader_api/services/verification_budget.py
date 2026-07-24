@@ -178,9 +178,7 @@ class BudgetedGraderClient:
             ),
         )
 
-    def semantic_similarity(
-        self, query: str, comparisons: list[str]
-    ) -> SemanticSimilarityResult:
+    def semantic_similarity(self, query: str, comparisons: list[str]) -> SemanticSimilarityResult:
         return self._invoke(
             stage="similarity",
             dependency="similarity",
@@ -205,9 +203,7 @@ class BudgetedGraderClient:
         return result
 
 
-def _dependency_for_operation(
-    operation: str, *, fallback: DependencyKind
-) -> DependencyKind:
+def _dependency_for_operation(operation: str, *, fallback: DependencyKind) -> DependencyKind:
     return {
         "normalizer": "normalizer",
         "grade": "grader",

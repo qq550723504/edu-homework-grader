@@ -55,9 +55,7 @@ class PassingDelegate:
             grader_version="test-grader-v1",
         )
 
-    def semantic_similarity(
-        self, query: str, comparisons: list[str]
-    ) -> SemanticSimilarityResult:
+    def semantic_similarity(self, query: str, comparisons: list[str]) -> SemanticSimilarityResult:
         self.calls.append("similarity")
         return SemanticSimilarityResult(
             scores=[0.1 for _ in comparisons],
@@ -89,9 +87,7 @@ class TimeoutDelegate(PassingDelegate):
         self.calls.append("grader")
         raise GraderRequestTimeoutError(self.operation)
 
-    def semantic_similarity(
-        self, query: str, comparisons: list[str]
-    ) -> SemanticSimilarityResult:
+    def semantic_similarity(self, query: str, comparisons: list[str]) -> SemanticSimilarityResult:
         self.calls.append("similarity")
         raise GraderRequestTimeoutError(self.operation)
 

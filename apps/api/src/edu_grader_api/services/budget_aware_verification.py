@@ -114,9 +114,7 @@ def _persist_terminal_failure(
             "verification_timeout"
         ),
         difficulty_signal=core._unavailable_difficulty_signal(),
-        grade_complexity_signal=unavailable_grade_complexity_signal(
-            "verification_timeout"
-        ),
+        grade_complexity_signal=unavailable_grade_complexity_signal("verification_timeout"),
         objective_prerequisite_signal=unavailable_objective_prerequisite_signal(
             "verification_timeout"
         ),
