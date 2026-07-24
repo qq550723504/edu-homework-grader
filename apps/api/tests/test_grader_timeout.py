@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import httpx
 import pytest
 
@@ -74,7 +76,7 @@ def test_http_grader_uses_configured_timeout(
 def test_http_grader_timeout_has_stable_operation_without_payload(
     monkeypatch: pytest.MonkeyPatch,
     operation: str,
-    invoke: object,
+    invoke: Callable[[HttpGraderClient], object],
 ) -> None:
     def timeout_post(
         url: str,
@@ -82,13 +84,16 @@ def test_http_grader_timeout_has_stable_operation_without_payload(
         json: dict[str, object],
         timeout: float,
     ) -> httpx.Response:
-        raise httpx.ReadTimeout("internal URL and payload diagnostic", request=httpx.Request("POST", url))
+        raise httpx.ReadTimeout(
+            "internal URL and payload diagnostic",
+            request=httpx.Request("POST", url),
+        )
 
     monkeypatch.setattr(httpx, "post", timeout_post)
     client = HttpGraderClient("http://localhost:8010")
 
     with pytest.raises(GraderRequestTimeoutError) as raised:
-        invoke(client)  # type: ignore[operator]
+        invoke(client)
 
     assert raised.value.operation == operation
     assert operation in str(raised.value)
