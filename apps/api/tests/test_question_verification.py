@@ -1038,7 +1038,12 @@ def test_semantic_published_question_is_blocked_without_raw_comparator(
         key: value
         for key, value in run.feature_summary_json.items()
         if key
-        not in {"difficulty_signal", "grade_complexity_signal", "objective_prerequisite_signal", "math_semantics_signal"}
+        not in {
+            "difficulty_signal",
+            "grade_complexity_signal",
+            "objective_prerequisite_signal",
+            "math_semantics_signal",
+        }
     } == {
         "finding_count": len(run.findings),
         "content_policy_version": "minor-content-policy-v1",
@@ -1145,7 +1150,12 @@ def test_duplicate_feature_summary_uses_the_gate_snapshot(
         key: value
         for key, value in run.feature_summary_json.items()
         if key
-        not in {"difficulty_signal", "grade_complexity_signal", "objective_prerequisite_signal", "math_semantics_signal"}
+        not in {
+            "difficulty_signal",
+            "grade_complexity_signal",
+            "objective_prerequisite_signal",
+            "math_semantics_signal",
+        }
     } == {
         "finding_count": 0,
         "content_policy_version": "minor-content-policy-v1",
@@ -3430,7 +3440,6 @@ def test_verification_blocks_known_objective_outside_prerequisite_closure(
     assert finding.evidence_json["matched_objective_code"] == outside_objective.code
     assert finding.evidence_json["ruleset_version"] == "objective-prerequisite-v1"
     assert "fraction division" not in json.dumps(finding.evidence_json)
-
 
 
 def test_verification_persists_supported_math_semantics_signal(session: Session) -> None:

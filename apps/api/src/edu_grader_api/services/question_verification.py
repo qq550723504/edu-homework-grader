@@ -198,9 +198,7 @@ def run_candidate_verification(
             objective_prerequisite_signal=unavailable_objective_prerequisite_signal(
                 "validator_unavailable"
             ),
-            math_semantics_signal=unavailable_math_semantics_signal(
-                "validator_unavailable"
-            ),
+            math_semantics_signal=unavailable_math_semantics_signal("validator_unavailable"),
         )
     return _persist_run(
         session,
@@ -233,9 +231,7 @@ def _evaluate_candidate(
     objective_prerequisite_signal = unavailable_objective_prerequisite_signal(
         "candidate_not_evaluated"
     )
-    math_semantics_signal = unavailable_math_semantics_signal(
-        "candidate_not_evaluated"
-    )
+    math_semantics_signal = unavailable_math_semantics_signal("candidate_not_evaluated")
 
     if (
         revision.status is not CurriculumRevisionStatus.ACTIVE
