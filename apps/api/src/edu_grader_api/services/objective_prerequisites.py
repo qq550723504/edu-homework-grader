@@ -112,9 +112,7 @@ def evaluate_objective_prerequisite_alignment(
             prerequisite_revision_count=max(len(closure) - 1, 0),
             reason="revision_missing",
         )
-    if any(
-        revision.objective.profile_id != target_objective.profile_id for revision in revisions
-    ):
+    if any(revision.objective.profile_id != target_objective.profile_id for revision in revisions):
         return _graph_invalid_evaluation(
             target_objective_code=target_objective.code,
             candidate_alias_digest=candidate_alias_digest,
