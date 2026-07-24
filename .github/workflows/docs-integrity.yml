@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: docs-integrity-${{ github.event.pull_request.number || github.ref }}
@@ -13,103 +13,11 @@ concurrency:
 
 jobs:
   docs-integrity:
-    if: github.event.pull_request.number == 107 && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-          cache: pip
-      - name: Make policy validation authoritative before semantic classification
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path('apps/api/src/edu_grader_api/services/question_verification.py')
-          text = path.read_text(encoding='utf-8')
-          start_marker = '''    policy_version = candidate.get("policy_version")
-    rule_json = candidate.get("rule_json")
-'''
-          end_marker = '''
-    prompt = candidate.get("prompt")
-'''
-          start = text.index(start_marker)
-          end = text.index(end_marker, start)
-          replacement = '''    policy_version = candidate.get("policy_version")
-    rule_json = candidate.get("rule_json")
-    policy_errors = (
-        validate_policy(question_type, policy_version, rule_json)
-        if isinstance(question_type, str)
-        and isinstance(policy_version, str)
-        and isinstance(rule_json, dict)
-        else [{"path": "/", "message": "candidate policy fields are invalid"}]
-    )
-    if policy_errors:
-        findings.append(
-            _blocked(
-                "policy_schema_invalid",
-                {"question_type": question_type if isinstance(question_type, str) else None},
-                "Correct the question rule so it matches its grading policy.",
-            )
-        )
-        math_semantics_signal = unavailable_math_semantics_signal(
-            "policy_schema_invalid"
-        )
-        math_semantics_blocked = True
-    else:
-        math_semantics_evaluation = evaluate_math_semantics(
-            question_type=question_type,
-            policy_version=policy_version,
-            rule_json=rule_json,
-        )
-        findings.extend(
-            VerificationFinding(
-                code=finding.code,
-                severity=ValidationFindingSeverity.BLOCKED,
-                evidence=finding.evidence,
-                remediation=finding.remediation,
-            )
-            for finding in math_semantics_evaluation.findings
-        )
-        math_semantics_signal = math_semantics_evaluation.feature_summary()
-        math_semantics_blocked = bool(math_semantics_evaluation.findings)
-'''
-          path.write_text(text[:start] + replacement + text[end:], encoding='utf-8')
-          PY
-      - name: Validate the complete Python suite
-        shell: bash
-        run: |
-          set -euo pipefail
-          make install-python >/dev/null
-          python -m ruff format \
-            apps/api/src/edu_grader_api/services/math_semantics.py \
-            apps/api/src/edu_grader_api/services/question_verification.py \
-            apps/api/tests/test_math_semantics.py \
-            apps/api/tests/test_question_verification.py
-          python -m ruff check --config ruff.toml \
-            apps/api/src/edu_grader_api/services/math_semantics.py \
-            apps/api/src/edu_grader_api/services/question_verification.py \
-            apps/api/tests/test_math_semantics.py \
-            apps/api/tests/test_question_verification.py
-          make test
-          python scripts/check_docs_status.py
-      - name: Restore standard workflow, remove diagnostics, and push
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch origin main
-          git show origin/main:.github/workflows/docs-integrity.yml > .github/workflows/docs-integrity.yml
-          git rm -f .github/workflows/pr107-full-test-diagnostics.yml
-          git diff --check
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git commit -m 'fix: validate policy schema before math semantics'
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+      - name: Validate links, evidence, versions, policies, and CI jobs
+        run: python scripts/check_docs_status.py
