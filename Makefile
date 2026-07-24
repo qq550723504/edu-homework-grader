@@ -1,7 +1,7 @@
 .PHONY: install-python test lint format ruff-version-check api-test api-lint api-migrate question-test calibration-report ai-evaluation ai-evaluation-operational verification-regression docs-check web-install web-test web-build web-e2e dev down
 
 RUFF_CONFIG := ruff.toml
-RUFF_VERSION := 0.15.14
+RUFF_VERSION := 0.16.0
 
 install-python:
 	python -m pip install -e packages/processor-policy -e "services/generator[openai,dev]" -e "apps/api[dev]" -e "services/grader[dev]"
