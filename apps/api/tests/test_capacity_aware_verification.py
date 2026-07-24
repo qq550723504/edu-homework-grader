@@ -206,9 +206,10 @@ def test_revision_must_belong_to_draft_before_preflight(
         )
 
 
-def test_review_service_has_no_direct_core_verification_bypass() -> None:
+def test_review_service_has_no_direct_core_or_capacity_verification_bypass() -> None:
     from edu_grader_api.services import ai_question_review
 
     source = inspect.getsource(ai_question_review)
     assert "run_candidate_verification(" not in source
-    assert source.count("run_capacity_aware_candidate_verification(") == 2
+    assert "run_capacity_aware_candidate_verification(" not in source
+    assert source.count("run_budget_aware_candidate_verification(") == 2
