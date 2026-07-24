@@ -9,6 +9,7 @@ from edu_grader.mathjson import normalize_mathjson
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+import edu_grader_api.services.question_verification as verification
 from edu_grader_api.e2e_support import DeterministicE2EGraderClient
 from edu_grader_api.models import (
     Base,
@@ -20,12 +21,12 @@ from edu_grader_api.models import (
     CurriculumProfileStatus,
     CurriculumRevisionStatus,
     CurriculumSourceRecord,
+    GeneratedQuestionDraft,
+    GeneratedQuestionDraftRevision,
     GenerationAttempt,
     GenerationJob,
     GenerationJobStatus,
     GenerationValidationRun,
-    GeneratedQuestionDraft,
-    GeneratedQuestionDraftRevision,
     GradingPolicy,
     Question,
     QuestionVersion,
@@ -35,14 +36,12 @@ from edu_grader_api.models import (
     ValidationRunStatus,
     VersionStatus,
 )
-from edu_grader_api.services.questions import GradeResult
 from edu_grader_api.services.grader import (
     EmbeddingDependencyVersion,
     SemanticSimilarityResult,
 )
 from edu_grader_api.services.question_fingerprints import fingerprint_prompt
-import edu_grader_api.services.question_verification as verification
-
+from edu_grader_api.services.questions import GradeResult
 
 DEFAULT_EMBEDDING = EmbeddingDependencyVersion(
     id="local-model",
@@ -1036,7 +1035,9 @@ def test_semantic_published_question_is_blocked_without_raw_comparator(
     }
     assert "What is 2 + 2?" not in str(finding.evidence_json)
     assert {
-        key: value for key, value in run.feature_summary_json.items() if key != "difficulty_signal"
+        key: value
+        for key, value in run.feature_summary_json.items()
+        if key not in {"difficulty_signal", "grade_complexity_signal"}
     } == {
         "finding_count": len(run.findings),
         "content_policy_version": "minor-content-policy-v1",
@@ -1140,7 +1141,9 @@ def test_duplicate_feature_summary_uses_the_gate_snapshot(
 
     assert run.status is ValidationRunStatus.PASSED
     assert {
-        key: value for key, value in run.feature_summary_json.items() if key != "difficulty_signal"
+        key: value
+        for key, value in run.feature_summary_json.items()
+        if key not in {"difficulty_signal", "grade_complexity_signal"}
     } == {
         "finding_count": 0,
         "content_policy_version": "minor-content-policy-v1",
@@ -2493,8 +2496,8 @@ def test_grade_complexity_reuses_m2_normalization_for_safe_metrics(session: Sess
         assert "ast" not in finding.evidence_json
         assert "args" not in finding.evidence_json
         assert "value" not in finding.evidence_json
-    assert run.validator_version == "verification-v5"
-    assert run.ruleset_version == "rules-v5"
+    assert run.validator_version == "verification-v6"
+    assert run.ruleset_version == "rules-v6"
 
 
 def test_grade_complexity_uses_stable_metric_order_and_skips_absent_rules(session: Session) -> None:
@@ -2636,7 +2639,7 @@ def test_m2_safe_ast_contract_matches_grader_normalizer() -> None:
             {"type": "number", "value": "1"},
         ],
     }
-    assert verification._m2_complexity_metrics(ast) == (Decimal("1"), 1)
+    assert verification._m2_complexity_metrics(ast) == (Decimal(1), 1)
 
 
 def test_rule_based_difficulty_signal_uses_safe_m1_numeric_and_text_metrics() -> None:
@@ -3140,8 +3143,8 @@ def test_content_policy_findings_are_sanitized_and_ordered(session: Session) -> 
         for sensitive_text in ("explicit adult content", "how to cut yourself")
         for value in persisted_values
     )
-    assert run.validator_version == "verification-v5"
-    assert run.ruleset_version == "rules-v5"
+    assert run.validator_version == "verification-v6"
+    assert run.ruleset_version == "rules-v6"
     assert run.feature_summary_json["content_policy_version"] == "minor-content-policy-v1"
 
 
@@ -3271,3 +3274,88 @@ def test_unexpected_validator_error_is_persisted_without_raw_exception(
     assert run.status is ValidationRunStatus.BLOCKED
     assert finding.evidence_json == {"category": "internal_validation_error"}
     assert "secret" not in finding.remediation
+
+
+def test_versioned_e3_complexity_persists_deidentified_reference_signal(session: Session) -> None:
+    draft = generation_draft(
+        session, allowed_question_types=["E3"], candidate_json=valid_e3_candidate()
+    )
+    configure_grade_complexity_rules(
+        session,
+        draft,
+        {
+            "version": "grade-complexity-v1",
+            "enforcement": "warning",
+            "max_reference_units": 4,
+            "long_lexical_unit_threshold": 8,
+        },
+    )
+
+    run = verify_current_revision(session, draft=draft, grader_client=PassingE3Grader())
+
+    finding = finding_by_code(run, "grade_complexity_warning")
+    assert finding.evidence_json == {
+        "grade_level": "G5",
+        "metric": "max_reference_units",
+        "observed": 5,
+        "limit": 4,
+        "ruleset_version": "grade-complexity-v1",
+        "enforcement": "warning",
+    }
+    signal = run.feature_summary_json["grade_complexity_signal"]
+    assert signal["version"] == "grade-complexity-v1"
+    assert signal["observations"]["max_reference_units"] == 5
+    assert signal["lexical_signal"]["version"] == "lexical-length-v1"
+    assert "I went to the park" not in str(signal)
+    assert "travelled" not in str(signal)
+
+
+def test_versioned_e4_complexity_can_block_reading_and_reference_overflow(
+    session: Session,
+) -> None:
+    draft = generation_draft(
+        session, allowed_question_types=["E4"], candidate_json=valid_e4_candidate()
+    )
+    configure_grade_complexity_rules(
+        session,
+        draft,
+        {
+            "version": "grade-complexity-v1",
+            "enforcement": "blocked",
+            "max_reading_units": 4,
+            "max_reference_units": 3,
+        },
+    )
+
+    run = verify_current_revision(session, draft=draft, grader_client=PassingE4Grader())
+
+    assert run.status is ValidationRunStatus.BLOCKED
+    findings = [item for item in run.findings if item.code == "grade_complexity_blocked"]
+    assert [item.evidence_json["metric"] for item in findings] == [
+        "max_reading_units",
+        "max_reference_units",
+    ]
+    for finding in findings:
+        assert finding.evidence_json["ruleset_version"] == "grade-complexity-v1"
+        assert finding.evidence_json["enforcement"] == "blocked"
+    signal = run.feature_summary_json["grade_complexity_signal"]
+    assert signal["violations"] == ["max_reading_units", "max_reference_units"]
+    assert "bridge was closed" not in str(signal)
+    assert "arrived late" not in str(signal)
+
+
+def test_invalid_versioned_grade_complexity_rules_record_unavailable_signal(
+    session: Session,
+) -> None:
+    draft = generation_draft(session)
+    configure_grade_complexity_rules(
+        session,
+        draft,
+        {"version": "grade-complexity-latest", "max_prompt_units": 4},
+    )
+
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
+
+    assert finding_codes(run) == {"grade_complexity_rules_invalid"}
+    assert run.feature_summary_json["grade_complexity_signal"]["availability"] == "unavailable"
+    assert run.feature_summary_json["grade_complexity_signal"]["reason"] == "rules_invalid"

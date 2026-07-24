@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
-from dataclasses import dataclass
-from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 import json
 import math
 import re
-from typing import Callable, Literal, Protocol
 import unicodedata
+from collections.abc import Callable
+from copy import deepcopy
+from dataclasses import dataclass
+from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
+from typing import Literal, Protocol
 from uuid import UUID
 
 from sqlalchemy import and_, func, select
@@ -35,14 +36,16 @@ from .candidate_content_policy import (
     CONTENT_POLICY_VERSION,
     find_candidate_content_matches,
 )
-from .curriculum_imports import validate_complexity_rules
+from .grade_complexity import (
+    evaluate_grade_complexity,
+    unavailable_grade_complexity_signal,
+)
 from .grader import EmbeddingDependencyVersion, SemanticSimilarityResult
 from .question_fingerprints import FINGERPRINT_VERSION, PromptFingerprints, fingerprint_prompt
 from .questions import GradeResult
 
-
-VALIDATOR_VERSION = "verification-v5"
-RULESET_VERSION = "rules-v5"
+VALIDATOR_VERSION = "verification-v6"
+RULESET_VERSION = "rules-v6"
 _SEMANTIC_CHUNK_SIZE = 128
 _DUPLICATE_REMEDIATION = "Revise the prompt to make the candidate meaningfully distinct."
 _WHITESPACE = re.compile(r"\s+")
@@ -64,12 +67,6 @@ _M2_AST_FIELDS_BY_TYPE = {
     "number": frozenset({"type", "value"}),
     "symbol": frozenset({"type", "name"}),
 }
-_GRADE_COMPLEXITY_METRICS = (
-    "max_prompt_units",
-    "max_sentence_units",
-    "max_numeric_absolute_value",
-    "max_math_operation_nodes",
-)
 _GRADER_DECISIONS = frozenset({"auto_accepted", "auto_rejected", "partial", "needs_review"})
 _RULE_BASED_DIFFICULTY_VERSION = "rule-based-difficulty-v1"
 _QUESTION_TYPE_DIFFICULTY_BASELINES = {
@@ -121,6 +118,7 @@ class _CandidateEvaluation:
     findings: list[VerificationFinding]
     duplicate_feature_summary: dict[str, object]
     difficulty_signal: dict[str, object]
+    grade_complexity_signal: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -189,6 +187,7 @@ def run_candidate_verification(
             ],
             duplicate_feature_summary=_duplicate_feature_summary(duplicate_snapshot),
             difficulty_signal=_unavailable_difficulty_signal(),
+            grade_complexity_signal=unavailable_grade_complexity_signal("validator_unavailable"),
         )
     return _persist_run(
         session,
@@ -198,6 +197,7 @@ def run_candidate_verification(
         findings=evaluation.findings,
         duplicate_feature_summary=evaluation.duplicate_feature_summary,
         difficulty_signal=evaluation.difficulty_signal,
+        grade_complexity_signal=evaluation.grade_complexity_signal,
     )
 
 
@@ -214,6 +214,7 @@ def _evaluate_candidate(
         raise ValueError("candidate generation job was not found")
     revision = job.curriculum_objective_revision
     findings: list[VerificationFinding] = []
+    grade_complexity_signal = unavailable_grade_complexity_signal("candidate_not_evaluated")
 
     if (
         revision.status is not CurriculumRevisionStatus.ACTIVE
@@ -338,8 +339,14 @@ def _evaluate_candidate(
     if not policy_errors and isinstance(rule_json, dict) and isinstance(prompt, str):
         grade_level = revision.objective.grade_mapping.internal_level
         try:
-            complexity_rules = validate_complexity_rules(
-                revision.objective.grade_mapping.complexity_rules_json
+            complexity_findings, grade_complexity_signal = _grade_complexity_evaluation(
+                rules=revision.objective.grade_mapping.complexity_rules_json,
+                grade_level=grade_level,
+                prompt=prompt,
+                reading_material=reading_material if isinstance(reading_material, str) else "",
+                question_type=question_type,
+                rule_json=rule_json,
+                normalized_m2_ast=normalized_m2_ast,
             )
         except ValueError:
             findings.append(
@@ -349,17 +356,9 @@ def _evaluate_candidate(
                     "Correct the persisted grade complexity rules before validating candidates.",
                 )
             )
+            grade_complexity_signal = unavailable_grade_complexity_signal("rules_invalid")
         else:
-            findings.extend(
-                _grade_complexity_findings(
-                    rules=complexity_rules,
-                    grade_level=grade_level,
-                    prompt=prompt,
-                    question_type=question_type,
-                    rule_json=rule_json,
-                    normalized_m2_ast=normalized_m2_ast,
-                )
-            )
+            findings.extend(complexity_findings)
 
     if question_type == "M1" and isinstance(rule_json, dict) and not policy_errors:
         findings.extend(
@@ -397,6 +396,7 @@ def _evaluate_candidate(
             rule_json=rule_json if isinstance(rule_json, dict) else {},
             normalized_m2_ast=normalized_m2_ast,
         ),
+        grade_complexity_signal=grade_complexity_signal,
     )
 
 
@@ -491,7 +491,7 @@ def _m1_consistency_findings(
     return []
 
 
-def _m1_probes(expected: int | float, tolerance: int | float) -> tuple[_M1Probe, ...]:
+def _m1_probes(expected: float, tolerance: float) -> tuple[_M1Probe, ...]:
     try:
         expected_decimal = Decimal(str(expected))
         tolerance_decimal = Decimal(str(tolerance))
@@ -551,35 +551,109 @@ def _grade_complexity_findings(
     question_type: object,
     rule_json: dict[str, object],
     normalized_m2_ast: dict[str, object] | None,
+    reading_material: str = "",
 ) -> list[VerificationFinding]:
-    """Return stable, non-blocking findings for configured grade-complexity limits."""
+    """Return stable findings while preserving the legacy helper contract."""
 
-    findings: list[VerificationFinding] = []
-    observed_metrics = _complexity_observations(
+    findings, _signal = _grade_complexity_evaluation(
+        rules=rules,
+        grade_level=grade_level,
+        prompt=prompt,
+        reading_material=reading_material,
+        question_type=question_type,
+        rule_json=rule_json,
+        normalized_m2_ast=normalized_m2_ast,
+    )
+    return findings
+
+
+def _grade_complexity_evaluation(
+    *,
+    rules: object,
+    grade_level: str,
+    prompt: str,
+    reading_material: str,
+    question_type: object,
+    rule_json: dict[str, object],
+    normalized_m2_ast: dict[str, object] | None,
+) -> tuple[list[VerificationFinding], dict[str, object]]:
+    observations = _complexity_observations(
         prompt=prompt,
         question_type=question_type,
         rule_json=rule_json,
         normalized_m2_ast=normalized_m2_ast,
     )
-
-    for metric in _GRADE_COMPLEXITY_METRICS:
-        limit = rules.get(metric)
-        observed = observed_metrics.get(metric)
-        if isinstance(limit, int) and observed is not None and observed > Decimal(limit):
-            findings.append(
-                VerificationFinding(
-                    code="grade_complexity_warning",
-                    severity=ValidationFindingSeverity.WARNING,
-                    evidence={
-                        "grade_level": grade_level,
-                        "metric": metric,
-                        "observed": _complexity_observed_value(observed),
-                        "limit": limit,
-                    },
-                    remediation="Revise the candidate to fit the selected grade complexity limit.",
-                )
+    evaluation = evaluate_grade_complexity(
+        rules,
+        prompt=prompt,
+        reading_material=reading_material,
+        reference_texts=_grade_complexity_reference_texts(question_type, rule_json),
+        maximum_numeric_absolute_value=observations.get("max_numeric_absolute_value"),
+        math_operation_nodes=(
+            int(observations["max_math_operation_nodes"])
+            if "max_math_operation_nodes" in observations
+            else None
+        ),
+    )
+    findings: list[VerificationFinding] = []
+    for metric in evaluation.violations:
+        observed = evaluation.observations[metric]
+        limit = evaluation.rule_set.limits[metric]
+        evidence: dict[str, object] = {
+            "grade_level": grade_level,
+            "metric": metric,
+            "observed": _complexity_observed_value(observed),
+            "limit": limit,
+        }
+        if evaluation.rule_set.legacy:
+            code = "grade_complexity_warning"
+            severity = ValidationFindingSeverity.WARNING
+        else:
+            evidence.update(
+                {
+                    "ruleset_version": evaluation.rule_set.version,
+                    "enforcement": evaluation.rule_set.enforcement,
+                }
             )
-    return findings
+            blocked = evaluation.rule_set.enforcement == "blocked"
+            code = "grade_complexity_blocked" if blocked else "grade_complexity_warning"
+            severity = (
+                ValidationFindingSeverity.BLOCKED if blocked else ValidationFindingSeverity.WARNING
+            )
+        findings.append(
+            VerificationFinding(
+                code=code,
+                severity=severity,
+                evidence=evidence,
+                remediation="Revise the candidate to fit the selected grade complexity limit.",
+            )
+        )
+    return findings, evaluation.feature_summary(
+        grade_level=grade_level,
+        question_type=question_type if isinstance(question_type, str) else "unknown",
+    )
+
+
+def _grade_complexity_reference_texts(
+    question_type: object, rule_json: dict[str, object]
+) -> tuple[str, ...]:
+    if question_type == "E3":
+        accepted_answers = rule_json.get("accepted_answers")
+        if isinstance(accepted_answers, list):
+            return tuple(value for value in accepted_answers if isinstance(value, str))
+    if question_type == "E4":
+        scoring_points = rule_json.get("scoring_points")
+        if isinstance(scoring_points, list):
+            return tuple(
+                phrase
+                for point in scoring_points
+                if isinstance(point, dict)
+                for phrases in (point.get("evidence_phrases"),)
+                if isinstance(phrases, list)
+                for phrase in phrases
+                if isinstance(phrase, str)
+            )
+    return ()
 
 
 def _complexity_observations(
@@ -719,7 +793,7 @@ def _unavailable_difficulty_signal() -> dict[str, object]:
 
 
 def _difficulty_feature(
-    feature_type: str, value: Decimal | int | float, contribution: float
+    feature_type: str, value: Decimal | float, contribution: float
 ) -> dict[str, int | float | str]:
     return {
         "type": feature_type,
@@ -1462,6 +1536,7 @@ def _persist_run(
     findings: list[VerificationFinding],
     duplicate_feature_summary: dict[str, object],
     difficulty_signal: dict[str, object],
+    grade_complexity_signal: dict[str, object],
 ) -> GenerationValidationRun:
     snapshot_changed_before_lock = draft.current_revision_id != evaluated_revision_id
 
@@ -1504,6 +1579,7 @@ def _persist_run(
             "finding_count": len(findings),
             "content_policy_version": CONTENT_POLICY_VERSION,
             "difficulty_signal": difficulty_signal,
+            "grade_complexity_signal": grade_complexity_signal,
             **duplicate_feature_summary,
         },
     )
