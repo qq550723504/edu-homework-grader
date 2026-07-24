@@ -76,9 +76,7 @@ def test_over_capacity_candidate_never_delegates_to_core_verifier(
     assert result is run
     findings = captured["findings"]
     assert isinstance(findings, list)
-    assert [finding.code for finding in findings] == [
-        "candidate_capacity_limit_exceeded"
-    ]
+    assert [finding.code for finding in findings] == ["candidate_capacity_limit_exceeded"]
     signal = run.feature_summary_json["verification_capacity_signal"]
     assert signal["violations"] == ["prompt_chars"]
     grade_signal = captured["grade_complexity_signal"]

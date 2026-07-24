@@ -54,9 +54,7 @@ def run_capacity_aware_candidate_verification(
                     ),
                 )
             ],
-            signal=unavailable_verification_capacity_signal(
-                "capacity_preflight_unavailable"
-            ),
+            signal=unavailable_verification_capacity_signal("capacity_preflight_unavailable"),
             reason="capacity_preflight_unavailable",
         )
         return run

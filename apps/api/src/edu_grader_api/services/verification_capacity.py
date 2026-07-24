@@ -117,11 +117,7 @@ def evaluate_verification_capacity(candidate: object) -> VerificationCapacityEva
         "control_characters": traversal.control_characters,
         "combining_mark_run": traversal.max_combining_mark_run,
     }
-    violations = tuple(
-        metric
-        for metric in _LIMIT_ORDER
-        if observations[metric] > _LIMITS[metric]
-    )
+    violations = tuple(metric for metric in _LIMIT_ORDER if observations[metric] > _LIMITS[metric])
     load_bucket = _load_bucket(candidate_bytes)
     findings: tuple[VerificationCapacityFinding, ...] = ()
     if violations:
@@ -132,9 +128,7 @@ def evaluate_verification_capacity(candidate: object) -> VerificationCapacityEva
                     "ruleset_version": VERIFICATION_CAPACITY_RULESET_VERSION,
                     "load_bucket": load_bucket,
                     "violations": list(violations),
-                    "observations": {
-                        metric: observations[metric] for metric in violations
-                    },
+                    "observations": {metric: observations[metric] for metric in violations},
                     "limits": {metric: _LIMITS[metric] for metric in violations},
                 },
                 remediation=(

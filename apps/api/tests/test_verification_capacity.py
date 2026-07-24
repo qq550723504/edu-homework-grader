@@ -72,9 +72,7 @@ def test_small_candidate_has_deidentified_capacity_signal() -> None:
         ("reading_material", MAX_READING_MATERIAL_CHARS, "reading_material_chars"),
     ],
 )
-def test_text_limits_block_without_persisting_text(
-    field: str, limit: int, metric: str
-) -> None:
+def test_text_limits_block_without_persisting_text(field: str, limit: int, metric: str) -> None:
     secret = "S" * (limit + 1)
     value = candidate(**{field: secret})
 
@@ -158,9 +156,7 @@ def test_single_evidence_phrase_length_is_bounded() -> None:
         candidate(
             question_type="E4",
             rule_json={
-                "scoring_points": [
-                    {"id": "point", "score": 1, "evidence_phrases": [phrase]}
-                ]
+                "scoring_points": [{"id": "point", "score": 1, "evidence_phrases": [phrase]}]
             },
         )
     )
@@ -210,9 +206,7 @@ def test_non_object_candidate_fails_closed() -> None:
 
 
 def test_capacity_finding_contains_only_violating_metrics() -> None:
-    evaluation = evaluate_verification_capacity(
-        candidate(prompt="x" * (MAX_PROMPT_CHARS + 1))
-    )
+    evaluation = evaluate_verification_capacity(candidate(prompt="x" * (MAX_PROMPT_CHARS + 1)))
 
     evidence = evaluation.findings[0].evidence
     assert evidence["violations"] == ["prompt_chars"]

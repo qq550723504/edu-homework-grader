@@ -21,9 +21,7 @@ def candidate(*, prompt: str) -> dict[str, object]:
 
 
 def test_exact_prompt_limit_is_allowed() -> None:
-    evaluation = evaluate_verification_capacity(
-        candidate(prompt="x" * MAX_PROMPT_CHARS)
-    )
+    evaluation = evaluate_verification_capacity(candidate(prompt="x" * MAX_PROMPT_CHARS))
 
     assert "prompt_chars" not in evaluation.violations
 
