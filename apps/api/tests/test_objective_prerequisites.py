@@ -41,7 +41,9 @@ class CurriculumGraph:
     outside: CurriculumObjectiveRevision
 
 
-def curriculum_graph(session: Session, *, target_knowledge_point: str | None = "multiplication") -> CurriculumGraph:
+def curriculum_graph(
+    session: Session, *, target_knowledge_point: str | None = "multiplication"
+) -> CurriculumGraph:
     source = CurriculumSourceRecord(
         issuer="Example Board",
         title="Mathematics curriculum",
@@ -226,9 +228,7 @@ def test_ambiguous_alias_produces_stable_warning(session: Session) -> None:
     )
 
     assert evaluation.resolution == "ambiguous"
-    assert [finding.code for finding in evaluation.findings] == [
-        "objective_prerequisite_ambiguous"
-    ]
+    assert [finding.code for finding in evaluation.findings] == ["objective_prerequisite_ambiguous"]
     assert evaluation.findings[0].evidence["match_count"] == 2
 
 

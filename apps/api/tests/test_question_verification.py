@@ -1037,7 +1037,8 @@ def test_semantic_published_question_is_blocked_without_raw_comparator(
     assert {
         key: value
         for key, value in run.feature_summary_json.items()
-        if key not in {"difficulty_signal", "grade_complexity_signal"}
+        if key
+        not in {"difficulty_signal", "grade_complexity_signal", "objective_prerequisite_signal"}
     } == {
         "finding_count": len(run.findings),
         "content_policy_version": "minor-content-policy-v1",
@@ -1143,7 +1144,8 @@ def test_duplicate_feature_summary_uses_the_gate_snapshot(
     assert {
         key: value
         for key, value in run.feature_summary_json.items()
-        if key not in {"difficulty_signal", "grade_complexity_signal"}
+        if key
+        not in {"difficulty_signal", "grade_complexity_signal", "objective_prerequisite_signal"}
     } == {
         "finding_count": 0,
         "content_policy_version": "minor-content-policy-v1",
@@ -2496,8 +2498,8 @@ def test_grade_complexity_reuses_m2_normalization_for_safe_metrics(session: Sess
         assert "ast" not in finding.evidence_json
         assert "args" not in finding.evidence_json
         assert "value" not in finding.evidence_json
-    assert run.validator_version == "verification-v6"
-    assert run.ruleset_version == "rules-v6"
+    assert run.validator_version == "verification-v7"
+    assert run.ruleset_version == "rules-v7"
 
 
 def test_grade_complexity_uses_stable_metric_order_and_skips_absent_rules(session: Session) -> None:
@@ -3143,8 +3145,8 @@ def test_content_policy_findings_are_sanitized_and_ordered(session: Session) -> 
         for sensitive_text in ("explicit adult content", "how to cut yourself")
         for value in persisted_values
     )
-    assert run.validator_version == "verification-v6"
-    assert run.ruleset_version == "rules-v6"
+    assert run.validator_version == "verification-v7"
+    assert run.ruleset_version == "rules-v7"
     assert run.feature_summary_json["content_policy_version"] == "minor-content-policy-v1"
 
 
@@ -3359,3 +3361,72 @@ def test_invalid_versioned_grade_complexity_rules_record_unavailable_signal(
     assert finding_codes(run) == {"grade_complexity_rules_invalid"}
     assert run.feature_summary_json["grade_complexity_signal"]["availability"] == "unavailable"
     assert run.feature_summary_json["grade_complexity_signal"]["reason"] == "rules_invalid"
+
+
+def test_verification_persists_objective_prerequisite_signal(session: Session) -> None:
+    draft = generation_draft(session)
+    job = session.get(GenerationJob, draft.job_id)
+    assert job is not None
+    target_revision = job.curriculum_objective_revision
+    target_revision.objective.knowledge_point = "whole-number addition"
+    session.flush()
+
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
+
+    signal = run.feature_summary_json["objective_prerequisite_signal"]
+    assert signal == {
+        "availability": "available",
+        "version": "objective-prerequisite-v1",
+        "target_objective_code": target_revision.objective.code,
+        "resolution": "target",
+        "candidate_alias_digest": signal["candidate_alias_digest"],
+        "matched_objective_code": target_revision.objective.code,
+        "prerequisite_depth": 0,
+        "allowed_objective_count": 1,
+        "prerequisite_revision_count": 0,
+    }
+    assert str(signal["candidate_alias_digest"]).startswith("sha256:")
+    assert "whole-number addition" not in json.dumps(signal)
+
+
+def test_verification_blocks_known_objective_outside_prerequisite_closure(
+    session: Session,
+) -> None:
+    candidate = valid_m1_candidate("What is 2 + 2?")
+    candidate["knowledge_point"] = "fraction division"
+    draft = generation_draft(session, candidate_json=candidate)
+    job = session.get(GenerationJob, draft.job_id)
+    assert job is not None
+    target_revision = job.curriculum_objective_revision
+    target_revision.objective.knowledge_point = "whole-number addition"
+    outside_objective = CurriculumObjective(
+        profile=target_revision.objective.profile,
+        grade_mapping=target_revision.objective.grade_mapping,
+        code=f"MATH-G6-FRACTION-{uuid4()}",
+        subject="mathematics",
+        domain="number",
+        knowledge_point="fraction division",
+        status=CurriculumProfileStatus.ACTIVE,
+    )
+    outside_revision = CurriculumObjectiveRevision(
+        objective=outside_objective,
+        revision_number=1,
+        text="Divide fractions.",
+        source_locator="section outside",
+        allowed_question_types=["M1"],
+        difficulty_min=0,
+        difficulty_max=1,
+        activity_type=CurriculumActivityType.SCORED_QUESTION,
+        status=CurriculumRevisionStatus.ACTIVE,
+    )
+    session.add(outside_revision)
+    session.flush()
+
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
+
+    finding = finding_by_code(run, "objective_prerequisite_out_of_scope")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.severity.value == "blocked"
+    assert finding.evidence_json["matched_objective_code"] == outside_objective.code
+    assert finding.evidence_json["ruleset_version"] == "objective-prerequisite-v1"
+    assert "fraction division" not in json.dumps(finding.evidence_json)

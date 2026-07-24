@@ -120,9 +120,7 @@ def evaluate_objective_prerequisite_alignment(
 
     revisions = list(
         session.scalars(
-            select(CurriculumObjectiveRevision).where(
-                CurriculumObjectiveRevision.id.in_(closure)
-            )
+            select(CurriculumObjectiveRevision).where(CurriculumObjectiveRevision.id.in_(closure))
         )
     )
     if len(revisions) != len(closure):
