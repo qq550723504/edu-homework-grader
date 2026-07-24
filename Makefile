@@ -13,7 +13,7 @@ api-test:
 	python -m pytest apps/api/tests
 
 api-lint: ruff-version-check
-	python -m ruff format --config $(RUFF_CONFIG) --check apps/api
+	python -m ruff format --check apps/api
 	python -m ruff check --config $(RUFF_CONFIG) apps/api
 
 api-migrate:
@@ -42,11 +42,11 @@ ruff-version-check:
 	python -c "import importlib.metadata as m; expected='$(RUFF_VERSION)'; actual=m.version('ruff'); assert actual == expected, f'Ruff version mismatch: expected {expected}, found {actual}'"
 
 lint: ruff-version-check
-	python -m ruff format --config $(RUFF_CONFIG) --check packages/processor-policy services/generator apps/api services/grader
+	python -m ruff format --check packages/processor-policy services/generator apps/api services/grader
 	python -m ruff check --config $(RUFF_CONFIG) packages/processor-policy services/generator apps/api services/grader
 
 format: ruff-version-check
-	python -m ruff format --config $(RUFF_CONFIG) packages/processor-policy services/generator apps/api services/grader
+	python -m ruff format packages/processor-policy services/generator apps/api services/grader
 
 web-install:
 	cd apps/web && npm ci
