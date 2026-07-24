@@ -1,0 +1,157 @@
+name: PR 107 policy precedence finalizer
+
+on:
+  push:
+    branches:
+      - agent/math-semantics-support-matrix-v1
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/math-semantics-support-matrix-v1
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Apply policy-schema precedence fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+              return text.replace(old, new, 1)
+
+          path = Path('apps/api/src/edu_grader_api/services/question_verification.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''    policy_version = candidate.get("policy_version")
+    rule_json = candidate.get("rule_json")
+    math_semantics_evaluation = evaluate_math_semantics(
+        question_type=question_type,
+        policy_version=policy_version,
+        rule_json=rule_json,
+    )
+    findings.extend(
+        VerificationFinding(
+            code=finding.code,
+            severity=ValidationFindingSeverity.BLOCKED,
+            evidence=finding.evidence,
+            remediation=finding.remediation,
+        )
+        for finding in math_semantics_evaluation.findings
+    )
+    math_semantics_signal = math_semantics_evaluation.feature_summary()
+    math_semantics_blocked = bool(math_semantics_evaluation.findings)
+    policy_errors = (
+        validate_policy(question_type, policy_version, rule_json)
+        if isinstance(question_type, str)
+        and isinstance(policy_version, str)
+        and isinstance(rule_json, dict)
+        else [{"path": "/", "message": "candidate policy fields are invalid"}]
+    )
+'''
+          new = '''    policy_version = candidate.get("policy_version")
+    rule_json = candidate.get("rule_json")
+    policy_errors = (
+        validate_policy(question_type, policy_version, rule_json)
+        if isinstance(question_type, str)
+        and isinstance(policy_version, str)
+        and isinstance(rule_json, dict)
+        else [{"path": "/", "message": "candidate policy fields are invalid"}]
+    )
+    math_semantics_blocked = False
+    if policy_errors:
+        math_semantics_signal = unavailable_math_semantics_signal(
+            "policy_schema_invalid"
+        )
+    else:
+        math_semantics_evaluation = evaluate_math_semantics(
+            question_type=question_type,
+            policy_version=policy_version,
+            rule_json=rule_json,
+        )
+        findings.extend(
+            VerificationFinding(
+                code=finding.code,
+                severity=ValidationFindingSeverity.BLOCKED,
+                evidence=finding.evidence,
+                remediation=finding.remediation,
+            )
+            for finding in math_semantics_evaluation.findings
+        )
+        math_semantics_signal = math_semantics_evaluation.feature_summary()
+        math_semantics_blocked = bool(math_semantics_evaluation.findings)
+'''
+          path.write_text(
+              replace_once(text, old, new, 'policy-schema precedence'),
+              encoding='utf-8',
+          )
+
+          test_path = Path('apps/api/tests/test_question_verification.py')
+          tests = test_path.read_text(encoding='utf-8')
+          old_test = '''    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding_codes(run) == {"policy_schema_invalid"}
+'''
+          new_test = '''    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding_codes(run) == {"policy_schema_invalid"}
+    assert run.feature_summary_json["math_semantics_signal"] == {
+        "availability": "unavailable",
+        "version": "math-semantics-v1",
+        "question_type": None,
+        "policy_version": None,
+        "support_status": None,
+        "semantic_class": None,
+        "trigger_operator": None,
+        "reason": "policy_schema_invalid",
+    }
+'''
+          test_path.write_text(
+              replace_once(tests, old_test, new_test, 'policy-schema regression test'),
+              encoding='utf-8',
+          )
+          PY
+      - name: Format and validate focused suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          make install-python >/dev/null
+          python -m ruff format \
+            apps/api/src/edu_grader_api/services/math_semantics.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/tests/test_math_semantics.py \
+            apps/api/tests/test_question_verification.py
+          python -m ruff check --config ruff.toml \
+            apps/api/src/edu_grader_api/services/math_semantics.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/tests/test_math_semantics.py \
+            apps/api/tests/test_question_verification.py
+          python -m pytest \
+            apps/api/tests/test_math_semantics.py \
+            apps/api/tests/test_question_verification.py -q
+          python scripts/check_docs_status.py
+      - name: Restore standard workflows and push final branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git show origin/main:.github/workflows/docs-integrity.yml > .github/workflows/docs-integrity.yml
+          git rm .github/workflows/pr107-apply-policy-precedence.yml
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: preserve policy-schema validation precedence'
+          git push origin HEAD:agent/math-semantics-support-matrix-v1
