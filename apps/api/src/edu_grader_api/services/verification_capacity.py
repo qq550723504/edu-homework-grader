@@ -253,9 +253,9 @@ def _json_size(value: object) -> int | None:
             separators=(",", ":"),
             sort_keys=True,
         )
-    except (RecursionError, TypeError, ValueError):
+        return len(payload.encode("utf-8"))
+    except (RecursionError, TypeError, UnicodeEncodeError, ValueError):
         return None
-    return len(payload.encode("utf-8"))
 
 
 def _text_length(value: object) -> int:
