@@ -115,10 +115,7 @@ def evaluate_verification_capacity(candidate: object) -> VerificationCapacityEva
         "control_characters": traversal.control_characters,
         "combining_mark_run": traversal.max_combining_mark_run,
     }
-    if (
-        traversal.max_depth > MAX_JSON_DEPTH
-        or traversal.node_count > MAX_JSON_NODES
-    ):
+    if traversal.max_depth > MAX_JSON_DEPTH or traversal.node_count > MAX_JSON_NODES:
         return _evaluation_from_observations(
             load_bucket="oversize",
             observations=observations,
@@ -168,9 +165,7 @@ def _evaluation_from_observations(
     load_bucket: LoadBucket,
     observations: dict[str, int],
 ) -> VerificationCapacityEvaluation:
-    violations = tuple(
-        metric for metric in _LIMIT_ORDER if observations[metric] > _LIMITS[metric]
-    )
+    violations = tuple(metric for metric in _LIMIT_ORDER if observations[metric] > _LIMITS[metric])
     findings: tuple[VerificationCapacityFinding, ...] = ()
     if violations:
         findings = (
@@ -180,9 +175,7 @@ def _evaluation_from_observations(
                     "ruleset_version": VERIFICATION_CAPACITY_RULESET_VERSION,
                     "load_bucket": load_bucket,
                     "violations": list(violations),
-                    "observations": {
-                        metric: observations[metric] for metric in violations
-                    },
+                    "observations": {metric: observations[metric] for metric in violations},
                     "limits": {metric: _LIMITS[metric] for metric in violations},
                 },
                 remediation=(
