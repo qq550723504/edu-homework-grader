@@ -48,6 +48,7 @@ jobs:
         with:
           name: grade-complexity-patch-diagnostics-${{ github.run_id }}
           path: .patch-grade-complexity.log
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
 
