@@ -37,7 +37,7 @@
 - [ ] #31 真实 OIDC、PostgreSQL、Provider、Grader 与浏览器统一全栈验收；
 - [ ] #32 学生同步错误分类、退避、冲突处理和页面生命周期清理；
 - [ ] #33 实际试点部署、可观测性、备份恢复、容量、回滚和联合签署；
-- [ ] #34 项目状态和发布证据自动校验完成并长期运行。
+- [x] #34 项目状态、机器证据和 Docs integrity 自动校验已完成并长期运行。
 
 这些门槛用于把“代码已实现、仓库 CI 已验证”提升为“发布环境已验收”和“学校生产已上线”；四种状态不能混用。
 
@@ -65,7 +65,9 @@ Epic：[#36](https://github.com/qq550723504/edu-homework-grader/issues/36)
 - [x] PR #84：M1/M2/E1–E4 一致性、故障门禁、六题型确定性语料和离线 fail-closed 评估；
 - [x] PR #85–#89：全局/租户治理、Canary、Kill Switch、流水线强制检查、管理员权限和审计；
 - [x] PR #100：生产形态事实导出、固定数据库水位和显式 baseline/candidate 分层比较；
-- [ ] #83：Profile/年级复杂度、Objective prerequisite 和数学多解/定义域等语义边界；
+- [x] PR #104：固定 Ruff 0.16.0、显式 lint 规则以及 CI/pre-commit 工具链一致性；
+- [x] PR #103：版本化 Profile/年级复杂度规则、E3/E4 语言篇幅信号、M1/M2 数值复杂度与 `verification-v6` / `rules-v6`；
+- [ ] #83：剩余 Objective prerequisite、数学多解/定义域/增根漏根语义和容量 SLO；
 - [ ] #99：首次真实只读数据库报告、成本/usage 完整性和发布后修正映射；
 - [ ] #42：教师校准黄金集、正式 Blocking Threshold、线上反馈和 Shadow/Canary 证据；
 - [ ] #43：默认版本晋级/回滚、预算、Provider 合规、版权下架和事故响应；
