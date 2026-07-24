@@ -1,30 +1,20 @@
 import { expect, test } from '@playwright/test'
-import { readFile, readdir } from 'node:fs/promises'
+import { copyFile, mkdir } from 'node:fs/promises'
 import path from 'node:path'
 
-async function walk(directory: string): Promise<string[]> {
-  const entries = await readdir(directory, { withFileTypes: true })
-  const files: string[] = []
-  for (const entry of entries) {
-    const target = path.join(directory, entry.name)
-    if (entry.isDirectory()) {
-      files.push(...(await walk(target)))
-    } else if (entry.isFile() && target.endsWith('.py')) {
-      files.push(target)
-    }
-  }
-  return files
-}
+const sources = [
+  'apps/api/src/edu_grader_api/routers/ai_question_validation.py',
+  'apps/api/src/edu_grader_api/services/ai_question_review.py',
+  'apps/api/src/edu_grader_api/services/question_verification.py',
+  'apps/api/tests/test_question_verification.py',
+]
 
-test('locate run_candidate_verification call sites', async () => {
+test('capture PR 109 production caller sources', async ({}, testInfo) => {
   const root = path.resolve(process.cwd(), '../..')
-  const files = await walk(path.join(root, 'apps/api'))
-  const matches: string[] = []
-  for (const file of files) {
-    const content = await readFile(file, 'utf8')
-    if (content.includes('run_candidate_verification(')) {
-      matches.push(path.relative(root, file))
-    }
+  for (const source of sources) {
+    const destination = testInfo.outputPath('source', source)
+    await mkdir(path.dirname(destination), { recursive: true })
+    await copyFile(path.join(root, source), destination)
   }
-  expect(matches, JSON.stringify(matches)).toEqual([])
+  expect(false, 'intentional one-shot source capture').toBeTruthy()
 })
