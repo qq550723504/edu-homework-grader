@@ -1,4 +1,5 @@
 # One-shot PR #109 finalizer; self-deletes after validation.
+# Retriggered after the bounded JSON traversal review.
 name: PR 109 candidate-wide text scan budget
 
 on:
