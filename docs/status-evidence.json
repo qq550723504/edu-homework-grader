@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "status_as_of": "2026-07-24",
-  "evidence_base_commit": "48ae4cca3f15ba1856989f57d584790553d6b060",
+  "evidence_base_commit": "bc222e1fcc143a643edfc6008084c1aa25267ee1",
   "latest_full_ci": {
-    "tested_head": "c1dae52487c7d3f254a35269919ddd262da2a8b0",
+    "tested_head": "f34c0322a0fca0fcc476c59a6db88f5ffde5d038",
     "workflow": "CI",
-    "run_number": 321,
-    "run_id": 30066298943,
+    "run_number": 328,
+    "run_id": 30069092574,
     "conclusion": "success",
     "required_jobs": [
       "changes",
@@ -20,8 +20,8 @@
   },
   "ai_evaluation": {
     "workflow": "AI evaluation gate",
-    "run_number": 100,
-    "run_id": 30066298973,
+    "run_number": 107,
+    "run_id": 30069092564,
     "conclusion": "success",
     "operational_exporter_version": "operational-ai-evaluation-export-v1"
   },
@@ -33,8 +33,10 @@
   },
   "generation_contract": {
     "prompt_version": "generator-v3",
-    "validator_version": "verification-v6",
-    "ruleset_version": "rules-v6"
+    "validator_version": "verification-v7",
+    "ruleset_version": "rules-v7",
+    "grade_complexity_rules_version": "grade-complexity-v1",
+    "objective_prerequisite_rules_version": "objective-prerequisite-v1"
   },
   "default_question_policies": [
     "M1@1",
