@@ -3,7 +3,7 @@
 机器可读证据见 [`status-evidence.json`](status-evidence.json)。本页的证据基线提交为：
 
 ```text
-f6587492750b71f96fa0914942d1e1b72bd3e9be
+48ae4cca3f15ba1856989f57d584790553d6b060
 ```
 
 ## 状态口径
@@ -37,23 +37,23 @@ f6587492750b71f96fa0914942d1e1b72bd3e9be
 
 ### 最近完整 CI
 
-PR #101 的最终测试提交：
+PR #104 的最终测试提交：
 
 ```text
-88f0b81c152bcf5166d9d216a7f3a115e322f59a
+c1dae52487c7d3f254a35269919ddd262da2a8b0
 ```
 
-CI Run #259（Run ID `30032846201`）成功，包含：
+CI Run #321（Run ID `30066298943`）成功，包含：
 
 - `changes`
-- `python`：Ruff、完整 Python 测试和六题型确定性验证语料
+- `python`：固定 Ruff 0.16.0、显式规则配置、完整 Python 测试和六题型确定性验证语料
 - `migrations`：PostgreSQL upgrade/downgrade/re-upgrade
 - `compose`：配置校验和 API/Web 镜像构建
 - `live-grader-integration`：真实 Grader/LanguageTool HTTP 适配器
 - `web`：单元测试、Nuxt production build 和 E2E 进程管理
 - `browser-e2e`：Chromium 学生/教师快速垂直链路
 
-AI evaluation gate Run #38（Run ID `30032847548`）成功。
+AI evaluation gate Run #100（Run ID `30066298973`）成功。
 
 这些结果证明仓库基线通过自动化门禁，**不证明学校发布环境已经验收或生产已上线**。
 
