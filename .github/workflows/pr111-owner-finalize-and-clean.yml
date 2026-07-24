@@ -6,12 +6,11 @@ on:
 
 permissions:
   contents: write
-  pull-requests: read
-  issues: read
+  pull-requests: write
+  issues: write
 
 env:
   TARGET_BRANCH: agent/verification-budget-v1
-  WORKFLOW_PATH: .github/workflows/pr111-owner-finalize-and-clean.yml
 
 jobs:
   finalize-and-clean:
@@ -49,6 +48,11 @@ jobs:
 
           review_path = Path('apps/api/src/edu_grader_api/services/ai_question_review.py')
           review = review_path.read_text(encoding='utf-8')
+          core_import = (
+              'from .question_verification import '
+              'VerificationGraderClient, run_candidate_verification'
+          )
+          core_only_import = 'from .question_verification import VerificationGraderClient'
           capacity_import = (
               'from .capacity_aware_verification import '
               'run_capacity_aware_candidate_verification'
@@ -57,10 +61,20 @@ jobs:
               'from .budget_aware_verification import '
               'run_budget_aware_candidate_verification'
           )
-          if capacity_import in review:
+          if core_import in review:
+              review = review.replace(
+                  core_import,
+                  f'{budget_import}\n{core_only_import}',
+                  1,
+              )
+          elif capacity_import in review:
               review = review.replace(capacity_import, budget_import, 1)
           elif budget_import not in review:
               raise SystemExit('teacher review verification import is missing')
+          review = review.replace(
+              'run_candidate_verification(',
+              'run_budget_aware_candidate_verification(',
+          )
           review = review.replace(
               'run_capacity_aware_candidate_verification(',
               'run_budget_aware_candidate_verification(',
@@ -73,19 +87,24 @@ jobs:
               'apps/api/src/edu_grader_api/services/budget_aware_verification.py'
           )
           wrapper = wrapper_path.read_text(encoding='utf-8')
-          old_terminal = '''    summary = dict(run.feature_summary_json)
+          persist_marker = '''    summary = dict(run.feature_summary_json)
               summary["verification_capacity_signal"] = unavailable_verification_capacity_signal(
                   "verification_timeout"
               )
           '''
-          new_terminal = '''    run.status = ValidationRunStatus.BLOCKED
+          persist_replacement = '''    run.status = ValidationRunStatus.BLOCKED
               summary = dict(run.feature_summary_json)
               summary["verification_capacity_signal"] = unavailable_verification_capacity_signal(
                   "verification_timeout"
               )
           '''
-          if old_terminal in wrapper:
-              wrapper = wrapper.replace(old_terminal, new_terminal, 1)
+          persist_section = wrapper[
+              wrapper.index('def _persist_terminal_failure('):wrapper.index('def _finalize_run(')
+          ]
+          if 'run.status = ValidationRunStatus.BLOCKED' not in persist_section:
+              if persist_marker not in wrapper:
+                  raise SystemExit('terminal persistence marker is missing')
+              wrapper = wrapper.replace(persist_marker, persist_replacement, 1)
 
           start = wrapper.index('def _finalize_run(')
           end = wrapper.index('\ndef _finding_for_terminal_budget(', start)
@@ -124,7 +143,7 @@ jobs:
               return run
 
           '''
-          wrapper = wrapper[:start] + finalize + wrapper[end + 1 :]
+          wrapper = wrapper[:start] + finalize + wrapper[end + 1:]
           wrapper_path.write_text(wrapper, encoding='utf-8')
 
           test_path = Path('apps/api/tests/test_budget_aware_verification.py')
@@ -185,6 +204,7 @@ jobs:
           fi
 
       - name: Safely clean stale remote branches
+        id: cleanup
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -193,7 +213,8 @@ jobs:
           set -euo pipefail
           git fetch origin '+refs/heads/*:refs/remotes/origin/*' --prune
           mapfile -t open_heads < <(
-            gh pr list --repo "$REPO" --state open --limit 1000 --json headRefName --jq '.[].headRefName'
+            gh pr list --repo "$REPO" --state open --limit 1000 \
+              --json headRefName --jq '.[].headRefName'
           )
           is_open_head() {
             local candidate="$1"
@@ -221,7 +242,8 @@ jobs:
             else
               exact_merged_count="$(
                 gh pr list --repo "$REPO" --state merged --head "$branch" --limit 100 \
-                  --json headRefOid --jq --arg sha "$sha" '[.[] | select(.headRefOid == $sha)] | length'
+                  --json headRefOid --jq --arg sha "$sha" \
+                  '[.[] | select(.headRefOid == $sha)] | length'
               )"
               if [[ "$exact_merged_count" != '0' ]]; then
                 safe_reason='exact-head-of-merged-pr'
@@ -250,16 +272,13 @@ jobs:
               | sort -u
           )
 
-          printf 'Deleted branches (%s):\n' "${#deleted[@]}"
-          printf '  %s\n' "${deleted[@]:-none}"
-          printf 'Skipped branches (%s):\n' "${#skipped[@]}"
-          printf '  %s\n' "${skipped[@]:-none}"
-
-      - name: Remove one-shot workflow from main
-        run: |
-          set -euo pipefail
-          git fetch origin main
-          git checkout -B main origin/main
-          git rm -f "$WORKFLOW_PATH"
-          git commit -m 'chore: remove completed PR 111 maintenance workflow'
-          git push origin HEAD:main
+          {
+            echo '### Automated branch cleanup result'
+            echo
+            echo "Deleted branches: ${#deleted[@]}"
+            for item in "${deleted[@]}"; do echo "- \`$item\`"; done
+            echo
+            echo "Skipped branches: ${#skipped[@]}"
+            for item in "${skipped[@]}"; do echo "- \`$item\`"; done
+          } > /tmp/branch-cleanup-result.md
+          gh pr comment 111 --repo "$REPO" --body-file /tmp/branch-cleanup-result.md
