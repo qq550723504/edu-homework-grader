@@ -24,12 +24,8 @@ dependencies = [
 dev = [
   "pre-commit>=4.4,<5",
   "pytest>=8.4,<10",
-  "ruff>=0.12,<1",
+  "ruff==0.15.14",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.ruff]
-line-length = 100
-target-version = "py312"
