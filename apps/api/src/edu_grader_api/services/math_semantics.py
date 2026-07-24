@@ -175,8 +175,8 @@ def _evaluate_m1(
         return _schema_owned_evaluation("M1", policy_version)
     expected = rule_json.get("expected")
     if isinstance(expected, bool):
-        return _generic_unsupported("M1", policy_version)
-    if isinstance(expected, int | float) and math.isfinite(float(expected)):
+        return _schema_owned_evaluation("M1", policy_version)
+    if isinstance(expected, int | float):
         return MathSemanticsEvaluation(
             question_type="M1",
             policy_version=policy_version,
@@ -204,7 +204,7 @@ def _evaluate_m1(
             trigger_operator=_public_trigger_operator(operator),
             remediation="Use M1 only for one finite numeric answer.",
         )
-    return _generic_unsupported("M1", policy_version)
+    return _schema_owned_evaluation("M1", policy_version)
 
 
 def _evaluate_m2(
