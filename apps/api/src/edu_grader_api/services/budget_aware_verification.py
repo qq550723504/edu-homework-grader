@@ -165,6 +165,7 @@ def _finalize_run(
     session.flush()
     return run
 
+
 def _finding_for_terminal_budget(
     budget: VerificationBudget,
 ) -> core.VerificationFinding | None:
