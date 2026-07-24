@@ -1,5 +1,4 @@
 import { expect, test } from '@playwright/test'
-import { copyFile, mkdir } from 'node:fs/promises'
 import path from 'node:path'
 
 const sources = [
@@ -12,9 +11,10 @@ const sources = [
 test('capture PR 109 production caller sources', async ({}, testInfo) => {
   const root = path.resolve(process.cwd(), '../..')
   for (const source of sources) {
-    const destination = testInfo.outputPath('source', source)
-    await mkdir(path.dirname(destination), { recursive: true })
-    await copyFile(path.join(root, source), destination)
+    await testInfo.attach(source.replaceAll('/', '__'), {
+      path: path.join(root, source),
+      contentType: 'text/plain',
+    })
   }
   expect(false, 'intentional one-shot source capture').toBeTruthy()
 })
