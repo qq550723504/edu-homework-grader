@@ -18,6 +18,14 @@ class MathAnswerNormalizationError(ValueError):
         super().__init__(message)
 
 
+class GraderRequestTimeoutError(TimeoutError):
+    """Stable internal dependency timeout without URLs or payload details."""
+
+    def __init__(self, operation: str) -> None:
+        self.operation = operation
+        super().__init__(f"grader dependency timed out during {operation}")
+
+
 @dataclass(frozen=True)
 class EmbeddingDependencyVersion:
     id: str
@@ -54,9 +62,7 @@ class HttpGraderClient:
             answer_json,
             policy_version=policy_version,
         )
-        self._validate_request(payload)
-        response = httpx.post(f"{self.base_url}{path}", json=payload, timeout=10)
-        response.raise_for_status()
+        response = self._post(path, payload, operation="grade")
         data = response.json()
         if not isinstance(data, dict):
             raise ValueError("grader response must be an object")
@@ -81,13 +87,11 @@ class HttpGraderClient:
         ):
             raise MathAnswerNormalizationError("invalid_variables", "数学答案变量列表无效。")
         try:
-            self._validate_request({"mathjson": mathjson, "variables": variables})
-            response = httpx.post(
-                f"{self.base_url}/v1/normalize/mathjson",
-                json={"mathjson": mathjson, "variables": variables},
-                timeout=10,
+            response = self._post(
+                "/v1/normalize/mathjson",
+                {"mathjson": mathjson, "variables": variables},
+                operation="normalizer",
             )
-            response.raise_for_status()
         except httpx.HTTPStatusError as error:
             payload = _error_payload(error)
             raise MathAnswerNormalizationError(
@@ -104,13 +108,11 @@ class HttpGraderClient:
 
     def semantic_similarity(self, query: str, comparisons: list[str]) -> SemanticSimilarityResult:
         payload = {"query": query, "comparisons": comparisons}
-        self._validate_request(payload)
-        response = httpx.post(
-            f"{self.base_url}/v1/semantic-similarity",
-            json=payload,
-            timeout=10,
+        response = self._post(
+            "/v1/semantic-similarity",
+            payload,
+            operation="similarity",
         )
-        response.raise_for_status()
         data = response.json()
         if not isinstance(data, dict):
             raise ValueError("semantic similarity response is invalid")
@@ -131,6 +133,25 @@ class HttpGraderClient:
             scores=[float(score) for score in scores],
             embedding=embedding,
         )
+
+    def _post(
+        self,
+        path: str,
+        payload: dict[str, object],
+        *,
+        operation: str,
+    ) -> httpx.Response:
+        self._validate_request(payload)
+        try:
+            response = httpx.post(
+                f"{self.base_url}{path}",
+                json=payload,
+                timeout=settings.grader_request_timeout_seconds,
+            )
+        except httpx.TimeoutException as error:
+            raise GraderRequestTimeoutError(operation) from error
+        response.raise_for_status()
+        return response
 
     def _validate_request(self, payload: dict[str, object]) -> None:
         assert_allowed_processor_url(self.base_url, settings.allowed_processor_hosts)
