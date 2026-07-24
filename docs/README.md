@@ -2,14 +2,21 @@
 
 ## 当前状态与路线
 
-- [项目状态](project-status.md)：能力、验证证据和生产限制。
-- [试点上线检查表](pilot-checklist.md)：真实登录、模型、密钥、备份恢复、同意和 CI 放行项。
+- [项目状态](project-status.md)：能力、仓库验证证据、发布环境边界和剩余阻断项。
+- [机器可读状态证据](status-evidence.json)：CI Job、提交、运行编号、Generator/Validator、默认策略和英语模型锁定值。
+- [试点上线检查表](pilot-checklist.md)：从仓库 RC、统一全栈验收到学校部署、恢复和联合签署。
 - [产品路线图](roadmap.md)：作业批改 MVP、试点门槛、AI 出题和自适应学习阶段计划。
 
 ## 产品实施计划
 
 - [K–13 课程约束型 AI 出题实施计划](ai-question-generation-plan.md)：课程模型、生成服务、验证门禁、教师审核、质量指标和 12 周实施安排。
 - [学生知识画像与自适应练习实施计划](adaptive-learning-plan.md)：交付顺序、系统边界和 16 周实施安排。其早期数据模型草图已由 Learning Event v1 数据契约取代；迁移、Schema 和消费者必须以该契约为准。
+
+## AI 出题运行与质量
+
+- [生产事实评估运行手册](operations/ai-evaluation-operational.md)：只读数据库水位、去标识化导出、显式 baseline/candidate、治理审批和报告 Artifact。
+- [AI 出题实施计划](ai-question-generation-plan.md)：Generator、验证、教师工作台、评估与治理的总体边界。
+- [试点上线检查表](pilot-checklist.md#f-ai-质量与治理42438399)：教师黄金集、正式阈值、Provider 政策、预算和课程/数学语义边界。
 
 ## 自适应学习契约与治理
 
@@ -23,5 +30,6 @@
 
 - [架构](architecture.md)、[数据清单](data-inventory.md)。
 - [ADR-0001：单体仓库](adr/0001-monorepo.md)。
+- [机器可读状态证据](status-evidence.json) 与 `scripts/check_docs_status.py` 共同防止 CI Job、策略版本、模型锁定值和状态声明漂移。
 
-`docs/superpowers/` 保存历史设计与执行材料，不是当前产品承诺；以 README、项目状态、路线图、实施计划、已接受 ADR、数据契约和运行中的 OpenAPI 为准。
+`docs/superpowers/` 保存历史设计与执行材料，不是当前产品承诺；以 README、项目状态、机器证据、路线图、实施计划、已接受 ADR、数据契约和运行中的 OpenAPI 为准。

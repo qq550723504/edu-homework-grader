@@ -2,7 +2,7 @@
 
 面向英语与数学课程的作业提交、自动批改、教师复核和学生订正平台。
 
-> 当前仓库已具备第一阶段浏览器垂直切片，但尚未生产就绪。能力边界、已知限制和试点条件见 [项目状态](docs/project-status.md)。
+> 当前仓库已具备英语/数学作业闭环和教师 AI 候选题影子模式基础，但尚未完成发布环境统一全栈验收或生产上线。能力边界见 [项目状态](docs/project-status.md)，机器可读证据见 [状态证据](docs/status-evidence.json)。
 
 ## 第一阶段范围
 
@@ -19,11 +19,12 @@ Nuxt Web（OIDC BFF + HttpOnly 会话）
             │
             ▼
  FastAPI Core API ─── processor-policy
-       │              │
-       ▼              ▼
-PostgreSQL/Redis   Grader Service ─── LanguageTool
-                    ├─ English rules + 本地嵌入模型
-                    └─ Safe Math AST + SymPy
+       │       │                │
+       │       └── Generator ───┘
+       ▼
+PostgreSQL/Redis ─── Grader Service ─── LanguageTool
+                     ├─ English rules + 本地嵌入模型
+                     └─ Safe Math AST + SymPy
 
 Keycloak 提供开发 OIDC；浏览器 E2E 启动隔离 API/Nuxt 与 SQLite，使用固定测试身份和确定性替身。
 ```
@@ -35,8 +36,9 @@ apps/
   api/                 核心业务 API
   web/                 学生端与教师端 Nuxt 应用
 services/
+  generator/           受治理的 AI 候选题 Provider 适配层
   grader/              独立批改服务
-docs/                   架构、范围、路线图与 ADR
+docs/                   架构、状态、路线图、运行手册与 ADR
 ```
 
 ## 本地启动
@@ -75,24 +77,27 @@ docker compose exec api python -m edu_grader_api.bootstrap
 make api-test
 make api-lint
 make question-test
+make verification-regression
+make docs-check
 ```
 
 ### 受控 AI 出题候选
 
-`POST /v1/ai-question-generation/jobs` 会基于课程目标修订版本生成**待教师审核**的候选题；
-请求必须带 `Idempotency-Key`，候选草稿可通过 `GET
-/v1/ai-question-generation/jobs/{id}/questions` 分页读取。候选不会创建或发布 `QuestionVersion`，取消使用
-`POST /v1/ai-question-generation/jobs/{id}/cancel`，重新生成单个候选使用
-`POST /v1/ai-generated-questions/{draft_id}/regenerate`。
+`POST /v1/ai-question-generation/jobs` 会基于精确的课程目标 revision、题型、数量和难度计划生成**待教师审核**候选题。请求必须带 `Idempotency-Key`；任务、attempt、候选 revision、验证运行和审核决定均可追溯。
 
-候选题可使用 `POST /v1/ai-generated-questions/{draft_id}/validation-runs` 运行独立、不可变的验证，
-并通过对应的 `GET` 路径或 `GET /v1/ai-question-validation-runs/{run_id}` 查看结果。`warning` 将在后续
-接受流程中要求教师明确确认，`blocked` 不得被该流程接受；本切片尚未实现批量接受或其强制门禁。
+教师工作台支持查看 `passed` / `warning` / `blocked` 证据、编辑后重新验证、拒绝、单题重新生成和原子批量接受。`blocked` 不可接受，`warning` 必须明确确认；接受后只创建 `QuestionVersion` 草稿，仍须通过原有题目测试和发布门禁。AI 没有直接发布旁路。
 
-本地默认 `GENERATION_PROVIDER=fake`，不会访问外部模型。部署到受控环境时才设置
-`GENERATION_PROVIDER=openai`，并由 Secret Manager 注入 `OPENAI_API_KEY`；同时必须显式设置经过审批的固定
-`GENERATOR_OPENAI_MODEL`（不要使用浮动别名）和 `GENERATOR_PROVIDER_ALLOWED_HOSTS`。真实连接测试默认跳过，
-仅在受控 CI 中同时设置 `LIVE_OPENAI_GENERATION=1`、密钥和模型时运行。
+本地默认 `GENERATION_PROVIDER=fake`，不会访问外部模型。受控环境使用固定、已批准的 Provider/模型 ID 和 `generator-v3` Prompt；全局/租户治理支持 `active`、`canary`、`paused` 和 `retired`，全局暂停或退役不可由租户覆盖。真实 M1、M2、E1、E4 Provider 验收只在 `ai-provider-acceptance` 受保护 Environment 中运行。
+
+离线质量门禁使用 `make ai-evaluation`。生产形态的只读事实导出与显式 baseline/candidate 比较使用：
+
+```bash
+make ai-evaluation-operational \
+  SPEC=/secure/path/operational-spec.json \
+  OUTPUT=artifacts/ai-evaluation-operational
+```
+
+运行要求和隐私边界见 [生产事实评估运行手册](docs/operations/ai-evaluation-operational.md)。
 
 ### 不使用 Docker
 
@@ -133,14 +138,11 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-后续在 `apps/web` 目录运行 `npm run test:e2e` 即可。该命令会启动仅监听本机回环地址的
-临时 API 和 Nuxt，使用虚构的种子数据，并在结束后删除临时 SQLite 数据库。此验收测试使用
-固定的测试令牌，不验证生产 Keycloak 登录。学生的打开作业、输入、同步、提交与刷新均通过
-浏览器完成：学生提交、教师查看证据并复核/发布、学生申诉、教师批准订正机会均通过页面验收。
-E2E 使用固定身份、确定性判卷替身和临时 SQLite；不验证真实 Keycloak 登录、网络模型下载或生产 Grader 模型。
+后续在 `apps/web` 目录运行 `npm run test:e2e` 即可。该命令会启动仅监听本机回环地址的临时 API 和 Nuxt，使用虚构的种子数据，并在结束后删除临时 SQLite 数据库。此验收测试使用固定的测试令牌，不验证生产 Keycloak 登录。学生提交、教师查看证据并复核/发布、学生申诉、教师批准订正机会均通过页面验收。
 
-CI 使用与本地相同的质量门禁：`make lint && make test`、`make web-install && make web-test &&
-make web-build`，以及 `make web-e2e`。迁移回滚验证需要一个 PostgreSQL 实例，并可运行：
+E2E 使用固定身份、确定性判卷替身和临时 SQLite；不验证真实 Keycloak 登录、真实 Provider、网络模型下载或发布环境 Grader。真实统一链路由 Issue #31 跟踪。
+
+CI 使用与本地相同的质量门禁：`make lint`、`make test`、`make verification-regression`、`make docs-check`、`make web-install && make web-test && make web-build`，以及 `make web-e2e`。迁移回滚验证需要一个 PostgreSQL 实例，并可运行：
 
 ```bash
 DATABASE_URL=postgresql+psycopg://edu_grader:change-me@localhost:5432/edu_grader \
@@ -157,15 +159,17 @@ DATABASE_URL=postgresql+psycopg://edu_grader:change-me@localhost:5432/edu_grader
 - 题库、版本与作业：`/v1/questions`、`/v1/question-versions/*`、`/v1/assignments`。
 - 学生作答、申诉与隐私：`/v1/student/*`、`/v1/privacy-requests`。
 - 教师复核、申诉和成绩发布：`/v1/review-tasks`、`/v1/review-appeals`、`/v1/review-metrics`、`/v1/assignments/*/publish-results`。
-- 课程目录：教师和平台管理员可读取 `/v1/curriculum-profiles` 及其年级映射和目标；平台管理员通过 `/v1/admin/curriculum/*` 创建、审核和停用目录数据。
+- 课程目录：教师和平台管理员可读取 `/v1/curriculum-profiles`；平台管理员通过 `/v1/admin/curriculum/*` 维护目录。
+- AI 候选题：`/v1/ai-question-generation/*`、`/v1/ai-generated-questions/*`、`/v1/ai-question-validation-runs/*`。
+- AI 治理：平台或租户管理员按权限管理 Generator、Provider、模型、Prompt 和课程 Profile 控制项。
 
 ## 课程目录
 
-K–13 是平台的内部层级，不是对学生地区、学校课程或能力的推断。课程目录只保存经审核的短目标摘要、稳定代码和权威来源元数据；不复制教材、试卷或课标长文本。首批有效 profile 为中国学前发展（2012）、中国义务教育（2022）、中国普通高中（2017/2020）与 CEFR（2020），来源和治理规则见 [AI 出题计划](docs/ai-question-generation-plan.md)。
+K–13 是平台的内部层级，不是对学生地区、学校课程或能力的推断。课程目录只保存经审核的短目标摘要、稳定代码和权威来源元数据；不复制教材、试卷或课标长文本。首批有效 Profile 为中国学前发展（2012）、中国义务教育（2022）、中国普通高中（2017/2020）与 CEFR（2020），来源和治理规则见 [AI 出题计划](docs/ai-question-generation-plan.md)。
 
-后续 AI 生成必须同时保存所选 `curriculum_profile_id` 与精确的 `curriculum_objective_revision_id`。`K3_4`、`K4_5`、`K5_6` 仅能选用 `learning_activity-v1`；评分题型会按现行题型策略目录验证。课程目标修订是追加式的，管理员须经草稿、审核中、启用或退役的状态机维护；启用与依赖变更均写入审计账本。
+AI 生成必须同时保存所选 `curriculum_profile_id` 与精确的 `curriculum_objective_revision_id`。`K3_4`、`K4_5`、`K5_6` 仅能选用 `learning_activity-v1`；评分题型按现行题型策略目录验证。课程目标修订是追加式的，管理员须经草稿、审核中、启用或退役的状态机维护；启用与依赖变更均写入审计账本。
 
-课程目录是全平台参考数据，不是任一学校租户的管理资源。目录写接口要求用户同时是 `admin`，且其 OIDC subject 已配置在 `CURRICULUM_ADMIN_SUBJECTS` 白名单中；首次部署应将平台运营管理员的 subject 写入受控 Secret/环境配置，不能把学校管理员的 subject 加入该列表。
+课程目录是全平台参考数据，不是任一学校租户的管理资源。目录写接口要求用户同时是 `admin`，且其 OIDC subject 已配置在 `CURRICULUM_ADMIN_SUBJECTS` 白名单中；不能把普通学校管理员加入平台课程管理员列表。
 
 ## 教师班级与学生名册
 
@@ -181,13 +185,9 @@ class_code,class_name,student_school_id,student_display_name,student_under_14,gu
 
 ## 题目版本与发布门禁
 
-教师使用 `POST /v1/questions` 创建租户内题目和第一个草稿版本。规则 JSON 仅可使用平台维护的
-`M1`（数值）、`M2`（表达式）、`E1`（英文精确匹配）和 `E4`（英文辅助简答）策略版本；API 会在保存前返回带 JSON Pointer 的 422 校验错误。
+教师使用 `POST /v1/questions` 创建租户内题目和第一个草稿版本。新建题目的默认策略为 `M1@1`、`M2@2`、`E1@2`、`E2@1`、`E3@1` 和 `E4@2`；`E4@1` 只保留历史兼容，不能用于新题。API 会在保存前返回带 JSON Pointer 的 422 校验错误。
 
-发布前，为草稿添加 `correct`、`incorrect`、`empty` 和 `boundary` 测试用例，并调用
-`POST /v1/question-versions/{version_id}/test-runs`。只有同一草稿最近一次完整测试通过，
-`POST /v1/question-versions/{version_id}/publish` 才会成功；已发布版本须通过
-`POST /v1/questions/{question_id}/versions` 创建后继草稿，不能原地修改。
+发布前，为草稿添加 `correct`、`incorrect`、`empty` 和 `boundary` 测试用例，并调用 `POST /v1/question-versions/{version_id}/test-runs`。只有同一草稿最近一次完整测试通过，`POST /v1/question-versions/{version_id}/publish` 才会成功；已发布版本须通过 `POST /v1/questions/{question_id}/versions` 创建后继草稿，不能原地修改。
 
 首次部署或升级后执行：
 
@@ -199,25 +199,24 @@ docker compose exec api python -m alembic -c alembic.ini upgrade head
 
 英语 E4 使用 `sentence-transformers/all-MiniLM-L6-v2`（Apache-2.0），固定为提交 `1110a243fdf4706b3f48f1d95db1a4f5529b4d41` 和 tree digest `sha256:84714cdabb16d132cbe6e1a4cbd21167abd09eccbdaf69dd053136ae68cc7c17`。Grader 镜像构建时下载并校验该制品；运行时以 `local_files_only=True` 加载，绝不联网下载。升级必须同时更新 revision、digest、校准样例和部署验证。
 
-数学表达式接口只接受受控 JSON AST，不接受未经清洗的 Python、LaTeX 或 SymPy 字符串。当前原型对节点类型、变量、深度、节点数、数字长度和指数范围做白名单限制。
-学生端以 MathLive 同时保存展示用 LaTeX 和 MathJSON，服务端会再次验证并只将规范化 AST 交给隔离 worker。默认 worker 限制为 1 CPU 秒、512 MiB 地址空间和 1 秒墙钟；可用 `GRADER_MATH_CPU_SECONDS`、`GRADER_MATH_MEMORY_BYTES` 与 `GRADER_MATH_TIMEOUT_SECONDS` 调整。Compose 还对 Grader 设定 0.5 CPU、1536 MiB 和 64 PID 上限。超时或资源耗尽会进入教师复核，绝不自动判零。
+数学表达式接口只接受受控 JSON AST，不接受未经清洗的 Python、LaTeX 或 SymPy 字符串。当前实现对节点类型、变量、深度、节点数、数字长度和指数范围做白名单限制。学生端以 MathLive 同时保存展示用 LaTeX 和 MathJSON，服务端再次验证并只将规范化 AST 交给隔离 Worker。超时或资源耗尽进入教师复核，绝不自动判零。
 
 ## 质量门槛
 
-- 确定性题型错误放行率不高于 0.5%。
+- 确定性题型错误放行率目标不高于 0.5%，最终阈值须由教师黄金集校准。
 - 批改器异常不得默认判零分，必须进入人工复核。
 - 每次评分保存题目版本、规则版本和批改器版本。
 - 所有教师改分记录原分、改后分和理由。
 - 学生正式提交使用幂等键，答案保存使用乐观锁。
+- AI 未经教师审核发布率必须保持为 0%。
 - 试点数据处理字段、访问角色和保存期限见 [数据清单](docs/data-inventory.md)。
 
 ## 下一步
 
-见 [项目状态](docs/project-status.md)、[文档索引](docs/README.md)、[试点上线检查表](docs/pilot-checklist.md) 和 [MVP 路线图](docs/roadmap.md)。
+见 [项目状态](docs/project-status.md)、[机器可读状态证据](docs/status-evidence.json)、[文档索引](docs/README.md)、[试点上线检查表](docs/pilot-checklist.md) 和 [路线图](docs/roadmap.md)。
 
 ## 学生作答本地保存
 
 学生作答页把草稿和待同步操作保存在浏览器 IndexedDB 中；断网时继续保存，恢复网络后尝试同步。发生版本冲突时保留本地与服务端答案，必须由学生处理，绝不静默覆盖。
 
 Nuxt 通过 OIDC Authorization Code + PKCE 建立服务端 BFF 会话。访问令牌只保存在加密、HttpOnly 会话中；浏览器代码不读取令牌，Core API 调用经 `/api/core/*` 代理并使用 CSRF 保护。正式提交在本地队列清空后携带持久化的 `Idempotency-Key`，网络重试不会重复提交。
-
