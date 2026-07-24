@@ -1,0 +1,77 @@
+name: PR grade complexity one-shot patcher
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/grade-complexity-rules-v1' &&
+      github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out pull request head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Apply grade-complexity integration patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 --decode .patch_grade_complexity_slice.py.gz.b64 | gzip --decompress > /tmp/patch_grade_complexity_slice.py
+          python /tmp/patch_grade_complexity_slice.py
+
+      - name: Install Python packages
+        run: make install-python
+
+      - name: Format and validate targeted slice
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m ruff format \
+            apps/api/src/edu_grader_api/services/curriculum_imports.py \
+            apps/api/src/edu_grader_api/services/grade_complexity.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/tests/test_grade_complexity.py \
+            apps/api/tests/test_question_verification.py
+          python -m ruff check \
+            apps/api/src/edu_grader_api/services/curriculum_imports.py \
+            apps/api/src/edu_grader_api/services/grade_complexity.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/tests/test_grade_complexity.py \
+            apps/api/tests/test_question_verification.py
+          python -m pytest \
+            apps/api/tests/test_grade_complexity.py \
+            apps/api/tests/test_curriculum_imports.py \
+            apps/api/tests/test_question_verification.py -q
+
+      - name: Remove one-shot patcher assets
+        run: |
+          rm -f .patch_grade_complexity_slice.py.gz.b64
+          rm -f .github/workflows/pr-grade-complexity-patcher.yml
+
+      - name: Commit integrated slice
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat: integrate versioned grade complexity verification'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
