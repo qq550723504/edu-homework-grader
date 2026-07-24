@@ -105,6 +105,7 @@ jobs:
           git show origin/main:.github/workflows/docs-integrity.yml > .github/workflows/docs-integrity.yml
           git rm -f .github/workflows/pr107-full-test-diagnostics.yml
           git rm -f .github/workflows/pr107-policy-finalizer.yml
+          git rm -f .github/.pr107-policy-finalizer-trigger
           git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
