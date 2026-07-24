@@ -1,0 +1,4 @@
+  File "/tmp/patch_grade_complexity_slice.py", line 171
+    "CorrradxitctEd :     usel": grade_level
+SyntaxError: source code cannot contain null bytes
+payload decode failed with status 1
