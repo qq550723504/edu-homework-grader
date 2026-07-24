@@ -1,0 +1,293 @@
+name: PR 107 math semantics integration
+
+on:
+  push:
+    branches:
+      - agent/math-semantics-support-matrix-v1
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/math-semantics-support-matrix-v1
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Patch candidate verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+              return text.replace(old, new, 1)
+
+          path = Path('apps/api/src/edu_grader_api/services/question_verification.py')
+          text = path.read_text(encoding='utf-8')
+          text = replace_once(
+              text,
+              '''from .grader import EmbeddingDependencyVersion, SemanticSimilarityResult
+from .objective_prerequisites import (
+''',
+              '''from .grader import EmbeddingDependencyVersion, SemanticSimilarityResult
+from .math_semantics import evaluate_math_semantics, unavailable_math_semantics_signal
+from .objective_prerequisites import (
+''',
+              'math semantics import',
+          )
+          text = replace_once(
+              text,
+              'VALIDATOR_VERSION = "verification-v7"\nRULESET_VERSION = "rules-v7"',
+              'VALIDATOR_VERSION = "verification-v8"\nRULESET_VERSION = "rules-v8"',
+              'validator version',
+          )
+          text = replace_once(
+              text,
+              '''    grade_complexity_signal: dict[str, object]
+    objective_prerequisite_signal: dict[str, object]
+''',
+              '''    grade_complexity_signal: dict[str, object]
+    objective_prerequisite_signal: dict[str, object]
+    math_semantics_signal: dict[str, object]
+''',
+              'candidate evaluation field',
+          )
+          text = replace_once(
+              text,
+              '''            objective_prerequisite_signal=unavailable_objective_prerequisite_signal(
+                "validator_unavailable"
+            ),
+''',
+              '''            objective_prerequisite_signal=unavailable_objective_prerequisite_signal(
+                "validator_unavailable"
+            ),
+            math_semantics_signal=unavailable_math_semantics_signal("validator_unavailable"),
+''',
+              'validator unavailable signal',
+          )
+          text = replace_once(
+              text,
+              '''        grade_complexity_signal=evaluation.grade_complexity_signal,
+        objective_prerequisite_signal=evaluation.objective_prerequisite_signal,
+''',
+              '''        grade_complexity_signal=evaluation.grade_complexity_signal,
+        objective_prerequisite_signal=evaluation.objective_prerequisite_signal,
+        math_semantics_signal=evaluation.math_semantics_signal,
+''',
+              'persist call',
+          )
+          text = replace_once(
+              text,
+              '''    objective_prerequisite_signal = unavailable_objective_prerequisite_signal(
+        "candidate_not_evaluated"
+    )
+''',
+              '''    objective_prerequisite_signal = unavailable_objective_prerequisite_signal(
+        "candidate_not_evaluated"
+    )
+    math_semantics_signal = unavailable_math_semantics_signal("candidate_not_evaluated")
+''',
+              'signal initialization',
+          )
+          text = replace_once(
+              text,
+              '''    policy_version = candidate.get("policy_version")
+    rule_json = candidate.get("rule_json")
+    policy_errors = (
+''',
+              '''    policy_version = candidate.get("policy_version")
+    rule_json = candidate.get("rule_json")
+    math_semantics_evaluation = evaluate_math_semantics(
+        question_type=question_type,
+        policy_version=policy_version,
+        rule_json=rule_json,
+    )
+    findings.extend(
+        VerificationFinding(
+            code=finding.code,
+            severity=ValidationFindingSeverity.BLOCKED,
+            evidence=finding.evidence,
+            remediation=finding.remediation,
+        )
+        for finding in math_semantics_evaluation.findings
+    )
+    math_semantics_signal = math_semantics_evaluation.feature_summary()
+    math_semantics_blocked = bool(math_semantics_evaluation.findings)
+    policy_errors = (
+''',
+              'math semantics evaluation',
+          )
+          text = replace_once(
+              text,
+              '''    if question_type == "M2" and isinstance(rule_json, dict) and not policy_errors:
+''',
+              '''    if (
+        question_type == "M2"
+        and isinstance(rule_json, dict)
+        and not policy_errors
+        and not math_semantics_blocked
+    ):
+''',
+              'm2 semantic gate',
+          )
+          text = replace_once(
+              text,
+              '''    if question_type == "M1" and isinstance(rule_json, dict) and not policy_errors:
+''',
+              '''    if (
+        question_type == "M1"
+        and isinstance(rule_json, dict)
+        and not policy_errors
+        and not math_semantics_blocked
+    ):
+''',
+              'm1 semantic gate',
+          )
+          text = replace_once(
+              text,
+              '''        grade_complexity_signal=grade_complexity_signal,
+        objective_prerequisite_signal=objective_prerequisite_signal,
+    )
+''',
+              '''        grade_complexity_signal=grade_complexity_signal,
+        objective_prerequisite_signal=objective_prerequisite_signal,
+        math_semantics_signal=math_semantics_signal,
+    )
+''',
+              'evaluation return',
+          )
+          text = replace_once(
+              text,
+              '''    grade_complexity_signal: dict[str, object],
+    objective_prerequisite_signal: dict[str, object],
+) -> GenerationValidationRun:
+''',
+              '''    grade_complexity_signal: dict[str, object],
+    objective_prerequisite_signal: dict[str, object],
+    math_semantics_signal: dict[str, object],
+) -> GenerationValidationRun:
+''',
+              'persist signature',
+          )
+          text = replace_once(
+              text,
+              '''            "grade_complexity_signal": grade_complexity_signal,
+            "objective_prerequisite_signal": objective_prerequisite_signal,
+            **duplicate_feature_summary,
+''',
+              '''            "grade_complexity_signal": grade_complexity_signal,
+            "objective_prerequisite_signal": objective_prerequisite_signal,
+            "math_semantics_signal": math_semantics_signal,
+            **duplicate_feature_summary,
+''',
+              'persist feature summary',
+          )
+          path.write_text(text, encoding='utf-8')
+
+          tests_path = Path('apps/api/tests/test_question_verification.py')
+          tests = tests_path.read_text(encoding='utf-8')
+          tests = tests.replace('"verification-v7"', '"verification-v8"')
+          tests = tests.replace('"rules-v7"', '"rules-v8"')
+          tests = tests.replace(
+              '{"difficulty_signal", "grade_complexity_signal", "objective_prerequisite_signal"}',
+              '{"difficulty_signal", "grade_complexity_signal", "objective_prerequisite_signal", "math_semantics_signal"}',
+          )
+          marker = 'def test_verification_persists_supported_math_semantics_signal'
+          if marker in tests:
+              raise SystemExit('math semantics integration tests already present')
+          tests += r'''
+
+
+def test_verification_persists_supported_math_semantics_signal(session: Session) -> None:
+    draft = generation_draft(session)
+
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
+
+    signal = run.feature_summary_json["math_semantics_signal"]
+    assert signal == {
+        "availability": "available",
+        "version": "math-semantics-v1",
+        "question_type": "M1",
+        "policy_version": "1",
+        "support_status": "supported",
+        "semantic_class": "single_numeric_value",
+        "trigger_operator": None,
+    }
+    assert run.validator_version == "verification-v8"
+    assert run.ruleset_version == "rules-v8"
+
+
+def test_verification_blocks_equation_semantics_before_m2_normalization(
+    session: Session,
+) -> None:
+    candidate = valid_m2_candidate()
+    candidate["rule_json"] = {
+        **candidate["rule_json"],
+        "expected": ["Equal", "x", 2],
+    }
+    draft = generation_draft(
+        session,
+        allowed_question_types=["M2"],
+        candidate_json=candidate,
+    )
+    grader = PassingM2Grader()
+
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
+
+    finding = finding_by_code(run, "m2_equation_semantics_unsupported")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {
+        "ruleset_version": "math-semantics-v1",
+        "question_type": "M2",
+        "policy_version": "2",
+        "semantic_class": "equation_or_inequality",
+        "trigger_operator": "Equal",
+    }
+    assert grader.normalization_requests == []
+    assert grader.grade_requests == []
+    assert "x" not in json.dumps(finding.evidence_json)
+'''
+          tests_path.write_text(tests, encoding='utf-8')
+          PY
+      - name: Format and run focused tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          make install-python >/dev/null
+          python -m ruff format \
+            apps/api/src/edu_grader_api/services/math_semantics.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/tests/test_math_semantics.py \
+            apps/api/tests/test_question_verification.py
+          python -m ruff check --config ruff.toml \
+            apps/api/src/edu_grader_api/services/math_semantics.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/tests/test_math_semantics.py \
+            apps/api/tests/test_question_verification.py
+          python -m pytest \
+            apps/api/tests/test_math_semantics.py \
+            apps/api/tests/test_question_verification.py -q
+      - name: Commit reviewable integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/pr107-integrate-math-semantics.yml
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat: enforce explicit math semantics boundaries'
+          git push origin HEAD:agent/math-semantics-support-matrix-v1
