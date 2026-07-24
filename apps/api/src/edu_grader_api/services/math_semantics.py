@@ -82,6 +82,14 @@ _INSUFFICIENT_CONDITION_OPERATORS = frozenset(
 _SUPPORTED_EXPRESSION_OPERATORS = frozenset(
     {"Add", "Multiply", "Negate", "Divide", "Rational", "Power"}
 )
+_KNOWN_OPERATORS = (
+    _EQUATION_OPERATORS
+    | _SOLUTION_SET_OPERATORS
+    | _DOMAIN_OPERATORS
+    | _ROOT_RISK_OPERATORS
+    | _INSUFFICIENT_CONDITION_OPERATORS
+    | _SUPPORTED_EXPRESSION_OPERATORS
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,7 +199,7 @@ def _evaluate_m1(
             policy_version,
             semantic_class=_semantic_class_for_operator(operator),
             code=_finding_code_for_class("M1", _semantic_class_for_operator(operator)),
-            trigger_operator=operator if isinstance(operator, str) else "object",
+            trigger_operator=_public_trigger_operator(operator),
             remediation="Use M1 only for one finite numeric answer.",
         )
     return _generic_unsupported("M1", policy_version)
@@ -238,17 +246,21 @@ def _classify_m2_value(
     if explicit_class != "unsupported_structure":
         return explicit_class, operator
     if operator not in _SUPPORTED_EXPRESSION_OPERATORS:
-        return "unsupported_structure", operator
+        return "unsupported_structure", _public_trigger_operator(operator)
 
     arguments = value[1:]
-    if operator == "Divide" and len(arguments) >= 2 and _contains_declared_symbol(
-        arguments[1], variables
+    if (
+        operator == "Divide"
+        and len(arguments) >= 2
+        and _contains_declared_symbol(arguments[1], variables)
     ):
         return "domain_restriction", operator
     if operator == "Power" and len(arguments) >= 2:
         exponent = _literal_number(arguments[1])
-        if exponent is not None and exponent < 0 and _contains_declared_symbol(
-            arguments[0], variables
+        if (
+            exponent is not None
+            and exponent < 0
+            and _contains_declared_symbol(arguments[0], variables)
         ):
             return "domain_restriction", operator
         if _is_fractional_exponent(arguments[1]) and _contains_declared_symbol(
@@ -307,9 +319,7 @@ def _remediation_for_class(semantic_class: SemanticClass) -> str:
         "extraneous_or_missing_root_risk": (
             "Use a reviewed question type for transformations that can introduce or omit roots."
         ),
-        "insufficient_conditions": (
-            "Add sufficient constraints and use a reviewed question type."
-        ),
+        "insufficient_conditions": ("Add sufficient constraints and use a reviewed question type."),
     }.get(semantic_class, "Use a supported M1 numeric or M2 expression-equivalence structure.")
 
 
@@ -393,6 +403,12 @@ def _is_fractional_exponent(value: object) -> bool:
         and denominator != 0
         and not float(numerator / denominator).is_integer()
     )
+
+
+def _public_trigger_operator(operator: object) -> str:
+    if isinstance(operator, str) and operator in _KNOWN_OPERATORS:
+        return operator
+    return "unknown_operator"
 
 
 def _container_name(value: object) -> str:

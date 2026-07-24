@@ -39,9 +39,7 @@ def test_m1_single_finite_numeric_value_is_supported() -> None:
         ({1, 2}, "set"),
     ],
 )
-def test_m1_multiple_solution_containers_are_blocked(
-    expected: object, trigger: str
-) -> None:
+def test_m1_multiple_solution_containers_are_blocked(expected: object, trigger: str) -> None:
     evaluation = evaluate_math_semantics(
         question_type="M1", policy_version="1", rule_json={"expected": expected}
     )
@@ -190,7 +188,8 @@ def test_unknown_operator_is_blocked_without_raw_mathjson_in_evidence() -> None:
         }
     )
     assert "private_symbol" not in persisted
-    assert "SecretOperator" in persisted
+    assert "SecretOperator" not in persisted
+    assert evaluation.trigger_operator == "unknown_operator"
     assert json.dumps(expected) not in persisted
 
 
