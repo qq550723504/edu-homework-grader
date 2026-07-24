@@ -4,13 +4,24 @@ on:
   push:
     branches:
       - agent/objective-prerequisite-verification-v1
+  pull_request:
+    branches:
+      - main
+    types: [synchronize]
 
 permissions:
   contents: write
 
+concurrency:
+  group: objective-prerequisite-patcher
+  cancel-in-progress: true
+
 jobs:
   patch:
-    if: github.actor != 'github-actions[bot]'
+    if: >-
+      github.actor != 'github-actions[bot]' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.ref == 'agent/objective-prerequisite-verification-v1')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
