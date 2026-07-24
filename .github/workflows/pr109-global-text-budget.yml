@@ -1,0 +1,173 @@
+name: PR 109 candidate-wide text scan budget
+
+on:
+  push:
+    branches:
+      - agent/verification-capacity-v1
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/verification-capacity-v1
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Apply candidate-wide Unicode scan budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+              return text.replace(old, new, 1)
+
+          path = Path('apps/api/src/edu_grader_api/services/verification_capacity.py')
+          text = path.read_text(encoding='utf-8')
+          text = replace_once(
+              text,
+              '''    max_combining_mark_run = 0
+    while stack:
+''',
+              '''    max_combining_mark_run = 0
+    text_characters_scanned = 0
+    while stack:
+''',
+              'text scan counter initialization',
+          )
+          text = replace_once(
+              text,
+              '''        if isinstance(current, str):
+            controls, combining_run = _measure_text(current)
+            control_characters += controls
+            max_combining_mark_run = max(max_combining_mark_run, combining_run)
+            continue
+''',
+              '''        if isinstance(current, str):
+            remaining_text_budget = max(
+                _TEXT_SCAN_LIMIT - text_characters_scanned,
+                0,
+            )
+            controls, combining_run, scanned = _measure_text(
+                current,
+                max_characters=remaining_text_budget,
+            )
+            text_characters_scanned += scanned
+            control_characters += controls
+            max_combining_mark_run = max(max_combining_mark_run, combining_run)
+            continue
+''',
+              'candidate-wide text scan accounting',
+          )
+          text = replace_once(
+              text,
+              '''def _measure_text(value: str) -> tuple[int, int]:
+    controls = 0
+    current_combining_run = 0
+    max_combining_run = 0
+    for index, character in enumerate(value):
+        if index >= _TEXT_SCAN_LIMIT:
+            break
+''',
+              '''def _measure_text(
+    value: str,
+    *,
+    max_characters: int,
+) -> tuple[int, int, int]:
+    controls = 0
+    current_combining_run = 0
+    max_combining_run = 0
+    scanned = 0
+    for index, character in enumerate(value):
+        if index >= max_characters:
+            break
+        scanned += 1
+''',
+              'bounded text scanner signature',
+          )
+          text = replace_once(
+              text,
+              '''    return controls, max_combining_run
+
+
+def _rubric_observations''',
+              '''    return controls, max_combining_run, scanned
+
+
+def _rubric_observations''',
+              'bounded text scanner return',
+          )
+          path.write_text(text, encoding='utf-8')
+
+          test_path = Path('apps/api/tests/test_verification_capacity_boundaries.py')
+          tests = test_path.read_text(encoding='utf-8')
+          marker = 'def test_text_scan_budget_is_candidate_wide'
+          if marker in tests:
+              raise SystemExit('candidate-wide text scan test already exists')
+          tests += r'''
+
+
+def test_text_scan_budget_is_candidate_wide(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    value = candidate(prompt="bounded text scan")
+    value["wide_text"] = [
+        "x" * capacity.MAX_CANDIDATE_BYTES,
+        "y" * capacity.MAX_CANDIDATE_BYTES,
+    ]
+    category_calls = 0
+    real_category = capacity.unicodedata.category
+
+    def counted_category(character: str) -> str:
+        nonlocal category_calls
+        category_calls += 1
+        return real_category(character)
+
+    monkeypatch.setattr(capacity.unicodedata, "category", counted_category)
+
+    evaluation = evaluate_verification_capacity(value)
+
+    assert evaluation.blocked is True
+    assert "candidate_bytes" in evaluation.violations
+    assert category_calls <= capacity._TEXT_SCAN_LIMIT
+'''
+          test_path.write_text(tests, encoding='utf-8')
+          PY
+      - name: Format and validate full Python suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          make install-python >/dev/null
+          python -m ruff format \
+            apps/api/src/edu_grader_api/services/verification_capacity.py \
+            apps/api/tests/test_verification_capacity_boundaries.py
+          python -m ruff check --config ruff.toml \
+            apps/api/src/edu_grader_api/services/verification_capacity.py \
+            apps/api/tests/test_verification_capacity_boundaries.py
+          make test
+          make verification-regression
+          python scripts/check_docs_status.py
+      - name: Remove one-shot workflow and push
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/pr109-global-text-budget.yml
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: bound candidate-wide Unicode scanning'
+          git push origin HEAD:agent/verification-capacity-v1
