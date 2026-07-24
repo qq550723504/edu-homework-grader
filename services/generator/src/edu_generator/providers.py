@@ -43,7 +43,8 @@ class FakeGenerationProvider:
                         f"Generated for {request.grade} using objective practice. "
                         f"Final answer: {stable_value}"
                     ),
-                    "knowledge_point": f"{request.subject} objective practice",
+                    "knowledge_point": request.knowledge_point
+                    or f"{request.subject} objective practice",
                     "difficulty": item.target_difficulty,
                     "verification_assertions": _verification_assertions(
                         question_type, rule_json, stable_value

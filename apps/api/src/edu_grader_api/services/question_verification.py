@@ -41,11 +41,15 @@ from .grade_complexity import (
     unavailable_grade_complexity_signal,
 )
 from .grader import EmbeddingDependencyVersion, SemanticSimilarityResult
+from .objective_prerequisites import (
+    evaluate_objective_prerequisite_alignment,
+    unavailable_objective_prerequisite_signal,
+)
 from .question_fingerprints import FINGERPRINT_VERSION, PromptFingerprints, fingerprint_prompt
 from .questions import GradeResult
 
-VALIDATOR_VERSION = "verification-v6"
-RULESET_VERSION = "rules-v6"
+VALIDATOR_VERSION = "verification-v7"
+RULESET_VERSION = "rules-v7"
 _SEMANTIC_CHUNK_SIZE = 128
 _DUPLICATE_REMEDIATION = "Revise the prompt to make the candidate meaningfully distinct."
 _WHITESPACE = re.compile(r"\s+")
@@ -119,6 +123,7 @@ class _CandidateEvaluation:
     duplicate_feature_summary: dict[str, object]
     difficulty_signal: dict[str, object]
     grade_complexity_signal: dict[str, object]
+    objective_prerequisite_signal: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -188,6 +193,9 @@ def run_candidate_verification(
             duplicate_feature_summary=_duplicate_feature_summary(duplicate_snapshot),
             difficulty_signal=_unavailable_difficulty_signal(),
             grade_complexity_signal=unavailable_grade_complexity_signal("validator_unavailable"),
+            objective_prerequisite_signal=unavailable_objective_prerequisite_signal(
+                "validator_unavailable"
+            ),
         )
     return _persist_run(
         session,
@@ -198,6 +206,7 @@ def run_candidate_verification(
         duplicate_feature_summary=evaluation.duplicate_feature_summary,
         difficulty_signal=evaluation.difficulty_signal,
         grade_complexity_signal=evaluation.grade_complexity_signal,
+        objective_prerequisite_signal=evaluation.objective_prerequisite_signal,
     )
 
 
@@ -215,6 +224,9 @@ def _evaluate_candidate(
     revision = job.curriculum_objective_revision
     findings: list[VerificationFinding] = []
     grade_complexity_signal = unavailable_grade_complexity_signal("candidate_not_evaluated")
+    objective_prerequisite_signal = unavailable_objective_prerequisite_signal(
+        "candidate_not_evaluated"
+    )
 
     if (
         revision.status is not CurriculumRevisionStatus.ACTIVE
@@ -237,6 +249,22 @@ def _evaluate_candidate(
                 "Regenerate the candidate for the selected curriculum objective.",
             )
         )
+
+    prerequisite_evaluation = evaluate_objective_prerequisite_alignment(
+        session,
+        target_revision=revision,
+        candidate_knowledge_point=candidate.get("knowledge_point"),
+    )
+    findings.extend(
+        VerificationFinding(
+            code=finding.code,
+            severity=ValidationFindingSeverity(finding.severity),
+            evidence=finding.evidence,
+            remediation=finding.remediation,
+        )
+        for finding in prerequisite_evaluation.findings
+    )
+    objective_prerequisite_signal = prerequisite_evaluation.feature_summary()
 
     difficulty = candidate.get("difficulty")
     if (
@@ -397,6 +425,7 @@ def _evaluate_candidate(
             normalized_m2_ast=normalized_m2_ast,
         ),
         grade_complexity_signal=grade_complexity_signal,
+        objective_prerequisite_signal=objective_prerequisite_signal,
     )
 
 
@@ -1537,6 +1566,7 @@ def _persist_run(
     duplicate_feature_summary: dict[str, object],
     difficulty_signal: dict[str, object],
     grade_complexity_signal: dict[str, object],
+    objective_prerequisite_signal: dict[str, object],
 ) -> GenerationValidationRun:
     snapshot_changed_before_lock = draft.current_revision_id != evaluated_revision_id
 
@@ -1580,6 +1610,7 @@ def _persist_run(
             "content_policy_version": CONTENT_POLICY_VERSION,
             "difficulty_signal": difficulty_signal,
             "grade_complexity_signal": grade_complexity_signal,
+            "objective_prerequisite_signal": objective_prerequisite_signal,
             **duplicate_feature_summary,
         },
     )
