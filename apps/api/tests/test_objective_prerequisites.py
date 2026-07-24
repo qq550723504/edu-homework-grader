@@ -284,9 +284,7 @@ def test_ambiguous_alias_produces_stable_warning(session: Session) -> None:
     )
 
     assert evaluation.resolution == "ambiguous"
-    assert [finding.code for finding in evaluation.findings] == [
-        "objective_prerequisite_ambiguous"
-    ]
+    assert [finding.code for finding in evaluation.findings] == ["objective_prerequisite_ambiguous"]
     assert evaluation.findings[0].evidence["match_count"] == 2
 
 
@@ -317,10 +315,14 @@ def test_cycle_in_reachable_graph_fails_closed(session: Session) -> None:
 
 def test_unsupported_relation_fails_closed(session: Session) -> None:
     graph = curriculum_graph(session)
-    graph_edge = session.query(CurriculumPrerequisite).filter_by(
-        objective_revision_id=graph.target.id,
-        prerequisite_revision_id=graph.prerequisite.id,
-    ).one()
+    graph_edge = (
+        session.query(CurriculumPrerequisite)
+        .filter_by(
+            objective_revision_id=graph.target.id,
+            prerequisite_revision_id=graph.prerequisite.id,
+        )
+        .one()
+    )
     graph_edge.relation_type = "recommended"
     session.flush()
 
