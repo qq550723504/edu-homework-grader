@@ -29,8 +29,9 @@ from ..models import (
     ValidationRunStatus,
 )
 from ..settings import settings
+from .capacity_aware_verification import run_capacity_aware_candidate_verification
 from .grader import HttpGraderClient
-from .question_verification import VerificationGraderClient, run_candidate_verification
+from .question_verification import VerificationGraderClient
 from .questions import create_question
 
 
@@ -122,7 +123,7 @@ def create_review_revision(
     session.flush()
     locked_draft.current_revision_id = revision.id
     session.flush()
-    validation_run = run_candidate_verification(
+    validation_run = run_capacity_aware_candidate_verification(
         session,
         draft=locked_draft,
         revision=revision,
@@ -171,7 +172,7 @@ def reject_review_draft(
         for_update=True,
     )
     if validation_run is None:
-        validation_run = run_candidate_verification(
+        validation_run = run_capacity_aware_candidate_verification(
             session,
             draft=locked_draft,
             revision=current_revision,
