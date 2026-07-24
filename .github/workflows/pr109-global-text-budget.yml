@@ -1,23 +1,22 @@
 # One-shot PR #109 finalizer; self-deletes after validation.
-# Retriggered after the bounded JSON traversal review.
 name: PR 109 candidate-wide text scan budget
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/verification-capacity-v1
+      - main
 
 permissions:
   contents: write
 
 jobs:
   harden:
-    if: github.actor != 'github-actions[bot]'
+    if: github.event.pull_request.number == 109 && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/verification-capacity-v1
+          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/setup-python@v5
@@ -162,14 +161,15 @@ def test_text_scan_budget_is_candidate_wide(
           make test
           make verification-regression
           python scripts/check_docs_status.py
-      - name: Remove one-shot workflow and push
+      - name: Remove one-shot workflow and final check marker, then push
         shell: bash
         run: |
           set -euo pipefail
           git rm .github/workflows/pr109-global-text-budget.yml
+          git rm -f .github/.pr109-final-code-check || true
           git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git commit -m 'fix: bound candidate-wide Unicode scanning'
-          git push origin HEAD:agent/verification-capacity-v1
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
