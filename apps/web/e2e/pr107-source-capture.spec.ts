@@ -3,7 +3,9 @@ import { copyFile, mkdir } from 'node:fs/promises'
 import path from 'node:path'
 
 const files = [
+  'apps/api/src/edu_grader_api/services/math_semantics.py',
   'apps/api/src/edu_grader_api/services/question_verification.py',
+  'apps/api/tests/test_math_semantics.py',
   'apps/api/tests/test_question_verification.py',
   'docs/status-evidence.json',
   'docs/project-status.md',
