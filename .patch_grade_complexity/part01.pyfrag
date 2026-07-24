@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+from pathlib import Path
+
+ROOT = Path.cwd()
+
+
+def replace_once(text: str, old: str, new: str, label: str) -> str:
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"{label}: expected one match, found {count}")
+    return text.replace(old, new, 1)
+
+
+def patch_curriculum_imports() -> None:
+    path = ROOT / "apps/api/src/edu_grader_api/services/curriculum_imports.py"
+    text = path.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        "from .curriculum import (\n"
+        "    CurriculumValidationError,\n"
+        "    activate_objective_revision,\n"
+        "    create_objective_revision,\n"
+        "    create_prerequisite,\n"
+        "    validate_revision_payload,\n"
+        ")\n",
+        "from .curriculum import (\n"
+        "    CurriculumValidationError,\n"
+        "    activate_objective_revision,\n"
+        "    create_objective_revision,\n"
+        "    create_prerequisite,\n"
+        "    validate_revision_payload,\n"
+        ")\n"
+        "from .grade_complexity import validate_grade_complexity_rules_document\n",
+        "curriculum imports",
+    )
+    text = replace_once(
+        text,
+        '''_COMPLEXITY_RULE_KEYS = frozenset(
+    {
+        "max_prompt_units",
+        "max_sentence_units",
+        "max_numeric_absolute_value",
+        "max_math_operation_nodes",
+    }
+)
+
+
+def validate_complexity_rules(value: object) -> dict[str, int]:
+    if not isinstance(value, dict) or set(value) - _COMPLEXITY_RULE_KEYS:
+        raise ValueError("invalid complexity rules")
+    rules: dict[str, int] = {}
+    for key, limit in value.items():
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("invalid complexity limit")
+        rules[key] = limit
+    return rules
+''',
+        '''def validate_complexity_rules(value: object) -> dict[str, object]:
+    return validate_grade_complexity_rules_document(value)
+''',
+        "complexity validator",
+    )
+    text = text.replace(
+        "def validate_rules(cls, value: object) -> dict[str, int]:",
+        "def validate_rules(cls, value: object) -> dict[str, object]:",
+    )
+    text = text.replace(
+        "complexity_rule_updates: list[tuple[CurriculumGradeMapping, dict[str, int]]] = []",
+        "complexity_rule_updates: list[tuple[CurriculumGradeMapping, dict[str, object]]] = []",
+    )
+    path.write_text(text, encoding="utf-8")
+
+
+def patch_question_verification() -> None:
+    path = ROOT / "apps/api/src/edu_grader_api/services/question_verification.py"
+    text = path.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        "from .curriculum_imports import validate_complexity_rules\n",
+        "from .grade_complexity import (\n"
