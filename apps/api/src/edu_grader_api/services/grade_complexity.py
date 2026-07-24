@@ -32,9 +32,7 @@ _VERSIONED_LIMIT_KEYS = frozenset(
         "max_long_lexical_units",
     }
 )
-_VERSIONED_METADATA_KEYS = frozenset(
-    {"version", "enforcement", "long_lexical_unit_threshold"}
-)
+_VERSIONED_METADATA_KEYS = frozenset({"version", "enforcement", "long_lexical_unit_threshold"})
 _DEFAULT_LONG_LEXICAL_UNIT_THRESHOLD = 10
 _LIMIT_ORDER = (
     "max_prompt_units",
@@ -106,9 +104,7 @@ def validate_grade_complexity_rules_document(value: object) -> dict[str, object]
     enforcement = value.get("enforcement", "warning")
     if enforcement not in {"warning", "blocked"}:
         raise ValueError("invalid complexity enforcement")
-    threshold = value.get(
-        "long_lexical_unit_threshold", _DEFAULT_LONG_LEXICAL_UNIT_THRESHOLD
-    )
+    threshold = value.get("long_lexical_unit_threshold", _DEFAULT_LONG_LEXICAL_UNIT_THRESHOLD)
     if (
         isinstance(threshold, bool)
         or not isinstance(threshold, int)
@@ -141,11 +137,7 @@ def parse_grade_complexity_rules(value: object) -> GradeComplexityRuleSet:
     return GradeComplexityRuleSet(
         version=str(normalized["version"]),
         enforcement=enforcement,
-        limits={
-            key: int(normalized[key])
-            for key in _VERSIONED_LIMIT_KEYS
-            if key in normalized
-        },
+        limits={key: int(normalized[key]) for key in _VERSIONED_LIMIT_KEYS if key in normalized},
         long_lexical_unit_threshold=int(normalized["long_lexical_unit_threshold"]),
         legacy=False,
     )
@@ -163,12 +155,8 @@ def evaluate_grade_complexity(
     rule_set = parse_grade_complexity_rules(rules_document)
     references = tuple(text for text in reference_texts if isinstance(text, str))
     all_texts = (prompt, reading_material, *references)
-    lexical_units = [
-        unit for text in all_texts if text for unit in _LEXICAL_UNITS.findall(text)
-    ]
-    latin_units = [
-        unit for unit in lexical_units if any(character.isalpha() for character in unit)
-    ]
+    lexical_units = [unit for text in all_texts if text for unit in _LEXICAL_UNITS.findall(text)]
+    latin_units = [unit for unit in lexical_units if any(character.isalpha() for character in unit)]
     max_lexical_length = max((len(unit) for unit in latin_units), default=0)
     long_lexical_units = sum(
         len(unit) >= rule_set.long_lexical_unit_threshold for unit in latin_units
@@ -178,9 +166,7 @@ def evaluate_grade_complexity(
         "max_sentence_units": _max_sentence_units(prompt),
         "max_reading_units": _lexical_unit_count(reading_material),
         "max_reading_sentence_units": _max_sentence_units(reading_material),
-        "max_reference_units": max(
-            (_lexical_unit_count(text) for text in references), default=0
-        ),
+        "max_reference_units": max((_lexical_unit_count(text) for text in references), default=0),
         "max_lexical_unit_length": max_lexical_length,
         "max_long_lexical_units": long_lexical_units,
     }

@@ -109,8 +109,7 @@ def test_e4_complexity_evaluation_records_reading_reference_and_lexical_signals(
         },
         prompt="Read and answer.",
         reading_material=(
-            "The extraordinarily careful traveller crossed the old bridge. "
-            "Everyone arrived safely."
+            "The extraordinarily careful traveller crossed the old bridge. Everyone arrived safely."
         ),
         reference_texts=("crossed the old bridge", "arrived safely"),
         maximum_numeric_absolute_value=None,

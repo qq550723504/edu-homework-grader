@@ -32,6 +32,7 @@ from .curriculum import (
     create_prerequisite,
     validate_revision_payload,
 )
+from .grade_complexity import validate_grade_complexity_rules_document
 
 
 class ImportProfile(BaseModel):
@@ -50,25 +51,8 @@ class ImportSource(BaseModel):
     curated_at: date
 
 
-_COMPLEXITY_RULE_KEYS = frozenset(
-    {
-        "max_prompt_units",
-        "max_sentence_units",
-        "max_numeric_absolute_value",
-        "max_math_operation_nodes",
-    }
-)
-
-
-def validate_complexity_rules(value: object) -> dict[str, int]:
-    if not isinstance(value, dict) or set(value) - _COMPLEXITY_RULE_KEYS:
-        raise ValueError("invalid complexity rules")
-    rules: dict[str, int] = {}
-    for key, limit in value.items():
-        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
-            raise ValueError("invalid complexity limit")
-        rules[key] = limit
-    return rules
+def validate_complexity_rules(value: object) -> dict[str, object]:
+    return validate_grade_complexity_rules_document(value)
 
 
 class ImportGradeMapping(BaseModel):
@@ -79,7 +63,7 @@ class ImportGradeMapping(BaseModel):
 
     @field_validator("complexity_rules")
     @classmethod
-    def validate_rules(cls, value: object) -> dict[str, int]:
+    def validate_rules(cls, value: object) -> dict[str, object]:
         return validate_complexity_rules(value)
 
 
@@ -546,7 +530,7 @@ def activate_import(
             )
         )
     }
-    complexity_rule_updates: list[tuple[CurriculumGradeMapping, dict[str, int]]] = []
+    complexity_rule_updates: list[tuple[CurriculumGradeMapping, dict[str, object]]] = []
     for internal_level, proposed_rule_document in proposed_rules.items():
         if not isinstance(internal_level, str) or internal_level not in mappings:
             raise ImportLifecycleError("invalid proposed grade complexity rules")
