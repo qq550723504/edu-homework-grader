@@ -1,0 +1,70 @@
+        normalized_m2_ast=normalized_m2_ast,
+    )
+    evaluation = evaluate_grade_complexity(
+        rules,
+        prompt=prompt,
+        reading_material=reading_material,
+        reference_texts=_grade_complexity_reference_texts(question_type, rule_json),
+        maximum_numeric_absolute_value=observations.get("max_numeric_absolute_value"),
+        math_operation_nodes=(
+            int(observations["max_math_operation_nodes"])
+            if "max_math_operation_nodes" in observations
+            else None
+        ),
+    )
+    findings: list[VerificationFinding] = []
+    for metric in evaluation.violations:
+        observed = evaluation.observations[metric]
+        limit = evaluation.rule_set.limits[metric]
+        evidence: dict[str, object] = {
+            "grade_level": grade_level,
+            "metric": metric,
+            "observed": _complexity_observed_value(observed),
+            "limit": limit,
+        }
+        if evaluation.rule_set.legacy:
+            code = "grade_complexity_warning"
+            severity = ValidationFindingSeverity.WARNING
+        else:
+            evidence.update(
+                {
+                    "ruleset_version": evaluation.rule_set.version,
+                    "enforcement": evaluation.rule_set.enforcement,
+                }
+            )
+            blocked = evaluation.rule_set.enforcement == "blocked"
+            code = "grade_complexity_blocked" if blocked else "grade_complexity_warning"
+            severity = (
+                ValidationFindingSeverity.BLOCKED
+                if blocked
+                else ValidationFindingSeverity.WARNING
+            )
+        findings.append(
+            VerificationFinding(
+                code=code,
+                severity=severity,
+                evidence=evidence,
+                remediation="Revise the candidate to fit the selected grade complexity limit.",
+            )
+        )
+    return findings, evaluation.feature_summary(
+        grade_level=grade_level,
+        question_type=question_type if isinstance(question_type, str) else "unknown",
+    )
+
+
+def _grade_complexity_reference_texts(
+    question_type: object, rule_json: dict[str, object]
+) -> tuple[str, ...]:
+    if question_type == "E3":
+        accepted_answers = rule_json.get("accepted_answers")
+        if isinstance(accepted_answers, list):
+            return tuple(value for value in accepted_answers if isinstance(value, str))
+    if question_type == "E4":
+        scoring_points = rule_json.get("scoring_points")
+        if isinstance(scoring_points, list):
+            return tuple(
+                phrase
+                for point in scoring_points
+                if isinstance(point, dict)
+                for phrases in (point.get("evidence_phrases"),)
