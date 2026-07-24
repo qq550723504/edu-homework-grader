@@ -19,5 +19,54 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Validate links, evidence, versions, policies, and CI jobs
+          cache: pip
+      - name: Install pinned Python toolchain
+        run: make install-python >/dev/null
+      - name: Capture formatting, lint, and focused-test diagnostics
+        id: diagnostics
+        shell: bash
+        run: |
+          set +e
+          mkdir -p pr107-diagnostics/formatted
+          python -m ruff format \
+            apps/api/src/edu_grader_api/services/math_semantics.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/tests/test_math_semantics.py \
+            apps/api/tests/test_question_verification.py \
+            > pr107-diagnostics/ruff-format.log 2>&1
+          format_status=$?
+          python -m ruff check --config ruff.toml \
+            apps/api/src/edu_grader_api/services/math_semantics.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/tests/test_math_semantics.py \
+            apps/api/tests/test_question_verification.py \
+            > pr107-diagnostics/ruff-check.log 2>&1
+          lint_status=$?
+          python -m pytest \
+            apps/api/tests/test_math_semantics.py \
+            apps/api/tests/test_question_verification.py -q \
+            > pr107-diagnostics/pytest.log 2>&1
+          test_status=$?
+          git diff -- \
+            apps/api/src/edu_grader_api/services/math_semantics.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/tests/test_math_semantics.py \
+            apps/api/tests/test_question_verification.py \
+            > pr107-diagnostics/ruff-format.patch
+          cp --parents \
+            apps/api/src/edu_grader_api/services/math_semantics.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/tests/test_math_semantics.py \
+            apps/api/tests/test_question_verification.py \
+            pr107-diagnostics/formatted/
+          printf 'format_status=%s\nlint_status=%s\ntest_status=%s\n' \
+            "$format_status" "$lint_status" "$test_status" \
+            > pr107-diagnostics/status.txt
+          exit 0
+      - name: Upload PR 107 diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr107-verification-diagnostics
+          path: pr107-diagnostics
+      - name: Validate authoritative documentation
         run: python scripts/check_docs_status.py
