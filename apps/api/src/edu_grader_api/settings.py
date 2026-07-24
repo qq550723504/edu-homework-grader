@@ -78,12 +78,6 @@ class Settings(BaseSettings):
         le=60,
         validation_alias="GRADER_REQUEST_TIMEOUT_SECONDS",
     )
-    verification_total_timeout_seconds: float = Field(
-        default=30.0,
-        gt=0,
-        le=120,
-        validation_alias="VERIFICATION_TOTAL_TIMEOUT_SECONDS",
-    )
     oidc_issuer: str = "http://localhost:8080/realms/edu-grader"
     oidc_audience: str = "edu-grader-api"
     oidc_school_id_claim: str = "school_id"
