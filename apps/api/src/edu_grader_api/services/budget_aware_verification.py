@@ -113,9 +113,7 @@ def _persist_terminal_failure(
         evaluated_revision_id=revision.id,
         evaluated_revision_hash=revision.content_hash,
         findings=[finding],
-        duplicate_feature_summary=_capacity_blocked_duplicate_summary(
-            "verification_timeout"
-        ),
+        duplicate_feature_summary=_capacity_blocked_duplicate_summary("verification_timeout"),
         difficulty_signal=core._unavailable_difficulty_signal(),
         grade_complexity_signal=unavailable_grade_complexity_signal("verification_timeout"),
         objective_prerequisite_signal=unavailable_objective_prerequisite_signal(
