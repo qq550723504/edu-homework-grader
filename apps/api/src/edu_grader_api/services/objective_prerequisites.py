@@ -93,29 +93,11 @@ def evaluate_objective_prerequisite_alignment(
         session, target_revision_id=target_revision.id
     )
     if graph_invalid_reason is not None:
-        evidence = {
-            "ruleset_version": OBJECTIVE_PREREQUISITE_RULESET_VERSION,
-            "target_objective_code": target_objective.code,
-            "reason": graph_invalid_reason,
-        }
-        return ObjectivePrerequisiteEvaluation(
+        return _graph_invalid_evaluation(
             target_objective_code=target_objective.code,
-            resolution="graph_invalid",
             candidate_alias_digest=candidate_alias_digest,
-            matched_objective_code=None,
-            prerequisite_depth=None,
-            allowed_objective_count=1,
             prerequisite_revision_count=max(len(closure) - 1, 0),
-            findings=(
-                ObjectivePrerequisiteFinding(
-                    code="objective_prerequisite_graph_invalid",
-                    severity="blocked",
-                    evidence=evidence,
-                    remediation=(
-                        "Correct the curriculum prerequisite graph before validating candidates."
-                    ),
-                ),
-            ),
+            reason=graph_invalid_reason,
         )
 
     revisions = list(
@@ -124,29 +106,20 @@ def evaluate_objective_prerequisite_alignment(
         )
     )
     if len(revisions) != len(closure):
-        evidence = {
-            "ruleset_version": OBJECTIVE_PREREQUISITE_RULESET_VERSION,
-            "target_objective_code": target_objective.code,
-            "reason": "revision_missing",
-        }
-        return ObjectivePrerequisiteEvaluation(
+        return _graph_invalid_evaluation(
             target_objective_code=target_objective.code,
-            resolution="graph_invalid",
             candidate_alias_digest=candidate_alias_digest,
-            matched_objective_code=None,
-            prerequisite_depth=None,
-            allowed_objective_count=1,
             prerequisite_revision_count=max(len(closure) - 1, 0),
-            findings=(
-                ObjectivePrerequisiteFinding(
-                    code="objective_prerequisite_graph_invalid",
-                    severity="blocked",
-                    evidence=evidence,
-                    remediation=(
-                        "Correct the curriculum prerequisite graph before validating candidates."
-                    ),
-                ),
-            ),
+            reason="revision_missing",
+        )
+    if any(
+        revision.objective.profile_id != target_objective.profile_id for revision in revisions
+    ):
+        return _graph_invalid_evaluation(
+            target_objective_code=target_objective.code,
+            candidate_alias_digest=candidate_alias_digest,
+            prerequisite_revision_count=max(len(closure) - 1, 0),
+            reason="cross_profile_edge",
         )
 
     allowed_objective_depths: dict[UUID, int] = {}
@@ -249,7 +222,7 @@ def evaluate_objective_prerequisite_alignment(
         )
 
     findings: tuple[ObjectivePrerequisiteFinding, ...] = ()
-    if mapping_enforced and candidate_alias:
+    if mapping_enforced:
         findings = (
             ObjectivePrerequisiteFinding(
                 code="objective_prerequisite_unresolved",
@@ -287,6 +260,37 @@ def unavailable_objective_prerequisite_signal(reason: str) -> dict[str, object]:
     }
 
 
+def _graph_invalid_evaluation(
+    *,
+    target_objective_code: str,
+    candidate_alias_digest: str | None,
+    prerequisite_revision_count: int,
+    reason: str,
+) -> ObjectivePrerequisiteEvaluation:
+    evidence = {
+        "ruleset_version": OBJECTIVE_PREREQUISITE_RULESET_VERSION,
+        "target_objective_code": target_objective_code,
+        "reason": reason,
+    }
+    return ObjectivePrerequisiteEvaluation(
+        target_objective_code=target_objective_code,
+        resolution="graph_invalid",
+        candidate_alias_digest=candidate_alias_digest,
+        matched_objective_code=None,
+        prerequisite_depth=None,
+        allowed_objective_count=1,
+        prerequisite_revision_count=prerequisite_revision_count,
+        findings=(
+            ObjectivePrerequisiteFinding(
+                code="objective_prerequisite_graph_invalid",
+                severity="blocked",
+                evidence=evidence,
+                remediation="Correct the curriculum prerequisite graph before validating candidates.",
+            ),
+        ),
+    )
+
+
 def _prerequisite_closure(
     session: Session, *, target_revision_id: UUID
 ) -> tuple[set[UUID], dict[UUID, int], str | None]:
@@ -303,9 +307,12 @@ def _prerequisite_closure(
             select(
                 CurriculumPrerequisite.objective_revision_id,
                 CurriculumPrerequisite.prerequisite_revision_id,
+                CurriculumPrerequisite.relation_type,
             ).where(CurriculumPrerequisite.objective_revision_id.in_(batch))
         )
-        for objective_revision_id, prerequisite_revision_id in rows:
+        for objective_revision_id, prerequisite_revision_id, relation_type in rows:
+            if relation_type != "requires":
+                return discovered, depths, "unsupported_relation"
             adjacency[objective_revision_id].append(prerequisite_revision_id)
             next_depth = depths[objective_revision_id] + 1
             if prerequisite_revision_id not in discovered:
@@ -314,6 +321,7 @@ def _prerequisite_closure(
                 pending.append(prerequisite_revision_id)
             elif next_depth < depths[prerequisite_revision_id]:
                 depths[prerequisite_revision_id] = next_depth
+                pending.append(prerequisite_revision_id)
 
     if _has_cycle(adjacency, discovered):
         return discovered, depths, "cycle_detected"
