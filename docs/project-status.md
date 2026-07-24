@@ -3,7 +3,7 @@
 机器可读证据见 [`status-evidence.json`](status-evidence.json)。本页的证据基线提交为：
 
 ```text
-148d574cc84ff196a58babcae043b23cc522d6c4
+1dbe669d97c81cf815e81f5d2cb5f20b1e5e9611
 ```
 
 ## 状态口径
@@ -40,10 +40,10 @@
 PR #109 的最终代码测试提交：
 
 ```text
-148d574cc84ff196a58babcae043b23cc522d6c4
+1dbe669d97c81cf815e81f5d2cb5f20b1e5e9611
 ```
 
-CI Run #457（Run ID `30106978142`）成功，包含：
+CI Run #459（Run ID `30106268432`）成功，包含：
 
 - `changes`
 - `python`：固定 Ruff 0.16.0、完整 Python 测试和六题型确定性验证语料
@@ -53,7 +53,7 @@ CI Run #457（Run ID `30106978142`）成功，包含：
 - `web`：单元测试、Nuxt production build 和 E2E 进程管理
 - `browser-e2e`：Chromium 学生/教师快速垂直链路
 
-AI evaluation gate Run #237（Run ID `30106978130`）成功。Docs integrity Run #204（Run ID `30106978137`）成功。
+AI evaluation gate Run #238（Run ID `30106268417`）成功。最终文档同步由 `Docs integrity` 在后续文档 head 单独验证；文档运行不写回 `evidence_base_commit`，以避免自引用更新。
 
 这些结果证明本容量切片在精确代码提交上通过仓库自动化门禁，**不证明学校发布环境已经验收或生产已上线**。
 
@@ -97,7 +97,8 @@ generator-v3
 - 规则与验证断言字节数；
 - JSON 深度与节点数；
 - 评分点、证据短语及单短语长度；
-- 控制字符和异常连续组合字符。
+- 控制字符和异常连续组合字符；
+- 整个候选题共享的 Unicode 扫描预算，避免大量长字符串放大预检成本。
 
 超限、不可序列化或预检异常均 fail closed，只保存载荷桶、数值观测、限制和稳定 violation code；不保存题干、答案、阅读材料或原始规则正文。教师编辑重验、拒绝补验和直接验证 API 均通过同一容量入口。
 
