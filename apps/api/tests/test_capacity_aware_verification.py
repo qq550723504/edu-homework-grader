@@ -62,11 +62,15 @@ def test_over_capacity_candidate_never_delegates_to_core_verifier(
     assert result is run
     findings = captured["findings"]
     assert isinstance(findings, list)
-    assert [finding.code for finding in findings] == ["candidate_capacity_limit_exceeded"]
+    assert [finding.code for finding in findings] == [
+        "candidate_capacity_limit_exceeded"
+    ]
     assert run.feature_summary_json["verification_capacity_signal"]["violations"] == [
         "prompt_chars"
     ]
-    assert run.feature_summary_json["grade_complexity_signal"] if False else True
+    grade_signal = captured["grade_complexity_signal"]
+    assert isinstance(grade_signal, dict)
+    assert grade_signal["reason"] == "capacity_preflight_blocked"
     assert session.flush_count == 1
 
 
