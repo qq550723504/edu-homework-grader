@@ -122,6 +122,7 @@ def _persist_terminal_failure(
         ),
         math_semantics_signal=unavailable_math_semantics_signal("verification_timeout"),
     )
+    run.status = ValidationRunStatus.BLOCKED
     summary = dict(run.feature_summary_json)
     summary["verification_capacity_signal"] = unavailable_verification_capacity_signal(
         "verification_timeout"
@@ -137,6 +138,7 @@ def _finalize_run(
     budget: VerificationBudget,
     terminal_finding: core.VerificationFinding | None,
 ) -> GenerationValidationRun:
+    added_terminal_finding = False
     if terminal_finding is not None and not any(
         finding.code == terminal_finding.code for finding in run.findings
     ):
@@ -149,18 +151,19 @@ def _finalize_run(
                 remediation=terminal_finding.remediation,
             )
         )
+        added_terminal_finding = True
+    if terminal_finding is not None:
         run.status = ValidationRunStatus.BLOCKED
 
     summary = dict(run.feature_summary_json)
     summary["verification_budget_signal"] = budget.feature_summary()
-    if terminal_finding is not None:
+    if added_terminal_finding:
         summary["finding_count"] = int(summary.get("finding_count", 0)) + 1
     run.feature_summary_json = summary
     run.validator_version = BUDGET_AWARE_VALIDATOR_VERSION
     run.ruleset_version = BUDGET_AWARE_RULESET_VERSION
     session.flush()
     return run
-
 
 def _finding_for_terminal_budget(
     budget: VerificationBudget,

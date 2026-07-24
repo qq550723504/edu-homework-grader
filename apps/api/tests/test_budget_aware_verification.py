@@ -187,7 +187,7 @@ def test_total_timeout_is_persisted_as_stable_blocking_finding(
         "total_budget_seconds": 5.0,
     }
     assert "text" not in str(findings[0].evidence)
-    assert persisted.status is ValidationRunStatus.PASSED
+    assert persisted.status is ValidationRunStatus.BLOCKED
     assert persisted.validator_version == "verification-v10"
 
 
