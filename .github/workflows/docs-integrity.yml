@@ -22,23 +22,33 @@ jobs:
           cache: pip
       - name: Install pinned Python toolchain
         run: make install-python >/dev/null
-      - name: Format PR 105 sources
+      - name: Capture exact Ruff changes
         run: |
+          mkdir -p .pr105-format
           python -m ruff format \
             services/generator/src/edu_generator/providers.py \
             apps/api/src/edu_grader_api/services/objective_prerequisites.py \
             apps/api/src/edu_grader_api/services/question_verification.py \
             apps/api/tests/test_objective_prerequisites.py \
             apps/api/tests/test_question_verification.py
-      - name: Upload formatted sources
+          git diff --name-only -- \
+            services/generator/src/edu_generator/providers.py \
+            apps/api/src/edu_grader_api/services/objective_prerequisites.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/tests/test_objective_prerequisites.py \
+            apps/api/tests/test_question_verification.py \
+            > .pr105-format/changed-files.txt
+          git diff --binary -- \
+            services/generator/src/edu_generator/providers.py \
+            apps/api/src/edu_grader_api/services/objective_prerequisites.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/tests/test_objective_prerequisites.py \
+            apps/api/tests/test_question_verification.py \
+            > .pr105-format/ruff-format.patch
+      - name: Upload exact Ruff diff
         uses: actions/upload-artifact@v4
         with:
-          name: pr105-formatted-sources
-          path: |
-            services/generator/src/edu_generator/providers.py
-            apps/api/src/edu_grader_api/services/objective_prerequisites.py
-            apps/api/src/edu_grader_api/services/question_verification.py
-            apps/api/tests/test_objective_prerequisites.py
-            apps/api/tests/test_question_verification.py
+          name: pr105-ruff-diff
+          path: .pr105-format
       - name: Validate links, evidence, versions, policies, and CI jobs
         run: python scripts/check_docs_status.py
