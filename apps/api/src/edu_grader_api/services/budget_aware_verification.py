@@ -17,7 +17,10 @@ from ..models import (
 )
 from ..settings import settings
 from . import question_verification as core
-from .capacity_aware_verification import run_capacity_aware_candidate_verification
+from .capacity_aware_verification import (
+    _capacity_blocked_duplicate_summary,
+    run_capacity_aware_candidate_verification,
+)
 from .grade_complexity import unavailable_grade_complexity_signal
 from .math_semantics import unavailable_math_semantics_signal
 from .objective_prerequisites import unavailable_objective_prerequisite_signal
@@ -110,7 +113,7 @@ def _persist_terminal_failure(
         evaluated_revision_id=revision.id,
         evaluated_revision_hash=revision.content_hash,
         findings=[finding],
-        duplicate_feature_summary=core._unavailable_duplicate_feature_summary(
+        duplicate_feature_summary=_capacity_blocked_duplicate_summary(
             "verification_timeout"
         ),
         difficulty_signal=core._unavailable_difficulty_signal(),
