@@ -206,6 +206,7 @@ def _measure_structure(value: object) -> _TraversalMeasurement:
     max_depth = 0
     control_characters = 0
     max_combining_mark_run = 0
+    text_characters_scanned = 0
     while stack:
         current, depth = stack.pop()
         node_count += 1
@@ -218,7 +219,15 @@ def _measure_structure(value: object) -> _TraversalMeasurement:
                 max_combining_mark_run=max_combining_mark_run,
             )
         if isinstance(current, str):
-            controls, combining_run = _measure_text(current)
+            remaining_text_budget = max(
+                _TEXT_SCAN_LIMIT - text_characters_scanned,
+                0,
+            )
+            controls, combining_run, scanned = _measure_text(
+                current,
+                max_characters=remaining_text_budget,
+            )
+            text_characters_scanned += scanned
             control_characters += controls
             max_combining_mark_run = max(max_combining_mark_run, combining_run)
             continue
@@ -260,13 +269,19 @@ def _measure_structure(value: object) -> _TraversalMeasurement:
     )
 
 
-def _measure_text(value: str) -> tuple[int, int]:
+def _measure_text(
+    value: str,
+    *,
+    max_characters: int,
+) -> tuple[int, int, int]:
     controls = 0
     current_combining_run = 0
     max_combining_run = 0
+    scanned = 0
     for index, character in enumerate(value):
-        if index >= _TEXT_SCAN_LIMIT:
+        if index >= max_characters:
             break
+        scanned += 1
         if unicodedata.category(character) == "Cc" and character not in {"\t", "\n", "\r"}:
             controls += 1
         if unicodedata.combining(character):
@@ -274,7 +289,7 @@ def _measure_text(value: str) -> tuple[int, int]:
             max_combining_run = max(max_combining_run, current_combining_run)
         else:
             current_combining_run = 0
-    return controls, max_combining_run
+    return controls, max_combining_run, scanned
 
 
 def _rubric_observations(rule_json: object) -> tuple[int, int, int]:
