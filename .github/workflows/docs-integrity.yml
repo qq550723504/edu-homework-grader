@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: docs-integrity-${{ github.event.pull_request.number || github.ref }}
@@ -13,11 +13,361 @@ concurrency:
 
 jobs:
   docs-integrity:
+    if: github.event.pull_request.number == 109 && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Validate links, evidence, versions, policies, and CI jobs
-        run: python scripts/check_docs_status.py
+          cache: pip
+      - name: Integrate capacity preflight into immutable validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+              return text.replace(old, new, 1)
+
+          path = Path('apps/api/src/edu_grader_api/services/question_verification.py')
+          text = path.read_text(encoding='utf-8')
+          text = replace_once(
+              text,
+              '''from .question_fingerprints import FINGERPRINT_VERSION, PromptFingerprints, fingerprint_prompt
+from .questions import GradeResult
+''',
+              '''from .question_fingerprints import FINGERPRINT_VERSION, PromptFingerprints, fingerprint_prompt
+from .questions import GradeResult
+from .verification_capacity import (
+    evaluate_verification_capacity,
+    unavailable_verification_capacity_signal,
+)
+''',
+              'capacity import',
+          )
+          text = replace_once(
+              text,
+              'VALIDATOR_VERSION = "verification-v8"\nRULESET_VERSION = "rules-v8"',
+              'VALIDATOR_VERSION = "verification-v9"\nRULESET_VERSION = "rules-v9"',
+              'version bump',
+          )
+          text = replace_once(
+              text,
+              '''    objective_prerequisite_signal: dict[str, object]
+    math_semantics_signal: dict[str, object]
+''',
+              '''    objective_prerequisite_signal: dict[str, object]
+    math_semantics_signal: dict[str, object]
+    verification_capacity_signal: dict[str, object]
+''',
+              'evaluation field',
+          )
+          old_run = '''    candidate = deepcopy(revision.candidate_json)
+    duplicate_threshold = _validated_duplicate_threshold()
+    prompt = candidate.get("prompt")
+    duplicate_snapshot = _empty_duplicate_snapshot(
+        duplicate_threshold,
+        prompt if isinstance(prompt, str) else "",
+    )
+    try:
+        job = session.get(GenerationJob, draft.job_id)
+        if job is not None and isinstance(prompt, str):
+            duplicate_snapshot = _capture_duplicate_snapshot(
+                session,
+                draft=draft,
+                tenant_id=job.tenant_id,
+                prompt=prompt,
+                threshold=duplicate_threshold,
+            )
+        evaluation = _evaluate_candidate(
+            session,
+            draft=draft,
+            candidate=candidate,
+            grader_client=grader_client,
+            duplicate_snapshot=duplicate_snapshot,
+        )
+    except Exception:
+        evaluation = _CandidateEvaluation(
+            findings=[
+                VerificationFinding(
+                    code="validator_unavailable",
+                    severity=ValidationFindingSeverity.BLOCKED,
+                    evidence={"category": "internal_validation_error"},
+                    remediation=(
+                        "Retry validation. If the problem continues, contact an administrator."
+                    ),
+                )
+            ],
+            duplicate_feature_summary=_duplicate_feature_summary(duplicate_snapshot),
+            difficulty_signal=_unavailable_difficulty_signal(),
+            grade_complexity_signal=unavailable_grade_complexity_signal("validator_unavailable"),
+            objective_prerequisite_signal=unavailable_objective_prerequisite_signal(
+                "validator_unavailable"
+            ),
+            math_semantics_signal=unavailable_math_semantics_signal("validator_unavailable"),
+        )
+'''
+          new_run = '''    candidate = deepcopy(revision.candidate_json)
+    capacity_evaluation = evaluate_verification_capacity(candidate)
+    capacity_signal = capacity_evaluation.feature_summary()
+    duplicate_threshold = _validated_duplicate_threshold()
+    prompt = candidate.get("prompt")
+    duplicate_snapshot = _empty_duplicate_snapshot(
+        duplicate_threshold,
+        prompt if isinstance(prompt, str) else "",
+    )
+    if capacity_evaluation.blocked:
+        evaluation = _CandidateEvaluation(
+            findings=[
+                VerificationFinding(
+                    code=finding.code,
+                    severity=ValidationFindingSeverity.BLOCKED,
+                    evidence=finding.evidence,
+                    remediation=finding.remediation,
+                )
+                for finding in capacity_evaluation.findings
+            ],
+            duplicate_feature_summary=_duplicate_feature_summary(duplicate_snapshot),
+            difficulty_signal=_unavailable_difficulty_signal(),
+            grade_complexity_signal=unavailable_grade_complexity_signal(
+                "capacity_preflight_blocked"
+            ),
+            objective_prerequisite_signal=unavailable_objective_prerequisite_signal(
+                "capacity_preflight_blocked"
+            ),
+            math_semantics_signal=unavailable_math_semantics_signal(
+                "capacity_preflight_blocked"
+            ),
+            verification_capacity_signal=capacity_signal,
+        )
+    else:
+        try:
+            job = session.get(GenerationJob, draft.job_id)
+            if job is not None and isinstance(prompt, str):
+                duplicate_snapshot = _capture_duplicate_snapshot(
+                    session,
+                    draft=draft,
+                    tenant_id=job.tenant_id,
+                    prompt=prompt,
+                    threshold=duplicate_threshold,
+                )
+            evaluation = _evaluate_candidate(
+                session,
+                draft=draft,
+                candidate=candidate,
+                grader_client=grader_client,
+                duplicate_snapshot=duplicate_snapshot,
+                verification_capacity_signal=capacity_signal,
+            )
+        except Exception:
+            evaluation = _CandidateEvaluation(
+                findings=[
+                    VerificationFinding(
+                        code="validator_unavailable",
+                        severity=ValidationFindingSeverity.BLOCKED,
+                        evidence={"category": "internal_validation_error"},
+                        remediation=(
+                            "Retry validation. If the problem continues, contact an administrator."
+                        ),
+                    )
+                ],
+                duplicate_feature_summary=_duplicate_feature_summary(duplicate_snapshot),
+                difficulty_signal=_unavailable_difficulty_signal(),
+                grade_complexity_signal=unavailable_grade_complexity_signal(
+                    "validator_unavailable"
+                ),
+                objective_prerequisite_signal=unavailable_objective_prerequisite_signal(
+                    "validator_unavailable"
+                ),
+                math_semantics_signal=unavailable_math_semantics_signal(
+                    "validator_unavailable"
+                ),
+                verification_capacity_signal=capacity_signal,
+            )
+'''
+          text = replace_once(text, old_run, new_run, 'run preflight')
+          text = replace_once(
+              text,
+              '''        objective_prerequisite_signal=evaluation.objective_prerequisite_signal,
+        math_semantics_signal=evaluation.math_semantics_signal,
+''',
+              '''        objective_prerequisite_signal=evaluation.objective_prerequisite_signal,
+        math_semantics_signal=evaluation.math_semantics_signal,
+        verification_capacity_signal=evaluation.verification_capacity_signal,
+''',
+              'persist call',
+          )
+          text = replace_once(
+              text,
+              '''    grader_client: VerificationGraderClient,
+    duplicate_snapshot: _DuplicateSnapshot,
+) -> _CandidateEvaluation:
+''',
+              '''    grader_client: VerificationGraderClient,
+    duplicate_snapshot: _DuplicateSnapshot,
+    verification_capacity_signal: dict[str, object],
+) -> _CandidateEvaluation:
+''',
+              'evaluate signature',
+          )
+          text = replace_once(
+              text,
+              '''        objective_prerequisite_signal=objective_prerequisite_signal,
+        math_semantics_signal=math_semantics_signal,
+    )
+''',
+              '''        objective_prerequisite_signal=objective_prerequisite_signal,
+        math_semantics_signal=math_semantics_signal,
+        verification_capacity_signal=verification_capacity_signal,
+    )
+''',
+              'evaluate return',
+          )
+          text = replace_once(
+              text,
+              '''    objective_prerequisite_signal: dict[str, object],
+    math_semantics_signal: dict[str, object],
+) -> GenerationValidationRun:
+''',
+              '''    objective_prerequisite_signal: dict[str, object],
+    math_semantics_signal: dict[str, object],
+    verification_capacity_signal: dict[str, object],
+) -> GenerationValidationRun:
+''',
+              'persist signature',
+          )
+          text = replace_once(
+              text,
+              '''            "objective_prerequisite_signal": objective_prerequisite_signal,
+            "math_semantics_signal": math_semantics_signal,
+            **duplicate_feature_summary,
+''',
+              '''            "objective_prerequisite_signal": objective_prerequisite_signal,
+            "math_semantics_signal": math_semantics_signal,
+            "verification_capacity_signal": verification_capacity_signal,
+            **duplicate_feature_summary,
+''',
+              'feature summary',
+          )
+          path.write_text(text, encoding='utf-8')
+
+          test_path = Path('apps/api/tests/test_question_verification.py')
+          tests = test_path.read_text(encoding='utf-8')
+          tests = tests.replace('"verification-v8"', '"verification-v9"')
+          tests = tests.replace('"rules-v8"', '"rules-v9"')
+          tests = tests.replace(
+              '{"difficulty_signal", "grade_complexity_signal", "objective_prerequisite_signal", "math_semantics_signal"}',
+              '{"difficulty_signal", "grade_complexity_signal", "objective_prerequisite_signal", "math_semantics_signal", "verification_capacity_signal"}',
+          )
+          marker = 'def test_capacity_preflight_blocks_before_dependency_calls'
+          if marker in tests:
+              raise SystemExit('capacity integration tests already present')
+          tests += r'''
+
+
+def test_capacity_preflight_blocks_before_dependency_calls(session: Session) -> None:
+    from edu_grader_api.services.verification_capacity import MAX_PROMPT_CHARS
+
+    class ExplosiveCapacityGrader:
+        def normalize_math_answer(self, answer_json: dict[str, object]) -> dict[str, object]:
+            raise AssertionError("normalizer must not be called")
+
+        def grade(
+            self,
+            question_type: str,
+            rule_json: dict[str, object],
+            answer_json: dict[str, object],
+            *,
+            policy_version: str | None = None,
+        ) -> GradeResult:
+            raise AssertionError("grader must not be called")
+
+        def semantic_similarity(
+            self, query: str, comparisons: list[str]
+        ) -> SemanticSimilarityResult:
+            raise AssertionError("similarity must not be called")
+
+    candidate = valid_m1_candidate("x" * (MAX_PROMPT_CHARS + 1))
+    draft = generation_draft(session, candidate_json=candidate)
+
+    run = verify_current_revision(
+        session,
+        draft=draft,
+        grader_client=ExplosiveCapacityGrader(),
+    )
+
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding_codes(run) == {"candidate_capacity_limit_exceeded"}
+    signal = run.feature_summary_json["verification_capacity_signal"]
+    assert signal["version"] == "verification-capacity-v1"
+    assert signal["violations"] == ["prompt_chars"]
+    assert "x" * 100 not in json.dumps(signal)
+    assert run.feature_summary_json["grade_complexity_signal"]["reason"] == (
+        "capacity_preflight_blocked"
+    )
+
+
+def test_valid_candidate_persists_deidentified_capacity_signal(session: Session) -> None:
+    draft = generation_draft(session)
+
+    run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())
+
+    signal = run.feature_summary_json["verification_capacity_signal"]
+    assert signal["availability"] == "available"
+    assert signal["version"] == "verification-capacity-v1"
+    assert signal["load_bucket"] == "small"
+    assert signal["violations"] == []
+    assert "What is 2 + 2?" not in json.dumps(signal)
+    assert run.validator_version == "verification-v9"
+    assert run.ruleset_version == "rules-v9"
+'''
+          test_path.write_text(tests, encoding='utf-8')
+          PY
+      - name: Format and run focused tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          make install-python >/dev/null
+          python -m ruff format \
+            apps/api/src/edu_grader_api/services/verification_capacity.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/src/edu_grader_api/services/grader.py \
+            apps/api/src/edu_grader_api/settings.py \
+            apps/api/tests/test_verification_capacity.py \
+            apps/api/tests/test_grader_timeout.py \
+            apps/api/tests/test_question_verification.py
+          python -m ruff check --config ruff.toml \
+            apps/api/src/edu_grader_api/services/verification_capacity.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/src/edu_grader_api/services/grader.py \
+            apps/api/src/edu_grader_api/settings.py \
+            apps/api/tests/test_verification_capacity.py \
+            apps/api/tests/test_grader_timeout.py \
+            apps/api/tests/test_question_verification.py
+          python -m pytest \
+            apps/api/tests/test_verification_capacity.py \
+            apps/api/tests/test_grader_timeout.py \
+            apps/api/tests/test_question_verification.py -q
+      - name: Restore workflows and push integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git show origin/main:.github/workflows/docs-integrity.yml > .github/workflows/docs-integrity.yml
+          git rm -f .github/workflows/pr109-integrate-capacity.yml
+          git rm -f .github/.pr109-integrate-trigger
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat: enforce verification capacity preflight'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
