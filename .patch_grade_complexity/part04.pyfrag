@@ -1,0 +1,84 @@
+            rule_json=rule_json if isinstance(rule_json, dict) else {},
+            normalized_m2_ast=normalized_m2_ast,
+        ),
+        grade_complexity_signal=grade_complexity_signal,
+    )
+''',
+        "candidate return signal",
+    )
+    old_function = '''def _grade_complexity_findings(
+    *,
+    rules: dict[str, object],
+    grade_level: str,
+    prompt: str,
+    question_type: object,
+    rule_json: dict[str, object],
+    normalized_m2_ast: dict[str, object] | None,
+) -> list[VerificationFinding]:
+    """Return stable, non-blocking findings for configured grade-complexity limits."""
+
+    findings: list[VerificationFinding] = []
+    observed_metrics = _complexity_observations(
+        prompt=prompt,
+        question_type=question_type,
+        rule_json=rule_json,
+        normalized_m2_ast=normalized_m2_ast,
+    )
+
+    for metric in _GRADE_COMPLEXITY_METRICS:
+        limit = rules.get(metric)
+        observed = observed_metrics.get(metric)
+        if isinstance(limit, int) and observed is not None and observed > Decimal(limit):
+            findings.append(
+                VerificationFinding(
+                    code="grade_complexity_warning",
+                    severity=ValidationFindingSeverity.WARNING,
+                    evidence={
+                        "grade_level": grade_level,
+                        "metric": metric,
+                        "observed": _complexity_observed_value(observed),
+                        "limit": limit,
+                    },
+                    remediation="Revise the candidate to fit the selected grade complexity limit.",
+                )
+            )
+    return findings
+'''
+    new_function = '''def _grade_complexity_findings(
+    *,
+    rules: dict[str, object],
+    grade_level: str,
+    prompt: str,
+    question_type: object,
+    rule_json: dict[str, object],
+    normalized_m2_ast: dict[str, object] | None,
+    reading_material: str = "",
+) -> list[VerificationFinding]:
+    """Return stable findings while preserving the legacy helper contract."""
+
+    findings, _signal = _grade_complexity_evaluation(
+        rules=rules,
+        grade_level=grade_level,
+        prompt=prompt,
+        reading_material=reading_material,
+        question_type=question_type,
+        rule_json=rule_json,
+        normalized_m2_ast=normalized_m2_ast,
+    )
+    return findings
+
+
+def _grade_complexity_evaluation(
+    *,
+    rules: object,
+    grade_level: str,
+    prompt: str,
+    reading_material: str,
+    question_type: object,
+    rule_json: dict[str, object],
+    normalized_m2_ast: dict[str, object] | None,
+) -> tuple[list[VerificationFinding], dict[str, object]]:
+    observations = _complexity_observations(
+        prompt=prompt,
+        question_type=question_type,
+        rule_json=rule_json,
