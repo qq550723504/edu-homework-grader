@@ -1,47 +1,38 @@
-name: PR 103 lint diagnostics
+name: PR 103 Ruff diagnostics
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  lint:
+  diagnose:
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'agent/grade-complexity-rules-v1' &&
-      github.actor != 'github-actions[bot]'
+      github.event.pull_request.head.ref == 'agent/grade-complexity-rules-v1'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
           cache: pip
       - name: Install packages
         run: make install-python >/dev/null
-      - name: Capture lint output
-        id: lint
+      - name: Show effective Ruff installation and configuration
         shell: bash
         run: |
-          set +e
-          make lint > pr103-lint.log 2>&1
-          status=$?
-          cat pr103-lint.log
-          echo "status=$status" >> "$GITHUB_OUTPUT"
-          exit 0
-      - name: Persist failing lint output
-        if: steps.lint.outputs.status != '0'
-        shell: bash
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -f pr103-lint.log
-          git commit -m 'chore: capture PR 103 lint failures'
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
-          exit 1
+          set -euo pipefail
+          python -m ruff --version
+          python -m pip show ruff
+          echo '--- apps/api effective settings ---'
+          python -m ruff check --show-settings apps/api/alembic/env.py | sed -n '1,220p'
+          echo '--- targeted lint ---'
+          python -m ruff check \
+            apps/api/src/edu_grader_api/services/curriculum_imports.py \
+            apps/api/src/edu_grader_api/services/grade_complexity.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/tests/test_grade_complexity.py \
+            apps/api/tests/test_question_verification.py || true
