@@ -1,0 +1,65 @@
+                revision.objective.grade_mapping.complexity_rules_json
+            )
+        except ValueError:
+            findings.append(
+                _blocked(
+                    "grade_complexity_rules_invalid",
+                    {"grade_level": grade_level},
+                    "Correct the persisted grade complexity rules before validating candidates.",
+                )
+            )
+        else:
+            findings.extend(
+                _grade_complexity_findings(
+                    rules=complexity_rules,
+                    grade_level=grade_level,
+                    prompt=prompt,
+                    question_type=question_type,
+                    rule_json=rule_json,
+                    normalized_m2_ast=normalized_m2_ast,
+                )
+            )
+''',
+        '''    if not policy_errors and isinstance(rule_json, dict) and isinstance(prompt, str):
+        grade_level = revision.objective.grade_mapping.internal_level
+        try:
+            complexity_findings, grade_complexity_signal = _grade_complexity_evaluation(
+                rules=revision.objective.grade_mapping.complexity_rules_json,
+                grade_level=grade_level,
+                prompt=prompt,
+                reading_material=reading_material if isinstance(reading_material, str) else "",
+                question_type=question_type,
+                rule_json=rule_json,
+                normalized_m2_ast=normalized_m2_ast,
+            )
+        except ValueError:
+            findings.append(
+                _blocked(
+                    "grade_complexity_rules_invalid",
+                    {"grade_level": grade_level},
+                    "Correct the persisted grade complexity rules before validating candidates.",
+                )
+            )
+            grade_complexity_signal = unavailable_grade_complexity_signal("rules_invalid")
+        else:
+            findings.extend(complexity_findings)
+''',
+        "candidate complexity block",
+    )
+    text = replace_once(
+        text,
+        '''        difficulty_signal=_rule_based_difficulty_signal(
+            target_difficulty=difficulty,
+            curriculum_range=(revision.difficulty_min, revision.difficulty_max),
+            prompt=prompt if isinstance(prompt, str) else "",
+            question_type=question_type,
+            rule_json=rule_json if isinstance(rule_json, dict) else {},
+            normalized_m2_ast=normalized_m2_ast,
+        ),
+    )
+''',
+        '''        difficulty_signal=_rule_based_difficulty_signal(
+            target_difficulty=difficulty,
+            curriculum_range=(revision.difficulty_min, revision.difficulty_max),
+            prompt=prompt if isinstance(prompt, str) else "",
+            question_type=question_type,
