@@ -1,0 +1,63 @@
+name: PR 107 pull-request integration
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    if: github.event.pull_request.number == 107
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Apply integration and run focused checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/pr107_integrate.py
+          make install-python >/dev/null
+          python -m ruff format \
+            apps/api/src/edu_grader_api/services/math_semantics.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/tests/test_math_semantics.py \
+            apps/api/tests/test_question_verification.py
+          python -m ruff check --config ruff.toml \
+            apps/api/src/edu_grader_api/services/math_semantics.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/tests/test_math_semantics.py \
+            apps/api/tests/test_question_verification.py
+          python -m pytest \
+            apps/api/tests/test_math_semantics.py \
+            apps/api/tests/test_question_verification.py -q
+          python scripts/check_docs_status.py
+      - name: Commit reviewable branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/pr107-integrate.yml
+          git rm .github/workflows/pr107-pr-integration.yml
+          git rm scripts/pr107_integrate.py
+          git rm apps/web/e2e/pr107-source-capture.spec.ts
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat: enforce explicit math semantics boundaries'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
