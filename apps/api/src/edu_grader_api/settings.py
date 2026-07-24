@@ -72,6 +72,18 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://edu_grader:change-me@localhost:5432/edu_grader"
     redis_url: str = "redis://localhost:6379/0"
     grader_base_url: str = "http://localhost:8010"
+    grader_request_timeout_seconds: float = Field(
+        default=10.0,
+        gt=0,
+        le=60,
+        validation_alias="GRADER_REQUEST_TIMEOUT_SECONDS",
+    )
+    verification_total_timeout_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        le=120,
+        validation_alias="VERIFICATION_TOTAL_TIMEOUT_SECONDS",
+    )
     oidc_issuer: str = "http://localhost:8080/realms/edu-grader"
     oidc_audience: str = "edu-grader-api"
     oidc_school_id_claim: str = "school_id"
