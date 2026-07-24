@@ -34,11 +34,11 @@ jobs:
         run: |
           set -o pipefail
           base64 --decode .patch_grade_complexity_slice.py.gz.b64 | gzip --decompress > /tmp/patch_grade_complexity_slice.py
-          python /tmp/patch_grade_complexity_slice.py > .patch-grade-complexity.log 2>&1
+          python /tmp/patch_grade_complexity_slice.py > patch-grade-complexity.log 2>&1
           status=$?
-          cat .patch-grade-complexity.log
+          cat patch-grade-complexity.log
           if [[ $status -eq 0 ]]; then
-            rm -f .patch-grade-complexity.log
+            rm -f patch-grade-complexity.log
           fi
           exit $status
 
@@ -47,8 +47,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: grade-complexity-patch-diagnostics-${{ github.run_id }}
-          path: .patch-grade-complexity.log
-          include-hidden-files: true
+          path: patch-grade-complexity.log
           if-no-files-found: error
           retention-days: 1
 
