@@ -1,0 +1,50 @@
+name: PR 111 one-shot autoformat
+
+on:
+  push:
+    branches:
+      - agent/verification-budget-v1
+
+permissions:
+  contents: write
+
+jobs:
+  autoformat:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/verification-budget-v1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install pinned Ruff
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Format PR Python changes
+        run: |
+          set -euo pipefail
+          python -m pip install 'ruff==0.16.0'
+          python -m ruff format \
+            apps/api/src/edu_grader_api/routers/ai_question_validation.py \
+            apps/api/src/edu_grader_api/services/ai_question_review.py \
+            apps/api/src/edu_grader_api/services/budget_aware_verification.py \
+            apps/api/src/edu_grader_api/services/verification_budget.py \
+            apps/api/tests/test_budget_aware_verification.py \
+            apps/api/tests/test_verification_budget.py \
+            apps/api/tests/test_verification_budget_public_api.py \
+            apps/api/tests/test_verification_budget_settings.py
+          rm -f .github/workflows/pr111-autoformat.yml
+          git diff --check
+
+      - name: Commit formatted result
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'style: apply pinned Ruff formatting'
+          git push origin HEAD:agent/verification-budget-v1
