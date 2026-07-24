@@ -5,4 +5,3 @@ repos:
       - id: ruff-check
         args: [--config, ruff.toml, --fix]
       - id: ruff-format
-        args: [--config, ruff.toml]
