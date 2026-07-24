@@ -38,7 +38,7 @@ jobs:
       - name: Install Python packages
         run: make install-python
 
-      - name: Format and validate targeted slice
+      - name: Format integrated slice
         shell: bash
         run: |
           set -euo pipefail
@@ -48,6 +48,28 @@ jobs:
             apps/api/src/edu_grader_api/services/question_verification.py \
             apps/api/tests/test_grade_complexity.py \
             apps/api/tests/test_question_verification.py
+
+      - name: Persist integrated source and tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            apps/api/src/edu_grader_api/services/curriculum_imports.py \
+            apps/api/src/edu_grader_api/services/grade_complexity.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/tests/test_grade_complexity.py \
+            apps/api/tests/test_question_verification.py
+          if ! git diff --cached --quiet; then
+            git commit -m 'feat: integrate versioned grade complexity verification'
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          fi
+
+      - name: Lint and run targeted tests
+        shell: bash
+        run: |
+          set -euo pipefail
           python -m ruff check \
             apps/api/src/edu_grader_api/services/curriculum_imports.py \
             apps/api/src/edu_grader_api/services/grade_complexity.py \
@@ -58,23 +80,3 @@ jobs:
             apps/api/tests/test_grade_complexity.py \
             apps/api/tests/test_curriculum_imports.py \
             apps/api/tests/test_question_verification.py -q
-
-      - name: Remove one-shot patcher assets
-        run: |
-          rm -rf .patch_grade_complexity
-          rm -f .patch_grade_complexity_slice.py.gz.b64
-          rm -f patch-grade-complexity.log
-          rm -f .github/workflows/pr-grade-complexity-patcher.yml
-
-      - name: Commit integrated slice
-        shell: bash
-        run: |
-          set -euo pipefail
-          if git diff --quiet; then
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git commit -m 'feat: integrate versioned grade complexity verification'
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
