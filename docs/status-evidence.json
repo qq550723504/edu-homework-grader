@@ -44,6 +44,12 @@
     "objective_prerequisite_rules_version": "objective-prerequisite-v1",
     "math_semantics_rules_version": "math-semantics-v1"
   },
+  "capacity_validation_contract": {
+    "validator_version": "verification-v9",
+    "ruleset_version": "rules-v9",
+    "capacity_rules_version": "verification-capacity-v1",
+    "grader_request_timeout_seconds": 10
+  },
   "default_question_policies": [
     "M1@1",
     "M2@2",
@@ -75,6 +81,7 @@
     43,
     76,
     83,
-    99
+    99,
+    108
   ]
 }
