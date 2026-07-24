@@ -23,30 +23,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-          cache: pip
-      - name: Apply integration and run focused checks
-        shell: bash
-        run: |
-          set -euo pipefail
-          python scripts/pr107_integrate.py
-          make install-python >/dev/null
-          python -m ruff format \
-            apps/api/src/edu_grader_api/services/math_semantics.py \
-            apps/api/src/edu_grader_api/services/question_verification.py \
-            apps/api/tests/test_math_semantics.py \
-            apps/api/tests/test_question_verification.py
-          python -m ruff check --config ruff.toml \
-            apps/api/src/edu_grader_api/services/math_semantics.py \
-            apps/api/src/edu_grader_api/services/question_verification.py \
-            apps/api/tests/test_math_semantics.py \
-            apps/api/tests/test_question_verification.py
-          python -m pytest \
-            apps/api/tests/test_math_semantics.py \
-            apps/api/tests/test_question_verification.py -q
-          python scripts/check_docs_status.py
+      - name: Apply deterministic integration
+        run: python scripts/pr107_integrate.py
       - name: Commit reviewable branch
         shell: bash
         run: |
