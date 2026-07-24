@@ -36,6 +36,17 @@ _VERSIONED_METADATA_KEYS = frozenset(
     {"version", "enforcement", "long_lexical_unit_threshold"}
 )
 _DEFAULT_LONG_LEXICAL_UNIT_THRESHOLD = 10
+_LIMIT_ORDER = (
+    "max_prompt_units",
+    "max_sentence_units",
+    "max_reading_units",
+    "max_reading_sentence_units",
+    "max_reference_units",
+    "max_lexical_unit_length",
+    "max_long_lexical_units",
+    "max_numeric_absolute_value",
+    "max_math_operation_nodes",
+)
 _LEXICAL_UNITS = re.compile(
     r"[A-Za-z0-9\u00c0-\u024f\u1e00-\u1eff\u2c60-\u2c7f\ua720-\ua7ff"
     r"\uab30-\uab6f]+(?:'[A-Za-z0-9\u00c0-\u024f\u1e00-\u1eff\u2c60-\u2c7f"
@@ -186,8 +197,10 @@ def evaluate_grade_complexity(
 
     violations = tuple(
         metric
-        for metric, limit in sorted(rule_set.limits.items())
-        if metric in observations and observations[metric] > limit
+        for metric in _LIMIT_ORDER
+        if metric in rule_set.limits
+        and metric in observations
+        and observations[metric] > rule_set.limits[metric]
     )
     lexical_signal = {
         "version": LEXICAL_SIGNAL_VERSION,
