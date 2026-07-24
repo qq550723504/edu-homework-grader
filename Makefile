@@ -1,4 +1,7 @@
-.PHONY: install-python test lint format api-test api-lint api-migrate question-test calibration-report ai-evaluation ai-evaluation-operational verification-regression docs-check web-install web-test web-build web-e2e dev down
+.PHONY: install-python test lint format ruff-version-check api-test api-lint api-migrate question-test calibration-report ai-evaluation ai-evaluation-operational verification-regression docs-check web-install web-test web-build web-e2e dev down
+
+RUFF_CONFIG := ruff.toml
+RUFF_VERSION := 0.15.14
 
 install-python:
 	python -m pip install -e packages/processor-policy -e "services/generator[openai,dev]" -e "apps/api[dev]" -e "services/grader[dev]"
@@ -9,9 +12,9 @@ test:
 api-test:
 	python -m pytest apps/api/tests
 
-api-lint:
-	python -m ruff format --check apps/api
-	python -m ruff check apps/api
+api-lint: ruff-version-check
+	python -m ruff format --config $(RUFF_CONFIG) --check apps/api
+	python -m ruff check --config $(RUFF_CONFIG) apps/api
 
 api-migrate:
 	python -m alembic -c apps/api/alembic.ini upgrade head
@@ -35,12 +38,15 @@ verification-regression:
 docs-check:
 	python scripts/check_docs_status.py
 
-lint:
-	python -m ruff format --check packages/processor-policy services/generator apps/api services/grader
-	python -m ruff check packages/processor-policy services/generator apps/api services/grader
+ruff-version-check:
+	python -c "import importlib.metadata as m; expected='$(RUFF_VERSION)'; actual=m.version('ruff'); assert actual == expected, f'Ruff version mismatch: expected {expected}, found {actual}'"
 
-format:
-	python -m ruff format packages/processor-policy services/generator apps/api services/grader
+lint: ruff-version-check
+	python -m ruff format --config $(RUFF_CONFIG) --check packages/processor-policy services/generator apps/api services/grader
+	python -m ruff check --config $(RUFF_CONFIG) packages/processor-policy services/generator apps/api services/grader
+
+format: ruff-version-check
+	python -m ruff format --config $(RUFF_CONFIG) packages/processor-policy services/generator apps/api services/grader
 
 web-install:
 	cd apps/web && npm ci
