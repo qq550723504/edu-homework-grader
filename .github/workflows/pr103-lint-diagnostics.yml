@@ -1,0 +1,47 @@
+name: PR 103 lint diagnostics
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  lint:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/grade-complexity-rules-v1' &&
+      github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Install packages
+        run: make install-python >/dev/null
+      - name: Capture lint output
+        id: lint
+        shell: bash
+        run: |
+          set +e
+          make lint > pr103-lint.log 2>&1
+          status=$?
+          cat pr103-lint.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Persist failing lint output
+        if: steps.lint.outputs.status != '0'
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -f pr103-lint.log
+          git commit -m 'chore: capture PR 103 lint failures'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          exit 1
