@@ -1,0 +1,176 @@
+name: Dependency connect-timeout network probe
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches:
+      - main
+    paths:
+      - ".github/workflows/connect-timeout-network-probe.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-connect-timeout-probe-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install host probe dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir httpx==0.28.1
+
+      - name: Build isolated probe image
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/connect-timeout-probe
+          cat > /tmp/connect-timeout-probe/probe.py <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+          import time
+
+          import httpx
+
+
+          def main() -> None:
+              actor = os.environ["PROBE_ACTOR"]
+              targets = [
+                  item.strip()
+                  for item in os.environ["PROBE_TARGETS"].split(",")
+                  if item.strip()
+              ]
+              output = Path(os.environ["PROBE_OUTPUT"])
+              results: list[dict[str, object]] = []
+              unexpected = False
+              timeout = httpx.Timeout(connect=0.25, read=1.0, write=1.0, pool=1.0)
+              with httpx.Client(timeout=timeout, trust_env=False) as client:
+                  for slot, target in enumerate(targets, start=1):
+                      started = time.monotonic()
+                      outcome = "no_exception"
+                      try:
+                          client.post(f"http://{target}:8010/connect-timeout-probe")
+                      except httpx.ConnectTimeout:
+                          outcome = "ConnectTimeout"
+                      except Exception as error:  # diagnostic type only; no message or URL
+                          outcome = type(error).__name__
+                          unexpected = True
+                      else:
+                          unexpected = True
+                      results.append(
+                          {
+                              "target_slot": slot,
+                              "outcome": outcome,
+                              "elapsed_bucket": (
+                                  "subsecond"
+                                  if time.monotonic() - started < 1
+                                  else "one_second_or_more"
+                              ),
+                          }
+                      )
+              output.parent.mkdir(parents=True, exist_ok=True)
+              output.write_text(
+                  json.dumps(
+                      {
+                          "probe_version": "dependency-connect-timeout-probe-v1",
+                          "actor": actor,
+                          "attempt_count": len(results),
+                          "all_connect_timeouts": not unexpected,
+                          "results": results,
+                      },
+                      indent=2,
+                      sort_keys=True,
+                  )
+                  + "\n",
+                  encoding="utf-8",
+              )
+              if unexpected:
+                  raise SystemExit(1)
+
+
+          if __name__ == "__main__":
+              main()
+          PY
+          cat > /tmp/connect-timeout-probe/Dockerfile <<'DOCKER'
+          FROM python:3.13-slim
+          RUN python -m pip install --disable-pip-version-check --no-cache-dir httpx==0.28.1
+          COPY probe.py /probe.py
+          ENTRYPOINT ["python", "/probe.py"]
+          DOCKER
+          docker build --quiet --tag dependency-connect-timeout-probe:local /tmp/connect-timeout-probe
+
+      - name: Execute host and container probes
+        run: |
+          set -euo pipefail
+          network="dependency-connect-timeout-probe-${GITHUB_RUN_ID}"
+          cleanup() {
+            docker network rm "$network" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker network create \
+            --driver bridge \
+            --internal \
+            --subnet 172.30.254.0/24 \
+            "$network" >/dev/null
+
+          mkdir -p artifacts/dependency-connect-timeout-probe
+          PROBE_ACTOR=runner-host \
+          PROBE_TARGETS=172.30.254.250,172.30.254.249,172.30.254.248 \
+          PROBE_OUTPUT=artifacts/dependency-connect-timeout-probe/host.json \
+            python /tmp/connect-timeout-probe/probe.py
+
+          docker run --rm \
+            --network "$network" \
+            --volume "$PWD/artifacts/dependency-connect-timeout-probe:/artifacts" \
+            --env PROBE_ACTOR=isolated-container \
+            --env PROBE_TARGETS=172.30.254.247,172.30.254.246,172.30.254.245 \
+            --env PROBE_OUTPUT=/artifacts/container.json \
+            dependency-connect-timeout-probe:local
+
+          python - <<'PY'
+          from pathlib import Path
+          import json
+
+          directory = Path("artifacts/dependency-connect-timeout-probe")
+          reports = [
+              json.loads((directory / name).read_text(encoding="utf-8"))
+              for name in ("host.json", "container.json")
+          ]
+          summary = {
+              "probe_version": "dependency-connect-timeout-probe-v1",
+              "actors": [report["actor"] for report in reports],
+              "attempt_count": sum(report["attempt_count"] for report in reports),
+              "all_connect_timeouts": all(
+                  report["all_connect_timeouts"] is True for report in reports
+              ),
+          }
+          (directory / "summary.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          if summary["all_connect_timeouts"] is not True:
+              raise SystemExit(1)
+          PY
+
+      - name: Upload de-identified probe artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-connect-timeout-probe-v1-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/dependency-connect-timeout-probe
+          if-no-files-found: error
+          retention-days: 2
