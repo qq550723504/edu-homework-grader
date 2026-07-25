@@ -67,6 +67,42 @@ jobs:
           patch = Path("/tmp/languagetool-read-timeout-patch.py")
           patch.write_text(script + "\n", encoding="utf-8")
           subprocess.run(["python", str(patch)], check=True)
+
+          module_path = Path(
+              "apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py"
+          )
+          module_text = module_path.read_text(encoding="utf-8")
+          old_version = "SCENARIO_CATALOG_VERSION = 2"
+          new_version = "SCENARIO_CATALOG_VERSION = 3"
+          if old_version not in module_text and new_version not in module_text:
+              raise SystemExit("scenario catalog version marker missing")
+          module_path.write_text(
+              module_text.replace(old_version, new_version, 1),
+              encoding="utf-8",
+          )
+
+          test_path = Path("apps/api/tests/test_languagetool_fault_proxy.py")
+          test_text = test_path.read_text(encoding="utf-8")
+          import_marker = "import json\nfrom pathlib import Path\n"
+          import_replacement = "import json\nfrom pathlib import Path\nimport sys\n"
+          if import_marker not in test_text and import_replacement not in test_text:
+              raise SystemExit("proxy test import marker missing")
+          test_text = test_text.replace(import_marker, import_replacement, 1)
+          load_marker = (
+              "    module = importlib.util.module_from_spec(spec)\n"
+              "    spec.loader.exec_module(module)\n"
+          )
+          load_replacement = (
+              "    module = importlib.util.module_from_spec(spec)\n"
+              "    sys.modules[spec.name] = module\n"
+              "    spec.loader.exec_module(module)\n"
+          )
+          if load_marker not in test_text and load_replacement not in test_text:
+              raise SystemExit("proxy module registration marker missing")
+          test_path.write_text(
+              test_text.replace(load_marker, load_replacement, 1),
+              encoding="utf-8",
+          )
           PY
           } 2>&1 | tee /tmp/languagetool-bootstrap.log
 
