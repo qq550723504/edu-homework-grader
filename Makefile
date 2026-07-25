@@ -1,4 +1,4 @@
-.PHONY: install-python test lint format ruff-version-check api-test api-lint api-migrate question-test calibration-report ai-evaluation ai-evaluation-operational verification-regression docs-check web-install web-test web-build web-e2e dev down
+.PHONY: install-python test lint format ruff-version-check api-test api-lint api-migrate question-test calibration-report ai-evaluation ai-evaluation-operational verification-regression verification-performance docs-check web-install web-test web-build web-e2e dev down
 
 RUFF_CONFIG := ruff.toml
 RUFF_VERSION := 0.16.0
@@ -34,6 +34,13 @@ ai-evaluation-operational:
 
 verification-regression:
 	python -m pytest apps/api/tests/test_verification_corpus.py -q -s
+
+verification-performance:
+	python -m edu_grader_api.services.verification_performance \
+		--output-dir "$(or $(OUTPUT),artifacts/verification-performance)" \
+		--warmups "$(or $(WARMUPS),1)" \
+		--iterations "$(or $(ITERATIONS),5)" \
+		--seed "$(or $(SEED),119)"
 
 docs-check:
 	python scripts/check_docs_status.py
