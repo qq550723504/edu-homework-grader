@@ -12,13 +12,14 @@ The dedicated Compose definition is `infra/release-evidence/compose.yaml`. It st
 
 - PostgreSQL 16;
 - the repository LanguageTool image;
-- the repository Grader image configured to call that LanguageTool service.
+- a containerized, payload-blind LanguageTool response-stall proxy;
+- the repository Grader image configured to call LanguageTool through that proxy.
 
 The Core API code runs from the checked-out package on the GitHub runner and connects to the isolated PostgreSQL and Grader ports. Alembic upgrades the database to the production schema before scenarios execute.
 
 Every repetition uses a unique Compose project and a fresh PostgreSQL volume. The runner performs at least two complete repetitions and removes containers and volumes after each repetition.
 
-## Scenario catalog v2
+## Scenario catalog v3
 
 ### Capacity candidate bytes
 
@@ -65,6 +66,22 @@ Each scenario succeeds only when:
 - no `QuestionVersion` is created.
 
 The fault proxy never records request bodies, candidate content, network locations or exception text in the evidence artifact.
+
+
+### Explicit LanguageTool read timeout
+
+A containerized fault proxy sits between the real Grader and LanguageTool. In stall mode it accepts exactly one `/v2/check` request and withholds the response longer than `LANGUAGETOOL_TIMEOUT_SECONDS`; in forward mode it relays a fresh recovery request to the real LanguageTool service.
+
+The scenario succeeds only when:
+
+- the outage run is `blocked` with `language_timeout`;
+- the shared budget records `dependency_timeout` and terminal dependency `language`;
+- exactly one LanguageTool request reaches stall mode and no additional request starts after terminal timeout;
+- a fresh run forwards through the same proxy and completes with `passed` and a `completed` budget;
+- the prior blocked run remains immutable;
+- no `QuestionVersion` is created.
+
+The proxy control plane exposes only mode and aggregate call counts. It does not persist request bodies, candidate content, upstream locations or exception text.
 
 ## Evidence outputs
 
@@ -113,7 +130,7 @@ Artifacts use the source SHA in their name and are retained for 14 days.
 
 Version 1 does not yet provide:
 
-- controlled connect-timeout injection or an explicit LanguageTool read-timeout proxy scenario;
+- controlled connect-timeout injection for all four dependency categories;
 - every total-budget stage boundary in the real-service environment;
 - a reusable RC workflow callable from the milestone signing pipeline;
 - full OIDC browser acceptance.

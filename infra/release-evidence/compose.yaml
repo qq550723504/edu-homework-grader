@@ -25,6 +25,27 @@ services:
       timeout: 3s
       retries: 30
 
+  language-fault-proxy:
+    image: python:3.13-alpine
+    command: ["python", "/app/languagetool_fault_proxy.py"]
+    environment:
+      LANGUAGETOOL_FAULT_PROXY_PORT: 8020
+      LANGUAGETOOL_FAULT_PROXY_UPSTREAM: http://languagetool:8010
+      LANGUAGETOOL_FAULT_PROXY_STALL_SECONDS: 6
+      LANGUAGETOOL_FAULT_PROXY_FORWARD_TIMEOUT_SECONDS: 15
+    volumes:
+      - ./languagetool_fault_proxy.py:/app/languagetool_fault_proxy.py:ro
+    ports:
+      - "${RELEASE_EVIDENCE_LANGUAGE_FAULT_PROXY_PORT:-58012}:8020"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8020/__fault/health')"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    depends_on:
+      languagetool:
+        condition: service_healthy
+
   grader:
     image: edu-homework-grader/grader:release-evidence
     build:
@@ -35,13 +56,13 @@ services:
       GRADER_MATH_CPU_SECONDS: 2
       GRADER_MATH_MEMORY_BYTES: 536870912
       GRADER_MATH_TIMEOUT_SECONDS: 5
-      LANGUAGETOOL_BASE_URL: http://languagetool:8010/v2
+      LANGUAGETOOL_BASE_URL: http://language-fault-proxy:8020/v2
       LANGUAGETOOL_TIMEOUT_SECONDS: 5
       ENGLISH_EMBEDDING_MODEL_DIRECTORY: /opt/english-model
       ENGLISH_EMBEDDING_MODEL_ID: sentence-transformers/all-MiniLM-L6-v2
       ENGLISH_EMBEDDING_MODEL_REVISION: 1110a243fdf4706b3f48f1d95db1a4f5529b4d41
       ENGLISH_EMBEDDING_MODEL_DIGEST: sha256:84714cdabb16d132cbe6e1a4cbd21167abd09eccbdaf69dd053136ae68cc7c17
-      PROCESSOR_ALLOWED_HOSTS: grader,languagetool,localhost,127.0.0.1
+      PROCESSOR_ALLOWED_HOSTS: grader,languagetool,language-fault-proxy,localhost,127.0.0.1
       GENERATION_PROVIDER: fake
     ports:
       - "${RELEASE_EVIDENCE_GRADER_PORT:-58010}:8010"
@@ -51,5 +72,5 @@ services:
       timeout: 3s
       retries: 30
     depends_on:
-      languagetool:
+      language-fault-proxy:
         condition: service_healthy

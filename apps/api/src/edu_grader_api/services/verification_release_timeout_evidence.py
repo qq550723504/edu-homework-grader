@@ -38,23 +38,26 @@ from .verification_performance import (
 )
 
 REPORT_VERSION = base.REPORT_VERSION
-SCENARIO_CATALOG_VERSION = 2
+SCENARIO_CATALOG_VERSION = 3
 DEFAULT_REPETITIONS = base.DEFAULT_REPETITIONS
 DEFAULT_DATABASE_URL = base.DEFAULT_DATABASE_URL
 DEFAULT_GRADER_URL = base.DEFAULT_GRADER_URL
 DEFAULT_LANGUAGETOOL_HEALTH_URL = base.DEFAULT_LANGUAGETOOL_HEALTH_URL
+DEFAULT_LANGUAGE_FAULT_PROXY_URL = "http://127.0.0.1:58012"
 
-DependencyKind = Literal["normalizer", "grader", "similarity"]
+DependencyKind = Literal["normalizer", "grader", "language", "similarity"]
 ProxyMode = Literal["stall", "forward"]
 
 _EXPECTED_TIMEOUT_FINDING: Mapping[DependencyKind, str] = {
     "normalizer": "normalizer_timeout",
     "grader": "grader_timeout",
+    "language": "language_timeout",
     "similarity": "similarity_timeout",
 }
 _SCENARIO_ID: Mapping[DependencyKind, str] = {
     "normalizer": "normalizer_read_timeout_recovery",
     "grader": "grader_read_timeout_recovery",
+    "language": "language_read_timeout_recovery",
     "similarity": "similarity_read_timeout_recovery",
 }
 
@@ -188,6 +191,73 @@ class FaultInjectingGraderProxy:
             return mode
 
 
+@dataclass(frozen=True, slots=True)
+class LanguageToolFaultProxyControl:
+    """Control plane for the containerized LanguageTool response-stall proxy."""
+
+    base_url: str
+    request_timeout_seconds: float = 10.0
+
+    def __post_init__(self) -> None:
+        normalized = self.base_url.rstrip("/")
+        if not normalized or self.request_timeout_seconds <= 0:
+            raise ValueError("LanguageTool fault proxy configuration is invalid")
+        object.__setattr__(self, "base_url", normalized)
+
+    def wait_ready(self, *, timeout_seconds: float) -> None:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            try:
+                response = httpx.get(
+                    f"{self.base_url}/__fault/health",
+                    timeout=self.request_timeout_seconds,
+                )
+                response.raise_for_status()
+                return
+            except httpx.HTTPError:
+                time.sleep(1)
+        raise RuntimeError("LanguageTool fault proxy did not become ready")
+
+    def set_mode(self, mode: ProxyMode) -> None:
+        if mode not in {"stall", "forward"}:
+            raise ValueError("unsupported LanguageTool fault proxy mode")
+        response = httpx.post(
+            f"{self.base_url}/__fault/mode",
+            json={"mode": mode},
+            timeout=self.request_timeout_seconds,
+        )
+        response.raise_for_status()
+
+    def reset_counts(self) -> None:
+        response = httpx.post(
+            f"{self.base_url}/__fault/reset",
+            timeout=self.request_timeout_seconds,
+        )
+        response.raise_for_status()
+
+    def call_counts(self) -> dict[ProxyMode, int]:
+        response = httpx.get(
+            f"{self.base_url}/__fault/counts",
+            timeout=self.request_timeout_seconds,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError("LanguageTool fault proxy returned invalid counts")
+        stall = payload.get("stall")
+        forward = payload.get("forward")
+        if (
+            isinstance(stall, bool)
+            or not isinstance(stall, int)
+            or stall < 0
+            or isinstance(forward, bool)
+            or not isinstance(forward, int)
+            or forward < 0
+        ):
+            raise RuntimeError("LanguageTool fault proxy returned invalid counts")
+        return {"stall": stall, "forward": forward}
+
+
 def run_release_evidence(
     *,
     compose_file: Path,
@@ -196,6 +266,7 @@ def run_release_evidence(
     database_url: str = DEFAULT_DATABASE_URL,
     grader_url: str = DEFAULT_GRADER_URL,
     languagetool_health_url: str = DEFAULT_LANGUAGETOOL_HEALTH_URL,
+    language_fault_proxy_url: str = DEFAULT_LANGUAGE_FAULT_PROXY_URL,
 ) -> tuple[dict[str, object], base.ReportPaths]:
     if REPORT_VERSION != "verification-release-evidence-v1":
         raise RuntimeError("unsupported base release-evidence contract")
@@ -214,7 +285,11 @@ def run_release_evidence(
             grader_url=grader_url,
             languagetool_health_url=languagetool_health_url,
         )
-        repetition_report, discovered_environment = _run_repetition(context, repetition)
+        repetition_report, discovered_environment = _run_repetition(
+            context,
+            repetition,
+            language_fault_proxy_url=language_fault_proxy_url,
+        )
         repetition_reports.append(repetition_report)
         for key, value in discovered_environment.items():
             environment.setdefault(key, value)
@@ -236,15 +311,23 @@ def run_release_evidence(
             "ruleset_version": BUDGET_AWARE_RULESET_VERSION,
             "capacity_version": VERIFICATION_CAPACITY_RULESET_VERSION,
             "budget_version": VERIFICATION_BUDGET_RULESET_VERSION,
-            "timeout_fault_version": "verification-dependency-read-timeout-v1",
+            "timeout_fault_version": "verification-dependency-read-timeout-v2",
         },
         "protocol": {
             "repetitions": repetitions,
             "database": "postgresql",
             "grader": "real_http_service",
             "language_dependency": "real_languagetool_service",
-            "fault_injection": "local_response_stall_proxy",
-            "timeout_dependencies": ["normalizer", "grader", "similarity"],
+            "fault_injection": (
+                "local_grader_response_stall_proxy_and_containerized_"
+                "languagetool_response_stall_proxy"
+            ),
+            "timeout_dependencies": [
+                "normalizer",
+                "grader",
+                "language",
+                "similarity",
+            ],
             "isolation": "unique_compose_project_and_volume_per_repetition",
             "cleanup_policy": "docker_compose_down_with_volumes",
         },
@@ -269,6 +352,8 @@ def run_release_evidence(
 def _run_repetition(
     context: base.ComposeContext,
     repetition: int,
+    *,
+    language_fault_proxy_url: str,
 ) -> tuple[dict[str, object], dict[str, object]]:
     report: dict[str, object] = {
         "repetition": repetition,
@@ -296,6 +381,11 @@ def _run_repetition(
         base._run_migrations(context.database_url)
         stage = "environment_capture"
         environment = base._capture_service_environment(context)
+        stage = "language_fault_proxy_readiness"
+        language_proxy = LanguageToolFaultProxyControl(language_fault_proxy_url)
+        language_proxy.wait_ready(timeout_seconds=90)
+        language_proxy.set_mode("forward")
+        language_proxy.reset_counts()
         stage = "scenario_execution"
         with base._session(context.database_url) as session:
             scenarios: list[dict[str, object]] = []
@@ -305,11 +395,24 @@ def _run_repetition(
                 "capacity_candidate_bytes",
                 lambda: base._capacity_gate_scenario(session),
             )
+            language_proxy.set_mode("forward")
+            language_proxy.reset_counts()
             _append_scenario(
                 session,
                 scenarios,
                 "language_dependency_recovery",
                 lambda: base._language_recovery_scenario(session, context),
+            )
+            _append_scenario(
+                session,
+                scenarios,
+                "language_read_timeout_recovery",
+                lambda: _language_timeout_recovery_scenario(
+                    session,
+                    control=language_proxy,
+                    grader_url=context.grader_url,
+                    ordinal=repetition * 100 + 50,
+                ),
             )
             base._wait_for_http(f"{context.grader_url}/health", timeout_seconds=90)
             _warm_timeout_dependencies(context.grader_url)
@@ -373,6 +476,94 @@ def _append_scenario(
                 "passed": False,
             }
         )
+
+
+def _language_timeout_recovery_scenario(
+    session: Session,
+    *,
+    control: LanguageToolFaultProxyControl,
+    grader_url: str,
+    ordinal: int,
+) -> dict[str, object]:
+    dependency: DependencyKind = "language"
+    draft = _create_timeout_draft(session, dependency=dependency, ordinal=ordinal)
+    session.commit()
+    revision = base._revision(session, draft)
+    versions_before = base._question_version_count(session)
+    grader = HttpGraderClient(grader_url)
+
+    control.reset_counts()
+    control.set_mode("stall")
+    outage_run = run_budget_aware_candidate_verification(
+        session,
+        draft=draft,
+        revision=revision,
+        grader_client=grader,
+    )
+    session.commit()
+    outage_counts = control.call_counts()
+    outage_snapshot = base._run_snapshot(outage_run)
+
+    control.reset_counts()
+    control.set_mode("forward")
+    recovery_run = run_budget_aware_candidate_verification(
+        session,
+        draft=draft,
+        revision=revision,
+        grader_client=grader,
+    )
+    session.commit()
+    recovery_counts = control.call_counts()
+    versions_after = base._question_version_count(session)
+
+    session.expire_all()
+    persisted_outage = session.get(base.GenerationValidationRun, outage_run.id)
+    if persisted_outage is None:
+        raise base.ProductRegression("language_timeout_run_missing")
+    outage_immutable = base._run_snapshot(persisted_outage) == outage_snapshot
+    outage_budget = outage_run.feature_summary_json.get("verification_budget_signal")
+    recovery_budget = recovery_run.feature_summary_json.get("verification_budget_signal")
+    outage_findings = base._finding_codes(outage_run)
+    recovery_findings = base._finding_codes(recovery_run)
+    expected_finding = _EXPECTED_TIMEOUT_FINDING[dependency]
+    new_calls_after_timeout = max(outage_counts["stall"] - 1, 0)
+    passed = (
+        outage_run.status.value == "blocked"
+        and expected_finding in outage_findings
+        and isinstance(outage_budget, dict)
+        and outage_budget.get("status") == "dependency_timeout"
+        and outage_budget.get("terminal_dependency") == dependency
+        and outage_counts["stall"] == 1
+        and new_calls_after_timeout == 0
+        and recovery_run.status.value == "passed"
+        and expected_finding not in recovery_findings
+        and isinstance(recovery_budget, dict)
+        and recovery_budget.get("status") == "completed"
+        and recovery_counts["forward"] > 0
+        and outage_run.id != recovery_run.id
+        and outage_immutable
+        and versions_after == versions_before
+    )
+    return {
+        "scenario_id": _SCENARIO_ID[dependency],
+        "dependency": dependency,
+        "fault_mode": "read_timeout",
+        "outage_status": outage_run.status.value,
+        "outage_finding_codes": outage_findings,
+        "outage_call_bucket": _call_bucket(outage_counts["stall"]),
+        "new_calls_after_timeout": new_calls_after_timeout,
+        "recovery_status": recovery_run.status.value,
+        "recovery_finding_codes": recovery_findings,
+        "recovery_call_bucket": _call_bucket(recovery_counts["forward"]),
+        "old_run_immutable": outage_immutable,
+        "fresh_budget_completed": (
+            recovery_budget.get("status") == "completed"
+            if isinstance(recovery_budget, dict)
+            else False
+        ),
+        "question_version_delta": versions_after - versions_before,
+        "passed": passed,
+    }
 
 
 def _warm_timeout_dependencies(grader_url: str) -> None:
@@ -483,7 +674,12 @@ def _create_timeout_draft(
     dependency: DependencyKind,
     ordinal: int,
 ) -> GeneratedQuestionDraft:
-    question_type = "M2" if dependency == "normalizer" else "M1"
+    if dependency == "normalizer":
+        question_type = "M2"
+    elif dependency == "language":
+        question_type = "E3"
+    else:
+        question_type = "M1"
     candidate = _base_candidate(question_type)
     candidate["difficulty"] = 0.2
     if dependency == "similarity":
@@ -576,6 +772,13 @@ def _parser() -> argparse.ArgumentParser:
             DEFAULT_LANGUAGETOOL_HEALTH_URL,
         ),
     )
+    parser.add_argument(
+        "--language-fault-proxy-url",
+        default=os.environ.get(
+            "RELEASE_EVIDENCE_LANGUAGE_FAULT_PROXY_URL",
+            DEFAULT_LANGUAGE_FAULT_PROXY_URL,
+        ),
+    )
     return parser
 
 
@@ -588,6 +791,7 @@ def main(argv: list[str] | None = None) -> int:
         database_url=arguments.database_url,
         grader_url=arguments.grader_url,
         languagetool_health_url=arguments.languagetool_health_url,
+        language_fault_proxy_url=arguments.language_fault_proxy_url,
     )
     print(paths.json_path)
     print(paths.markdown_path)
