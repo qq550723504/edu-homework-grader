@@ -23,6 +23,7 @@ jobs:
         with:
           ref: agent/verification-release-evidence-v1
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -160,4 +161,6 @@ jobs:
             .github/pr123-recovery-diagnostic.txt
           git add -A
           git commit -m 'fix: stabilize release evidence recovery'
+          git fetch origin agent/verification-release-evidence-v1
+          git rebase origin/agent/verification-release-evidence-v1
           git push origin HEAD:agent/verification-release-evidence-v1
