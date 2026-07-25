@@ -150,3 +150,29 @@ def test_source_revision_prefers_explicit_evidence_revision(
     monkeypatch.setenv("GITHUB_SHA", "merge-sha")
 
     assert evidence._source_revision() == "head-sha"
+
+
+class _RecoveringLanguageGrader:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def grade(self, *args: object, **kwargs: object) -> object:
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("synthetic warmup")
+        return object()
+
+
+def test_language_dependency_readiness_retries_without_persisting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    grader = _RecoveringLanguageGrader()
+    monkeypatch.setattr(evidence.time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(evidence.time, "sleep", lambda seconds: None)
+
+    evidence._wait_for_language_dependency(  # type: ignore[arg-type]
+        grader,
+        timeout_seconds=1,
+    )
+
+    assert grader.calls == 2

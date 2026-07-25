@@ -321,6 +321,7 @@ def _language_recovery_scenario(
     _wait_for_http(context.languagetool_health_url, timeout_seconds=90)
     _compose(context, "restart", "grader")
     _wait_for_http(f"{context.grader_url}/health", timeout_seconds=90)
+    _wait_for_language_dependency(grader, timeout_seconds=90)
     recovery_run = run_budget_aware_candidate_verification(
         session,
         draft=draft,
@@ -359,6 +360,30 @@ def _language_recovery_scenario(
         "question_version_delta": versions_after - versions_before,
         "passed": passed,
     }
+
+
+def _wait_for_language_dependency(
+    grader: HttpGraderClient,
+    *,
+    timeout_seconds: float,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            grader.grade(
+                "E3",
+                {
+                    "grammar_feedback_required": True,
+                    "accepted_answers": ["I travelled by train."],
+                    "max_score": 1,
+                },
+                {"text": "I travelled by train."},
+                policy_version="1",
+            )
+            return
+        except Exception:
+            time.sleep(1)
+    raise RuntimeError("language dependency did not recover")
 
 
 def _capture_service_environment(context: ComposeContext) -> dict[str, object]:
