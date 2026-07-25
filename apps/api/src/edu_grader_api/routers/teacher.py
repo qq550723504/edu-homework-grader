@@ -25,7 +25,11 @@ from ..models import (
     utc_now,
 )
 from ..services.keycloak_admin import KeycloakAdminClient
-from ..services.student_activations import StudentProvisioner, issue_activation
+from ..services.student_activations import (
+    ActivationIssueError,
+    StudentProvisioner,
+    issue_activation,
+)
 from ..settings import settings
 from ..services.roster import (
     RosterRow,
@@ -247,22 +251,36 @@ def issue_activation_codes(
     session: Annotated[Session, Depends(get_session)],
     provisioner: Annotated[StudentProvisioner, Depends(get_student_provisioner)],
 ) -> Response:
+    if len(set(body.student_ids)) != len(body.student_ids):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="duplicate student"
+        )
     classroom = owned_class_or_404(session, principal, class_id)
+    teacher = session.get(User, UUID(principal.user_id))
+    if teacher is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="teacher not found")
     output = StringIO()
     writer = csv.writer(output)
-    writer.writerow(["school_id", "activation_code", "expires_at"])
+    writer.writerow(["student_id", "school_id", "activation_code", "expires_at", "error"])
     for student_id in body.student_ids:
-        student, _ = enrolled_student_or_404(session, principal, class_id, student_id)
-        issued = issue_activation(
-            session,
-            teacher=session.get(User, UUID(principal.user_id)),
-            classroom=classroom,
-            student=student,
-            keycloak=provisioner,
-            now=utc_now(),
-        )
-        activation = session.get(StudentActivation, issued.activation_id)
-        writer.writerow([student.school_id, issued.code, activation.expires_at.isoformat()])
+        try:
+            student, _ = enrolled_student_or_404(session, principal, class_id, student_id)
+            issued = issue_activation(
+                session,
+                teacher=teacher,
+                classroom=classroom,
+                student=student,
+                keycloak=provisioner,
+                now=utc_now(),
+            )
+            activation = session.get(StudentActivation, issued.activation_id)
+            writer.writerow(
+                [student.id, student.school_id, issued.code, activation.expires_at.isoformat(), ""]
+            )
+        except (ActivationIssueError, ValueError):
+            writer.writerow([student_id, "", "", "", "activation could not be issued"])
+        except HTTPException:
+            writer.writerow([student_id, "", "", "", "student is not in this class"])
     return Response(
         output.getvalue(),
         media_type="text/csv",

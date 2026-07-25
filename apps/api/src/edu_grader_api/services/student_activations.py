@@ -8,6 +8,7 @@ from typing import Protocol
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
+from ..audit import append_audit_event
 from ..models import Classroom, StudentActivation, StudentActivationStatus, User
 from ..settings import settings
 
@@ -41,6 +42,10 @@ class ActivationExpiredError(Exception):
     """Raised before an expired activation can bind an OIDC identity."""
 
 
+class ActivationIssueError(Exception):
+    """A safe, credential-free provisioning failure suitable for teacher output."""
+
+
 @dataclass(frozen=True)
 class IssuedActivation:
     activation_id: object
@@ -58,6 +63,9 @@ def issue_activation(
 ) -> IssuedActivation:
     if student.oidc_subject is not None or not student.school_id:
         raise ValueError("student is not eligible for activation")
+    student = session.scalar(select(User).where(User.id == student.id).with_for_update())
+    if student is None:
+        raise ValueError("student is not eligible for activation")
     previous = session.scalar(
         select(StudentActivation)
         .where(
@@ -66,9 +74,6 @@ def issue_activation(
         )
         .with_for_update()
     )
-    if previous is not None:
-        previous.status = StudentActivationStatus.REVOKED
-        previous.revoked_at = now
     code = generate_activation_code()
     activation = StudentActivation(
         student_id=student.id,
@@ -78,14 +83,59 @@ def issue_activation(
     )
     session.add(activation)
     session.flush()
-    activation.keycloak_user_id = keycloak.ensure_student(
-        school_id=student.school_id, display_name=student.display_name, activation_code=code
-    )
+    try:
+        activation.keycloak_user_id = keycloak.ensure_student(
+            school_id=student.school_id, display_name=student.display_name, activation_code=code
+        )
+    except Exception as error:
+        activation.status = StudentActivationStatus.FAILED
+        activation.failure_reason = type(error).__name__[:200]
+        append_audit_event(
+            session,
+            tenant_id=student.tenant_id,
+            actor_user_id=teacher.id,
+            event_type="student_activation.failed",
+            target_type="student_activation",
+            target_id=activation.id,
+            metadata={"class_id": classroom.id, "request_id": activation.request_id},
+        )
+        session.commit()
+        raise ActivationIssueError("identity provider unavailable") from error
+    if previous is not None:
+        previous.status = StudentActivationStatus.REVOKED
+        previous.revoked_at = now
+        append_audit_event(
+            session,
+            tenant_id=student.tenant_id,
+            actor_user_id=teacher.id,
+            event_type="student_activation.revoked",
+            target_type="student_activation",
+            target_id=previous.id,
+            metadata={"class_id": classroom.id, "request_id": previous.request_id},
+        )
     activation.code_hmac = activation_code_hmac(code)
     activation.status = StudentActivationStatus.ISSUED
     activation.issued_at = now
     activation.disclosed_at = now
     activation.expires_at = now + timedelta(days=settings.student_activation_expiry_days)
+    append_audit_event(
+        session,
+        tenant_id=student.tenant_id,
+        actor_user_id=teacher.id,
+        event_type="student_activation.issued",
+        target_type="student_activation",
+        target_id=activation.id,
+        metadata={"class_id": classroom.id, "request_id": activation.request_id},
+    )
+    append_audit_event(
+        session,
+        tenant_id=student.tenant_id,
+        actor_user_id=teacher.id,
+        event_type="student_activation.disclosed",
+        target_type="student_activation",
+        target_id=activation.id,
+        metadata={"request_id": activation.request_id},
+    )
     session.commit()
     return IssuedActivation(activation_id=activation.id, code=code)
 
@@ -105,6 +155,15 @@ def ensure_activation_can_bind(session: Session, *, student: User, now: datetime
     if is_expired(activation.expires_at, now=now):
         activation.status = StudentActivationStatus.EXPIRED
         activation.expired_at = now
+        append_audit_event(
+            session,
+            tenant_id=student.tenant_id,
+            actor_user_id=student.id,
+            event_type="student_activation.expired",
+            target_type="student_activation",
+            target_id=activation.id,
+            metadata={"request_id": activation.request_id},
+        )
         session.commit()
         raise ActivationExpiredError
 
@@ -123,10 +182,28 @@ def consume_pending_activation(session: Session, *, student: User, now: datetime
     if is_expired(activation.expires_at, now=now):
         activation.status = StudentActivationStatus.EXPIRED
         activation.expired_at = now
+        append_audit_event(
+            session,
+            tenant_id=student.tenant_id,
+            actor_user_id=student.id,
+            event_type="student_activation.expired",
+            target_type="student_activation",
+            target_id=activation.id,
+            metadata={"request_id": activation.request_id},
+        )
         session.commit()
         return False
     activation.status = StudentActivationStatus.CONSUMED
     activation.consumed_at = now
+    append_audit_event(
+        session,
+        tenant_id=student.tenant_id,
+        actor_user_id=student.id,
+        event_type="student_activation.consumed",
+        target_type="student_activation",
+        target_id=activation.id,
+        metadata={"request_id": activation.request_id},
+    )
     session.commit()
     return True
 
@@ -145,5 +222,14 @@ def expire_activations(session: Session, *, keycloak: StudentProvisioner, now: d
             keycloak.disable_temporary_password(activation.keycloak_user_id)
         activation.status = StudentActivationStatus.EXPIRED
         activation.expired_at = now
+        append_audit_event(
+            session,
+            tenant_id=activation.student.tenant_id,
+            actor_user_id=None,
+            event_type="student_activation.expired",
+            target_type="student_activation",
+            target_id=activation.id,
+            metadata={"request_id": activation.request_id},
+        )
     session.commit()
     return len(expired)
