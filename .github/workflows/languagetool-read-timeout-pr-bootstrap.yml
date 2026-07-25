@@ -85,36 +85,55 @@ jobs:
           gh pr comment 126 --repo "$GITHUB_REPOSITORY" --body-file /tmp/comment.md
 
       - name: Format, lint, and run focused regression
+        id: regression
         if: steps.patch.outcome == 'success'
+        continue-on-error: true
+        shell: bash
         run: |
-          set -euo pipefail
-          make install-python >/dev/null
-          python -m ruff format \
-            apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py \
-            apps/api/tests/test_verification_release_timeout_evidence.py \
-            apps/api/tests/test_languagetool_fault_proxy.py \
-            infra/release-evidence/languagetool_fault_proxy.py
-          python -m ruff check --fix --config ruff.toml \
-            apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py \
-            apps/api/tests/test_verification_release_timeout_evidence.py \
-            apps/api/tests/test_languagetool_fault_proxy.py \
-            infra/release-evidence/languagetool_fault_proxy.py
-          python -m ruff check --config ruff.toml \
-            apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py \
-            apps/api/tests/test_verification_release_timeout_evidence.py \
-            apps/api/tests/test_languagetool_fault_proxy.py \
-            infra/release-evidence/languagetool_fault_proxy.py
-          python -m pytest \
-            apps/api/tests/test_verification_release_timeout_evidence.py \
-            apps/api/tests/test_languagetool_fault_proxy.py \
-            apps/api/tests/test_verification_release_evidence.py \
-            apps/api/tests/test_budget_aware_verification.py \
-            apps/api/tests/test_verification_budget.py -q
-          docker compose --file infra/release-evidence/compose.yaml config --quiet
-          git diff --check
+          set -o pipefail
+          {
+            make install-python >/dev/null
+            python -m ruff format \
+              apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py \
+              apps/api/tests/test_verification_release_timeout_evidence.py \
+              apps/api/tests/test_languagetool_fault_proxy.py \
+              infra/release-evidence/languagetool_fault_proxy.py
+            python -m ruff check --fix --config ruff.toml \
+              apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py \
+              apps/api/tests/test_verification_release_timeout_evidence.py \
+              apps/api/tests/test_languagetool_fault_proxy.py \
+              infra/release-evidence/languagetool_fault_proxy.py
+            python -m ruff check --config ruff.toml \
+              apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py \
+              apps/api/tests/test_verification_release_timeout_evidence.py \
+              apps/api/tests/test_languagetool_fault_proxy.py \
+              infra/release-evidence/languagetool_fault_proxy.py
+            python -m pytest \
+              apps/api/tests/test_verification_release_timeout_evidence.py \
+              apps/api/tests/test_languagetool_fault_proxy.py \
+              apps/api/tests/test_verification_release_evidence.py \
+              apps/api/tests/test_budget_aware_verification.py \
+              apps/api/tests/test_verification_budget.py -q
+            docker compose --file infra/release-evidence/compose.yaml config --quiet
+            git diff --check
+          } 2>&1 | tee /tmp/languagetool-regression.log
+
+      - name: Publish regression diagnostic
+        if: steps.patch.outcome == 'success' && steps.regression.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo '### LanguageTool read-timeout regression diagnostic'
+            echo
+            echo '```text'
+            tail -n 220 /tmp/languagetool-regression.log
+            echo '```'
+          } > /tmp/comment.md
+          gh pr comment 126 --repo "$GITHUB_REPOSITORY" --body-file /tmp/comment.md
 
       - name: Remove temporary workflows and push implementation
-        if: steps.patch.outcome == 'success'
+        if: steps.patch.outcome == 'success' && steps.regression.outcome == 'success'
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
@@ -127,6 +146,6 @@ jobs:
           git commit -m 'feat: add LanguageTool read-timeout evidence'
           git push origin HEAD:agent/languagetool-read-timeout-evidence-v1
 
-      - name: Fail when patch failed
-        if: steps.patch.outcome != 'success'
+      - name: Fail when integration failed
+        if: steps.patch.outcome != 'success' || steps.regression.outcome != 'success'
         run: exit 1
