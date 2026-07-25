@@ -57,6 +57,44 @@ jobs:
               encoding="utf-8",
           )
           subprocess.run(["python", "/tmp/pr123-persistence-patch.py"], check=True)
+
+          core_path = Path(
+              "apps/api/src/edu_grader_api/services/question_verification.py"
+          )
+          core = core_path.read_text(encoding="utf-8")
+          bad_plan = '''    plan = VerificationPersistencePlan(
+              findings=tuple(findings),
+              validator_version=plan.validator_version,
+              ruleset_version=plan.ruleset_version,
+              feature_summary_extensions={},
+          )
+          '''
+          good_plan = '''    plan = VerificationPersistencePlan(
+              findings=tuple(findings),
+              validator_version=VALIDATOR_VERSION,
+              ruleset_version=RULESET_VERSION,
+              feature_summary_extensions={},
+          )
+          '''
+          if bad_plan not in core:
+              raise SystemExit("bad persistence plan marker missing")
+          core = core.replace(bad_plan, good_plan, 1)
+          old_constructor = '''        run_number=(latest_run_number or 0) + 1,
+              validator_version=VALIDATOR_VERSION,
+              ruleset_version=RULESET_VERSION,
+              status=status,
+          '''
+          new_constructor = '''        run_number=(latest_run_number or 0) + 1,
+              validator_version=plan.validator_version,
+              ruleset_version=plan.ruleset_version,
+              status=status,
+          '''
+          if old_constructor not in core:
+              raise SystemExit("validation run constructor marker missing")
+          core_path.write_text(
+              core.replace(old_constructor, new_constructor, 1),
+              encoding="utf-8",
+          )
           PY
 
       - name: Format, fix lint, and run focused regression
