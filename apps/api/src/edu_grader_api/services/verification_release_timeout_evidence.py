@@ -46,6 +46,7 @@ DEFAULT_GRADER_URL = base.DEFAULT_GRADER_URL
 DEFAULT_LANGUAGETOOL_HEALTH_URL = base.DEFAULT_LANGUAGETOOL_HEALTH_URL
 DEFAULT_LANGUAGE_FAULT_PROXY_URL = "http://127.0.0.1:58012"
 DEFAULT_CONNECT_TIMEOUT_NETWORK = "172.30.254.0/24"
+CONNECT_TIMEOUT_SECONDS = 0.25
 
 DependencyKind = Literal["normalizer", "grader", "language", "similarity"]
 ProxyMode = Literal["stall", "forward"]
@@ -92,6 +93,23 @@ def _connect_timeout_hosts(
         for dependency, offset in probe_offsets.items()
     }
     return scenario_hosts, probe_hosts
+
+
+def _assert_host_connect_timeout(host: str) -> None:
+    timeout = httpx.Timeout(
+        connect=CONNECT_TIMEOUT_SECONDS,
+        read=1.0,
+        write=1.0,
+        pool=1.0,
+    )
+    try:
+        with httpx.Client(timeout=timeout, trust_env=False) as client:
+            client.post(f"http://{host}:8010/connect-timeout-probe")
+    except httpx.ConnectTimeout:
+        return
+    except httpx.HTTPError as error:
+        raise base.ProductRegression("connect_timeout_probe_failed") from error
+    raise base.ProductRegression("connect_timeout_probe_connected")
 
 
 class _FaultProxyHTTPServer(ThreadingHTTPServer):
@@ -307,7 +325,7 @@ def run_release_evidence(
         raise ValueError("release evidence requires at least two repetitions")
     if not compose_file.is_file():
         raise ValueError("release evidence compose file does not exist")
-    _connect_timeout_hosts(connect_timeout_network)
+    _, connect_probe_hosts = _connect_timeout_hosts(connect_timeout_network)
 
     repetition_reports: list[dict[str, object]] = []
     environment: dict[str, object] = base.runtime_environment()
@@ -323,6 +341,7 @@ def run_release_evidence(
             context,
             repetition,
             language_fault_proxy_url=language_fault_proxy_url,
+            connect_probe_hosts=connect_probe_hosts,
         )
         repetition_reports.append(repetition_report)
         for key, value in discovered_environment.items():
@@ -388,6 +407,7 @@ def _run_repetition(
     repetition: int,
     *,
     language_fault_proxy_url: str,
+    connect_probe_hosts: Mapping[DependencyKind, str],
 ) -> tuple[dict[str, object], dict[str, object]]:
     report: dict[str, object] = {
         "repetition": repetition,
@@ -420,6 +440,9 @@ def _run_repetition(
         language_proxy.wait_ready(timeout_seconds=90)
         language_proxy.set_mode("forward")
         language_proxy.reset_counts()
+        stage = "connect_timeout_preflight"
+        for dependency in ("normalizer", "grader", "language", "similarity"):
+            _assert_host_connect_timeout(connect_probe_hosts[dependency])
         stage = "scenario_execution"
         with base._session(context.database_url) as session:
             scenarios: list[dict[str, object]] = []

@@ -6,6 +6,7 @@ import json
 from threading import Thread
 from typing import Iterator
 
+import httpx
 import pytest
 
 from edu_grader_api.services import verification_release_timeout_evidence as evidence
@@ -139,6 +140,34 @@ def test_connect_timeout_hosts_use_distinct_private_bridge_addresses() -> None:
         "language": "172.30.254.237",
     }
     assert not set(scenario_hosts.values()) & set(probe_hosts.values())
+
+
+def test_connect_timeout_host_probe_accepts_only_connect_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class TimeoutClient:
+        def __init__(self, *, timeout: httpx.Timeout, trust_env: bool) -> None:
+            captured["timeout"] = timeout
+            captured["trust_env"] = trust_env
+
+        def __enter__(self) -> TimeoutClient:
+            return self
+
+        def __exit__(self, *_arguments: object) -> None:
+            return None
+
+        def post(self, target: str) -> None:
+            captured["target"] = target
+            raise httpx.ConnectTimeout("controlled timeout")
+
+    monkeypatch.setattr(evidence.httpx, "Client", TimeoutClient)
+
+    evidence._assert_host_connect_timeout("172.30.254.240")
+
+    assert captured["trust_env"] is False
+    assert captured["target"] == "http://172.30.254.240:8010/connect-timeout-probe"
 
 
 @pytest.mark.parametrize("network", ["172.30.254.0/25", "8.8.8.0/24"])
