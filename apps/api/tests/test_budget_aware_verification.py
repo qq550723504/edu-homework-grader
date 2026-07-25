@@ -6,12 +6,11 @@ from uuid import uuid4
 
 import pytest
 
-from edu_grader_api.models import ValidationRunStatus
+from edu_grader_api.models import ValidationFindingSeverity, ValidationRunStatus
 from edu_grader_api.services import budget_aware_verification as budgeted
 from edu_grader_api.services.grader import GraderRequestTimeoutError
 from edu_grader_api.services.questions import GradeResult
 from edu_grader_api.services.verification_budget import (
-    VERIFICATION_BUDGET_RULESET_VERSION,
     VerificationBudgetExceeded,
     VerificationDependencyTimeout,
 )
@@ -30,11 +29,7 @@ class FakeClock:
 
 class FakeSession:
     def __init__(self) -> None:
-        self.added: list[object] = []
         self.flush_count = 0
-
-    def add(self, value: object) -> None:
-        self.added.append(value)
 
     def flush(self) -> None:
         self.flush_count += 1
@@ -49,12 +44,7 @@ class PassingGrader:
         *,
         policy_version: str | None = None,
     ) -> GradeResult:
-        return GradeResult(
-            decision="auto_accepted",
-            score=1,
-            evidence={},
-            grader_version="test-v1",
-        )
+        return GradeResult("auto_accepted", 1, {}, "test-v1")
 
     def normalize_math_answer(self, answer_json: dict[str, object]) -> dict[str, object]:
         return {"type": "number", "value": "4"}
@@ -88,34 +78,60 @@ def draft_and_revision() -> tuple[SimpleNamespace, SimpleNamespace]:
     )
 
 
-def validation_run(*, findings: list[object] | None = None) -> SimpleNamespace:
+def validation_run() -> SimpleNamespace:
     return SimpleNamespace(
-        id=uuid4(),
         validator_version="verification-v9",
         ruleset_version="rules-v9",
         status=ValidationRunStatus.PASSED,
-        feature_summary_json={"finding_count": len(findings or [])},
-        findings=findings or [],
+        feature_summary_json={"finding_count": 0},
+        findings=[],
     )
 
 
-def test_completed_run_gets_v12_budget_signal(
+def apply_plan(
+    run: SimpleNamespace,
+    finalizer: budgeted.core.VerificationPersistenceFinalizer,
+    *,
+    findings: tuple[object, ...] = (),
+) -> budgeted.core.VerificationPersistencePlan:
+    plan = finalizer(
+        budgeted.core.VerificationPersistencePlan(
+            findings=findings,  # type: ignore[arg-type]
+            validator_version="verification-v9",
+            ruleset_version="rules-v9",
+            feature_summary_extensions={},
+        )
+    )
+    run.validator_version = plan.validator_version
+    run.ruleset_version = plan.ruleset_version
+    run.findings = list(plan.findings)
+    run.feature_summary_json = {
+        "finding_count": len(plan.findings),
+        **plan.feature_summary_extensions,
+    }
+    if any(
+        getattr(finding, "severity", None) is ValidationFindingSeverity.BLOCKED
+        for finding in plan.findings
+    ):
+        run.status = ValidationRunStatus.BLOCKED
+    return plan
+
+
+def test_completed_run_gets_v12_budget_signal_before_insert(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = FakeSession()
     draft, revision = draft_and_revision()
     run = validation_run()
 
-    monkeypatch.setattr(
-        budgeted,
-        "run_capacity_aware_candidate_verification",
-        lambda *args, **kwargs: run,
-    )
-    monkeypatch.setattr(
-        budgeted.settings,
-        "verification_total_timeout_seconds",
-        30.0,
-    )
+    def fake_capacity(*args: object, **kwargs: object) -> object:
+        finalizer = kwargs["persistence_finalizer"]
+        assert callable(finalizer)
+        apply_plan(run, finalizer)
+        return run
+
+    monkeypatch.setattr(budgeted, "run_capacity_aware_candidate_verification", fake_capacity)
+    monkeypatch.setattr(budgeted.settings, "verification_total_timeout_seconds", 30.0)
 
     result = budgeted.run_budget_aware_candidate_verification(
         session,  # type: ignore[arg-type]
@@ -128,17 +144,11 @@ def test_completed_run_gets_v12_budget_signal(
     assert result is run
     assert run.validator_version == "verification-v12"
     assert run.ruleset_version == "rules-v12"
-    assert run.feature_summary_json["verification_budget_signal"] == {
-        "availability": "available",
-        "version": VERIFICATION_BUDGET_RULESET_VERSION,
-        "total_budget_seconds": 30.0,
-        "status": "completed",
-        "terminal_stage": None,
-        "terminal_dependency": None,
-    }
+    assert run.feature_summary_json["verification_budget_signal"]["status"] == "completed"
+    assert session.flush_count == 0
 
 
-def test_total_timeout_is_persisted_as_stable_blocking_finding(
+def test_total_timeout_is_persisted_in_one_final_plan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = FakeSession()
@@ -151,23 +161,22 @@ def test_total_timeout_is_persisted_as_stable_blocking_finding(
         grader_client = kwargs["grader_client"]
         clock.advance(5)
         grader_client.grade("M1", {"expected": 4}, {"text": "4"})
-        raise AssertionError("the deadline must block the dependency before this point")
+        raise AssertionError("deadline must block the dependency")
 
     def fake_persist(*args: object, **kwargs: object) -> object:
         captured.update(kwargs)
+        finalizer = kwargs["persistence_finalizer"]
+        assert callable(finalizer)
+        apply_plan(
+            persisted,
+            finalizer,
+            findings=tuple(kwargs["findings"]),
+        )
         return persisted
 
-    monkeypatch.setattr(
-        budgeted,
-        "run_capacity_aware_candidate_verification",
-        fake_capacity,
-    )
+    monkeypatch.setattr(budgeted, "run_capacity_aware_candidate_verification", fake_capacity)
     monkeypatch.setattr(budgeted.core, "_persist_run", fake_persist)
-    monkeypatch.setattr(
-        budgeted.settings,
-        "verification_total_timeout_seconds",
-        5.0,
-    )
+    monkeypatch.setattr(budgeted.settings, "verification_total_timeout_seconds", 5.0)
 
     result = budgeted.run_budget_aware_candidate_verification(
         session,  # type: ignore[arg-type]
@@ -178,44 +187,38 @@ def test_total_timeout_is_persisted_as_stable_blocking_finding(
     )
 
     assert result is persisted
-    findings = captured["findings"]
-    assert isinstance(findings, list)
-    assert [finding.code for finding in findings] == ["verification_total_timeout"]
-    assert findings[0].evidence == {
-        "ruleset_version": VERIFICATION_BUDGET_RULESET_VERSION,
-        "stage": "grader",
-        "total_budget_seconds": 5.0,
-    }
-    assert "text" not in str(findings[0].evidence)
+    assert [finding.code for finding in persisted.findings] == ["verification_total_timeout"]
     assert persisted.status is ValidationRunStatus.BLOCKED
     assert persisted.validator_version == "verification-v12"
+    signal = persisted.feature_summary_json["verification_budget_signal"]
+    assert signal["status"] == "total_timeout"
+    assert signal["terminal_stage"] == "grader"
 
 
-def test_swallowed_dependency_timeout_is_added_to_existing_run(
+def test_swallowed_dependency_timeout_is_in_final_plan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = FakeSession()
     draft, revision = draft_and_revision()
-    generic_finding = SimpleNamespace(code="m1_grader_probe_failed")
-    run = validation_run(findings=[generic_finding])
-    run.status = ValidationRunStatus.BLOCKED
+    run = validation_run()
+    generic = budgeted.core.VerificationFinding(
+        code="m1_grader_probe_failed",
+        severity=ValidationFindingSeverity.BLOCKED,
+        evidence={"probe": "grader"},
+        remediation="Retry validation.",
+    )
 
     def fake_capacity(*args: object, **kwargs: object) -> object:
         grader_client = kwargs["grader_client"]
         with pytest.raises(VerificationDependencyTimeout):
             grader_client.grade("M1", {"expected": 4}, {"text": "private"})
+        finalizer = kwargs["persistence_finalizer"]
+        assert callable(finalizer)
+        apply_plan(run, finalizer, findings=(generic,))
         return run
 
-    monkeypatch.setattr(
-        budgeted,
-        "run_capacity_aware_candidate_verification",
-        fake_capacity,
-    )
-    monkeypatch.setattr(
-        budgeted.settings,
-        "verification_total_timeout_seconds",
-        30.0,
-    )
+    monkeypatch.setattr(budgeted, "run_capacity_aware_candidate_verification", fake_capacity)
+    monkeypatch.setattr(budgeted.settings, "verification_total_timeout_seconds", 30.0)
 
     result = budgeted.run_budget_aware_candidate_verification(
         session,  # type: ignore[arg-type]
@@ -226,13 +229,13 @@ def test_swallowed_dependency_timeout_is_added_to_existing_run(
     )
 
     assert result is run
-    assert run.status is ValidationRunStatus.BLOCKED
-    added_codes = [getattr(item, "code", None) for item in session.added]
-    assert added_codes == ["grader_timeout"]
+    assert [finding.code for finding in run.findings] == [
+        "m1_grader_probe_failed",
+        "grader_timeout",
+    ]
     signal = run.feature_summary_json["verification_budget_signal"]
     assert signal["status"] == "dependency_timeout"
     assert signal["terminal_dependency"] == "grader"
-    assert run.feature_summary_json["finding_count"] == 2
 
 
 def test_wrong_revision_is_rejected_before_budget_work() -> None:

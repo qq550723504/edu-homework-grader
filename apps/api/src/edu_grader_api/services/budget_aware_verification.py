@@ -11,9 +11,7 @@ from ..models import (
     GeneratedQuestionDraft,
     GeneratedQuestionDraftRevision,
     GenerationValidationRun,
-    ValidationFinding,
     ValidationFindingSeverity,
-    ValidationRunStatus,
 )
 from ..settings import settings
 from . import question_verification as core
@@ -59,12 +57,13 @@ def run_budget_aware_candidate_verification(
     budgeted_client = BudgetedGraderClient(grader_client, budget)
     try:
         budget.check("capacity_preflight")
-        run = run_capacity_aware_candidate_verification(
+        return run_capacity_aware_candidate_verification(
             session,
             draft=draft,
             revision=revision,
             grader_client=budgeted_client,
             budget=budget,
+            persistence_finalizer=_budget_persistence_finalizer(budget),
         )
     except VerificationBudgetExceeded as error:
         return _persist_terminal_failure(
@@ -83,22 +82,6 @@ def run_budget_aware_candidate_verification(
             finding=_dependency_timeout_finding(error.dependency),
         )
 
-    if budget.status == "active":
-        try:
-            budget.check("persist")
-        except VerificationBudgetExceeded:
-            pass
-    if budget.status == "active":
-        budget.mark_completed()
-
-    terminal_finding = _finding_for_terminal_budget(budget)
-    return _finalize_run(
-        session,
-        run=run,
-        budget=budget,
-        terminal_finding=terminal_finding,
-    )
-
 
 def _persist_terminal_failure(
     session: Session,
@@ -108,7 +91,8 @@ def _persist_terminal_failure(
     budget: VerificationBudget,
     finding: core.VerificationFinding,
 ) -> GenerationValidationRun:
-    run = core._persist_run(
+    capacity_signal = unavailable_verification_capacity_signal("verification_timeout")
+    return core._persist_run(
         session,
         draft=draft,
         evaluated_revision_id=revision.id,
@@ -121,49 +105,44 @@ def _persist_terminal_failure(
             "verification_timeout"
         ),
         math_semantics_signal=unavailable_math_semantics_signal("verification_timeout"),
+        persistence_finalizer=_budget_persistence_finalizer(
+            budget,
+            capacity_signal=capacity_signal,
+        ),
     )
-    run.status = ValidationRunStatus.BLOCKED
-    summary = dict(run.feature_summary_json)
-    summary["verification_capacity_signal"] = unavailable_verification_capacity_signal(
-        "verification_timeout"
-    )
-    run.feature_summary_json = summary
-    return _finalize_run(session, run=run, budget=budget, terminal_finding=None)
 
 
-def _finalize_run(
-    session: Session,
-    *,
-    run: GenerationValidationRun,
+def _budget_persistence_finalizer(
     budget: VerificationBudget,
-    terminal_finding: core.VerificationFinding | None,
-) -> GenerationValidationRun:
-    added_terminal_finding = False
-    if terminal_finding is not None and not any(
-        finding.code == terminal_finding.code for finding in run.findings
-    ):
-        session.add(
-            ValidationFinding(
-                validation_run_id=run.id,
-                code=terminal_finding.code,
-                severity=terminal_finding.severity,
-                evidence_json=terminal_finding.evidence,
-                remediation=terminal_finding.remediation,
-            )
-        )
-        added_terminal_finding = True
-    if terminal_finding is not None:
-        run.status = ValidationRunStatus.BLOCKED
+    *,
+    capacity_signal: dict[str, object] | None = None,
+) -> core.VerificationPersistenceFinalizer:
+    def finalize(
+        plan: core.VerificationPersistencePlan,
+    ) -> core.VerificationPersistencePlan:
+        if budget.status == "active":
+            budget.check("persist")
+            budget.mark_completed()
 
-    summary = dict(run.feature_summary_json)
-    summary["verification_budget_signal"] = budget.feature_summary()
-    if added_terminal_finding:
-        summary["finding_count"] = int(summary.get("finding_count", 0)) + 1
-    run.feature_summary_json = summary
-    run.validator_version = BUDGET_AWARE_VALIDATOR_VERSION
-    run.ruleset_version = BUDGET_AWARE_RULESET_VERSION
-    session.flush()
-    return run
+        findings = list(plan.findings)
+        terminal_finding = _finding_for_terminal_budget(budget)
+        if terminal_finding is not None and not any(
+            finding.code == terminal_finding.code for finding in findings
+        ):
+            findings.append(terminal_finding)
+
+        extensions = dict(plan.feature_summary_extensions)
+        if capacity_signal is not None:
+            extensions["verification_capacity_signal"] = capacity_signal
+        extensions["verification_budget_signal"] = budget.feature_summary()
+        return core.VerificationPersistencePlan(
+            findings=tuple(findings),
+            validator_version=BUDGET_AWARE_VALIDATOR_VERSION,
+            ruleset_version=BUDGET_AWARE_RULESET_VERSION,
+            feature_summary_extensions=extensions,
+        )
+
+    return finalize
 
 
 def _finding_for_terminal_budget(
@@ -194,7 +173,7 @@ def _total_timeout_finding(
             "stage": stage,
             "total_budget_seconds": total_budget_seconds,
         },
-        remediation="Retry validation after reducing load or restoring validation capacity.",
+        remediation=("Retry validation after reducing load or restoring validation capacity."),
     )
 
 
@@ -214,5 +193,5 @@ def _dependency_timeout_finding(
             "ruleset_version": VERIFICATION_BUDGET_RULESET_VERSION,
             "dependency": dependency,
         },
-        remediation="Retry validation after the required validation dependency is available.",
+        remediation=("Retry validation after the required validation dependency is available."),
     )

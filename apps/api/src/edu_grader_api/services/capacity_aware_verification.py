@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 from sqlalchemy.orm import Session
 
 from ..models import (
@@ -37,6 +35,7 @@ def run_capacity_aware_candidate_verification(
     revision: GeneratedQuestionDraftRevision,
     grader_client: verification.VerificationGraderClient,
     budget: VerificationBudget | None = None,
+    persistence_finalizer: verification.VerificationPersistenceFinalizer | None = None,
 ) -> GenerationValidationRun:
     """Reject over-capacity candidates before recursive or external work."""
 
@@ -53,7 +52,7 @@ def run_capacity_aware_candidate_verification(
     except Exception:
         if budget is not None:
             budget.check("capacity_preflight")
-        run = _persist_capacity_failure(
+        return _persist_capacity_failure(
             session,
             draft=draft,
             revision=revision,
@@ -70,23 +69,26 @@ def run_capacity_aware_candidate_verification(
             signal=unavailable_verification_capacity_signal("capacity_preflight_unavailable"),
             reason="capacity_preflight_unavailable",
             budget=budget,
+            persistence_finalizer=persistence_finalizer,
         )
-        return run
 
     if budget is not None:
         budget.check("capacity_preflight")
 
     capacity_signal = capacity.feature_summary()
+    finalizer = _capacity_persistence_finalizer(
+        capacity_signal,
+        persistence_finalizer,
+    )
     if not capacity.blocked:
-        run = verification.run_candidate_verification(
+        return verification.run_candidate_verification(
             session,
             draft=draft,
             revision=revision,
             grader_client=grader_client,
             budget=budget,
+            persistence_finalizer=finalizer,
         )
-        _finalize_capacity_evidence(session, run=run, signal=capacity_signal)
-        return run
 
     findings = [
         verification.VerificationFinding(
@@ -105,6 +107,7 @@ def run_capacity_aware_candidate_verification(
         signal=capacity_signal,
         reason="capacity_preflight_blocked",
         budget=budget,
+        persistence_finalizer=persistence_finalizer,
     )
 
 
@@ -117,8 +120,9 @@ def _persist_capacity_failure(
     signal: dict[str, object],
     reason: str,
     budget: VerificationBudget | None = None,
+    persistence_finalizer: verification.VerificationPersistenceFinalizer | None = None,
 ) -> GenerationValidationRun:
-    run = verification._persist_run(
+    return verification._persist_run(
         session,
         draft=draft,
         evaluated_revision_id=revision.id,
@@ -130,23 +134,32 @@ def _persist_capacity_failure(
         objective_prerequisite_signal=unavailable_objective_prerequisite_signal(reason),
         math_semantics_signal=unavailable_math_semantics_signal(reason),
         budget=budget,
+        persistence_finalizer=_capacity_persistence_finalizer(
+            signal,
+            persistence_finalizer,
+        ),
     )
-    _finalize_capacity_evidence(session, run=run, signal=signal)
-    return run
 
 
-def _finalize_capacity_evidence(
-    session: Session,
-    *,
-    run: GenerationValidationRun,
+def _capacity_persistence_finalizer(
     signal: dict[str, object],
-) -> None:
-    summary = dict(run.feature_summary_json)
-    summary["verification_capacity_signal"] = signal
-    run.feature_summary_json = cast(dict[str, object], summary)
-    run.validator_version = CAPACITY_AWARE_VALIDATOR_VERSION
-    run.ruleset_version = CAPACITY_AWARE_RULESET_VERSION
-    session.flush()
+    downstream: verification.VerificationPersistenceFinalizer | None = None,
+) -> verification.VerificationPersistenceFinalizer:
+    def finalize(
+        plan: verification.VerificationPersistencePlan,
+    ) -> verification.VerificationPersistencePlan:
+        enriched = verification.VerificationPersistencePlan(
+            findings=plan.findings,
+            validator_version=CAPACITY_AWARE_VALIDATOR_VERSION,
+            ruleset_version=CAPACITY_AWARE_RULESET_VERSION,
+            feature_summary_extensions={
+                **plan.feature_summary_extensions,
+                "verification_capacity_signal": signal,
+            },
+        )
+        return downstream(enriched) if downstream is not None else enriched
+
+    return finalize
 
 
 def _capacity_blocked_duplicate_summary(reason: str) -> dict[str, object]:
