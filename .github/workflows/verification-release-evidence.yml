@@ -29,13 +29,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PROCESSOR_ALLOWED_HOSTS: grader,languagetool,localhost,127.0.0.1
+      PROCESSOR_ALLOWED_HOSTS: grader,languagetool,localhost,127.0.0.1,172.30.254.250,172.30.254.249,172.30.254.248,172.30.254.247
       GRADER_REQUEST_TIMEOUT_SECONDS: "15"
       VERIFICATION_TOTAL_TIMEOUT_SECONDS: "30"
       RELEASE_EVIDENCE_DATABASE_URL: postgresql+psycopg://release_evidence:release-evidence-password@127.0.0.1:55432/release_evidence
       RELEASE_EVIDENCE_GRADER_URL: http://127.0.0.1:58010
       RELEASE_EVIDENCE_LANGUAGETOOL_HEALTH_URL: http://127.0.0.1:58011/v2/languages
       RELEASE_EVIDENCE_LANGUAGE_FAULT_PROXY_URL: http://127.0.0.1:58012
+      RELEASE_EVIDENCE_CONNECT_TIMEOUT_NETWORK: 172.30.254.0/24
       RELEASE_EVIDENCE_SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Check out source

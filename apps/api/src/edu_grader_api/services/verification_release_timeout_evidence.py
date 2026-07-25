@@ -8,11 +8,13 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from ipaddress import IPv4Network, ip_network
 import os
 from pathlib import Path
 from threading import Lock, Thread
 import time
 from typing import Literal
+from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy.orm import Session
@@ -38,12 +40,15 @@ from .verification_performance import (
 )
 
 REPORT_VERSION = base.REPORT_VERSION
-SCENARIO_CATALOG_VERSION = 3
+SCENARIO_CATALOG_VERSION = 5
 DEFAULT_REPETITIONS = base.DEFAULT_REPETITIONS
 DEFAULT_DATABASE_URL = base.DEFAULT_DATABASE_URL
 DEFAULT_GRADER_URL = base.DEFAULT_GRADER_URL
 DEFAULT_LANGUAGETOOL_HEALTH_URL = base.DEFAULT_LANGUAGETOOL_HEALTH_URL
 DEFAULT_LANGUAGE_FAULT_PROXY_URL = "http://127.0.0.1:58012"
+DEFAULT_CONNECT_TIMEOUT_NETWORK = "172.30.254.0/24"
+DEFAULT_LANGUAGE_CONNECT_GRADER_URL = "http://127.0.0.1:58013"
+CONNECT_TIMEOUT_SECONDS = 0.25
 
 DependencyKind = Literal["normalizer", "grader", "language", "similarity"]
 ProxyMode = Literal["stall", "forward"]
@@ -60,6 +65,71 @@ _SCENARIO_ID: Mapping[DependencyKind, str] = {
     "language": "language_read_timeout_recovery",
     "similarity": "similarity_read_timeout_recovery",
 }
+_CONNECT_SCENARIO_ID: Mapping[Literal["normalizer", "grader", "similarity"], str] = {
+    "normalizer": "normalizer_connect_timeout_recovery",
+    "grader": "grader_connect_timeout_recovery",
+    "similarity": "similarity_connect_timeout_recovery",
+}
+_LANGUAGE_CONNECT_SCENARIO_ID = "language_connect_timeout_recovery"
+
+
+def _connect_timeout_hosts(
+    network_cidr: str,
+) -> tuple[dict[DependencyKind, str], dict[DependencyKind, str]]:
+    network = ip_network(network_cidr, strict=True)
+    if not isinstance(network, IPv4Network) or network.prefixlen != 24 or not network.is_private:
+        raise ValueError("connect-timeout network must be a private IPv4 /24")
+
+    scenario_offsets: Mapping[DependencyKind, int] = {
+        "normalizer": 5,
+        "grader": 6,
+        "similarity": 7,
+        "language": 8,
+    }
+    probe_offsets: Mapping[DependencyKind, int] = {
+        "normalizer": 15,
+        "grader": 16,
+        "similarity": 17,
+        "language": 18,
+    }
+    scenario_hosts = {
+        dependency: str(network.broadcast_address - offset)
+        for dependency, offset in scenario_offsets.items()
+    }
+    probe_hosts = {
+        dependency: str(network.broadcast_address - offset)
+        for dependency, offset in probe_offsets.items()
+    }
+    return scenario_hosts, probe_hosts
+
+
+def _assert_host_connect_timeout(host: str) -> None:
+    timeout = httpx.Timeout(
+        connect=CONNECT_TIMEOUT_SECONDS,
+        read=1.0,
+        write=1.0,
+        pool=1.0,
+    )
+    try:
+        with httpx.Client(timeout=timeout, trust_env=False) as client:
+            client.post(f"http://{host}:8010/connect-timeout-probe")
+    except httpx.ConnectTimeout:
+        return
+    except httpx.HTTPError as error:
+        raise base.ProductRegression("connect_timeout_probe_failed") from error
+    raise base.ProductRegression("connect_timeout_probe_connected")
+
+
+def _connect_timeout_scenario_id(dependency: DependencyKind) -> str:
+    if dependency == "language":
+        return _LANGUAGE_CONNECT_SCENARIO_ID
+    return _CONNECT_SCENARIO_ID[dependency]
+
+
+def _connect_outage_request_timeout(dependency: DependencyKind) -> float:
+    if dependency == "language":
+        return float(settings.grader_request_timeout_seconds)
+    return CONNECT_TIMEOUT_SECONDS
 
 
 class _FaultProxyHTTPServer(ThreadingHTTPServer):
@@ -267,6 +337,8 @@ def run_release_evidence(
     grader_url: str = DEFAULT_GRADER_URL,
     languagetool_health_url: str = DEFAULT_LANGUAGETOOL_HEALTH_URL,
     language_fault_proxy_url: str = DEFAULT_LANGUAGE_FAULT_PROXY_URL,
+    language_connect_grader_url: str = DEFAULT_LANGUAGE_CONNECT_GRADER_URL,
+    connect_timeout_network: str = DEFAULT_CONNECT_TIMEOUT_NETWORK,
 ) -> tuple[dict[str, object], base.ReportPaths]:
     if REPORT_VERSION != "verification-release-evidence-v1":
         raise RuntimeError("unsupported base release-evidence contract")
@@ -274,6 +346,7 @@ def run_release_evidence(
         raise ValueError("release evidence requires at least two repetitions")
     if not compose_file.is_file():
         raise ValueError("release evidence compose file does not exist")
+    connect_hosts, connect_probe_hosts = _connect_timeout_hosts(connect_timeout_network)
 
     repetition_reports: list[dict[str, object]] = []
     environment: dict[str, object] = base.runtime_environment()
@@ -284,11 +357,17 @@ def run_release_evidence(
             database_url=database_url,
             grader_url=grader_url,
             languagetool_health_url=languagetool_health_url,
+            compose_environment={
+                "RELEASE_EVIDENCE_LANGUAGE_CONNECT_TIMEOUT_HOST": connect_hosts["language"],
+            },
         )
         repetition_report, discovered_environment = _run_repetition(
             context,
             repetition,
             language_fault_proxy_url=language_fault_proxy_url,
+            language_connect_grader_url=language_connect_grader_url,
+            connect_hosts=connect_hosts,
+            connect_probe_hosts=connect_probe_hosts,
         )
         repetition_reports.append(repetition_report)
         for key, value in discovered_environment.items():
@@ -311,7 +390,7 @@ def run_release_evidence(
             "ruleset_version": BUDGET_AWARE_RULESET_VERSION,
             "capacity_version": VERIFICATION_CAPACITY_RULESET_VERSION,
             "budget_version": VERIFICATION_BUDGET_RULESET_VERSION,
-            "timeout_fault_version": "verification-dependency-read-timeout-v2",
+            "timeout_fault_version": "verification-dependency-timeout-v3",
         },
         "protocol": {
             "repetitions": repetitions,
@@ -323,6 +402,12 @@ def run_release_evidence(
                 "languagetool_response_stall_proxy"
             ),
             "timeout_dependencies": [
+                "normalizer",
+                "grader",
+                "language",
+                "similarity",
+            ],
+            "connect_timeout_dependencies": [
                 "normalizer",
                 "grader",
                 "language",
@@ -354,6 +439,9 @@ def _run_repetition(
     repetition: int,
     *,
     language_fault_proxy_url: str,
+    language_connect_grader_url: str,
+    connect_hosts: Mapping[DependencyKind, str],
+    connect_probe_hosts: Mapping[DependencyKind, str],
 ) -> tuple[dict[str, object], dict[str, object]]:
     report: dict[str, object] = {
         "repetition": repetition,
@@ -376,16 +464,23 @@ def _run_repetition(
             "postgres",
             "languagetool",
             "grader",
+            "language-connect-grader",
         )
         stage = "database_migration"
         base._run_migrations(context.database_url)
         stage = "environment_capture"
         environment = base._capture_service_environment(context)
+        environment["language_connect_grader_image_id"] = base._service_image_id(
+            context, "language-connect-grader"
+        )
         stage = "language_fault_proxy_readiness"
         language_proxy = LanguageToolFaultProxyControl(language_fault_proxy_url)
         language_proxy.wait_ready(timeout_seconds=90)
         language_proxy.set_mode("forward")
         language_proxy.reset_counts()
+        stage = "connect_timeout_preflight"
+        for dependency in ("normalizer", "grader", "language", "similarity"):
+            _assert_host_connect_timeout(connect_probe_hosts[dependency])
         stage = "scenario_execution"
         with base._session(context.database_url) as session:
             scenarios: list[dict[str, object]] = []
@@ -440,6 +535,36 @@ def _run_repetition(
                             )
                         ),
                     )
+            for index, dependency in enumerate(
+                ("normalizer", "grader", "similarity"),
+                start=1,
+            ):
+                _append_scenario(
+                    session,
+                    scenarios,
+                    _CONNECT_SCENARIO_ID[dependency],
+                    lambda dependency=dependency, ordinal=(repetition * 100 + 60 + index): (
+                        _connect_timeout_recovery_scenario(
+                            session,
+                            dependency=dependency,
+                            outage_grader_url=(f"http://{connect_hosts[dependency]}:8010"),
+                            grader_url=context.grader_url,
+                            ordinal=ordinal,
+                        )
+                    ),
+                )
+            _append_scenario(
+                session,
+                scenarios,
+                _LANGUAGE_CONNECT_SCENARIO_ID,
+                lambda: _connect_timeout_recovery_scenario(
+                    session,
+                    dependency="language",
+                    outage_grader_url=language_connect_grader_url,
+                    grader_url=context.grader_url,
+                    ordinal=repetition * 100 + 70,
+                ),
+            )
             report["scenarios"] = scenarios
             if not all(item.get("passed") is True for item in scenarios):
                 raise base.ProductRegression("representative_scenario_failed")
@@ -668,6 +793,88 @@ def _dependency_timeout_recovery_scenario(
     }
 
 
+def _connect_timeout_recovery_scenario(
+    session: Session,
+    *,
+    dependency: DependencyKind,
+    outage_grader_url: str,
+    grader_url: str,
+    ordinal: int,
+) -> dict[str, object]:
+    outage_host = urlparse(outage_grader_url).hostname
+    if outage_host not in settings.allowed_processor_hosts:
+        raise base.ProductRegression("connect_timeout_target_not_allowed")
+
+    draft = _create_timeout_draft(session, dependency=dependency, ordinal=ordinal)
+    session.commit()
+    revision = base._revision(session, draft)
+    versions_before = base._question_version_count(session)
+    outage_grader = HttpGraderClient(
+        outage_grader_url,
+        request_timeout_seconds=_connect_outage_request_timeout(dependency),
+    )
+
+    outage_run = run_budget_aware_candidate_verification(
+        session,
+        draft=draft,
+        revision=revision,
+        grader_client=outage_grader,
+    )
+    session.commit()
+    outage_snapshot = base._run_snapshot(outage_run)
+
+    recovery_run = run_budget_aware_candidate_verification(
+        session,
+        draft=draft,
+        revision=revision,
+        grader_client=HttpGraderClient(grader_url),
+    )
+    session.commit()
+    versions_after = base._question_version_count(session)
+
+    session.expire_all()
+    persisted_outage = session.get(base.GenerationValidationRun, outage_run.id)
+    if persisted_outage is None:
+        raise base.ProductRegression("connect_timeout_run_missing")
+    outage_immutable = base._run_snapshot(persisted_outage) == outage_snapshot
+    outage_budget = outage_run.feature_summary_json.get("verification_budget_signal")
+    recovery_budget = recovery_run.feature_summary_json.get("verification_budget_signal")
+    outage_findings = base._finding_codes(outage_run)
+    recovery_findings = base._finding_codes(recovery_run)
+    expected_finding = _EXPECTED_TIMEOUT_FINDING[dependency]
+    passed = (
+        outage_run.status.value == "blocked"
+        and expected_finding in outage_findings
+        and isinstance(outage_budget, dict)
+        and outage_budget.get("status") == "dependency_timeout"
+        and outage_budget.get("terminal_dependency") == dependency
+        and recovery_run.status.value == "passed"
+        and expected_finding not in recovery_findings
+        and isinstance(recovery_budget, dict)
+        and recovery_budget.get("status") == "completed"
+        and outage_run.id != recovery_run.id
+        and outage_immutable
+        and versions_after == versions_before
+    )
+    return {
+        "scenario_id": _connect_timeout_scenario_id(dependency),
+        "dependency": dependency,
+        "fault_mode": "connect_timeout",
+        "outage_status": outage_run.status.value,
+        "outage_finding_codes": outage_findings,
+        "recovery_status": recovery_run.status.value,
+        "recovery_finding_codes": recovery_findings,
+        "old_run_immutable": outage_immutable,
+        "fresh_budget_completed": (
+            recovery_budget.get("status") == "completed"
+            if isinstance(recovery_budget, dict)
+            else False
+        ),
+        "question_version_delta": versions_after - versions_before,
+        "passed": passed,
+    }
+
+
 def _create_timeout_draft(
     session: Session,
     *,
@@ -779,6 +986,20 @@ def _parser() -> argparse.ArgumentParser:
             DEFAULT_LANGUAGE_FAULT_PROXY_URL,
         ),
     )
+    parser.add_argument(
+        "--connect-timeout-network",
+        default=os.environ.get(
+            "RELEASE_EVIDENCE_CONNECT_TIMEOUT_NETWORK",
+            DEFAULT_CONNECT_TIMEOUT_NETWORK,
+        ),
+    )
+    parser.add_argument(
+        "--language-connect-grader-url",
+        default=os.environ.get(
+            "RELEASE_EVIDENCE_LANGUAGE_CONNECT_GRADER_URL",
+            DEFAULT_LANGUAGE_CONNECT_GRADER_URL,
+        ),
+    )
     return parser
 
 
@@ -792,6 +1013,8 @@ def main(argv: list[str] | None = None) -> int:
         grader_url=arguments.grader_url,
         languagetool_health_url=arguments.languagetool_health_url,
         language_fault_proxy_url=arguments.language_fault_proxy_url,
+        language_connect_grader_url=arguments.language_connect_grader_url,
+        connect_timeout_network=arguments.connect_timeout_network,
     )
     print(paths.json_path)
     print(paths.markdown_path)

@@ -19,7 +19,9 @@ The Core API code runs from the checked-out package on the GitHub runner and con
 
 Every repetition uses a unique Compose project and a fresh PostgreSQL volume. The runner performs at least two complete repetitions and removes containers and volumes after each repetition.
 
-## Scenario catalog v3
+The Compose project uses an isolated private `/24` bridge. The runner accepts only a private IPv4 `/24` for this network, and before each repetition verifies that four distinct unassigned addresses terminate as `ConnectTimeout` without using environment proxies. These targets are reserved for the Normalizer, Grader, LanguageTool and Similarity connection-timeout scenarios. The CIDR may be overridden through `RELEASE_EVIDENCE_CONNECT_TIMEOUT_NETWORK`; the runner derives and injects the matching LanguageTool target for the second Grader automatically. Network addresses are never written to the evidence reports.
+
+## Scenario catalog v5
 
 ### Capacity candidate bytes
 
@@ -66,6 +68,16 @@ Each scenario succeeds only when:
 - no `QuestionVersion` is created.
 
 The fault proxy never records request bodies, candidate content, network locations or exception text in the evidence artifact.
+
+### Normalizer, Grader and Similarity connect timeouts
+
+For each category, the runner first proves the isolated bridge's network primitive with a separate unassigned preflight address. The outage run then uses a real `HttpGraderClient` targeting that category's distinct unassigned bridge address and a 250 ms connect deadline. It must fail closed with the category-specific stable Finding and a `dependency_timeout` budget signal. A separate recovery run uses the normal real Grader service and must pass with a completed budget.
+
+Each scenario also requires a distinct immutable blocked run and zero `QuestionVersion` creations. The evidence contains only the stable statuses and Finding codes; it does not contain target addresses, URLs, request payloads or exception details.
+
+### LanguageTool connect timeout
+
+The runner starts a second real Grader whose LanguageTool endpoint is a distinct unassigned address on the evidence bridge. The outage run calls that Grader and must be blocked with `language_timeout`; recovery uses the normal real Grader/LanguageTool stack and must pass with a fresh completed budget. This proves the internal LanguageTool connection boundary without replacing either service with a mock.
 
 
 ### Explicit LanguageTool read timeout
@@ -130,7 +142,6 @@ Artifacts use the source SHA in their name and are retained for 14 days.
 
 Version 1 does not yet provide:
 
-- controlled connect-timeout injection for all four dependency categories;
 - every total-budget stage boundary in the real-service environment;
 - a reusable RC workflow callable from the milestone signing pipeline;
 - full OIDC browser acceptance.

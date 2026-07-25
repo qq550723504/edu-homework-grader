@@ -6,6 +6,7 @@ import json
 from threading import Thread
 from typing import Iterator
 
+import httpx
 import pytest
 
 from edu_grader_api.services import verification_release_timeout_evidence as evidence
@@ -118,9 +119,74 @@ def test_call_buckets_are_stable() -> None:
 
 
 def test_language_timeout_catalog_is_explicit() -> None:
-    assert evidence.SCENARIO_CATALOG_VERSION == 3
+    assert evidence.SCENARIO_CATALOG_VERSION == 5
     assert evidence._EXPECTED_TIMEOUT_FINDING["language"] == "language_timeout"
     assert evidence._SCENARIO_ID["language"] == "language_read_timeout_recovery"
+
+
+def test_connect_timeout_catalog_is_explicit() -> None:
+    assert evidence._CONNECT_SCENARIO_ID == {
+        "normalizer": "normalizer_connect_timeout_recovery",
+        "grader": "grader_connect_timeout_recovery",
+        "similarity": "similarity_connect_timeout_recovery",
+    }
+
+
+def test_language_connect_timeout_catalog_is_explicit() -> None:
+    assert evidence._LANGUAGE_CONNECT_SCENARIO_ID == "language_connect_timeout_recovery"
+    assert evidence._connect_timeout_scenario_id("language") == "language_connect_timeout_recovery"
+
+
+def test_connect_timeout_hosts_use_distinct_private_bridge_addresses() -> None:
+    scenario_hosts, probe_hosts = evidence._connect_timeout_hosts("172.30.254.0/24")
+
+    assert scenario_hosts == {
+        "normalizer": "172.30.254.250",
+        "grader": "172.30.254.249",
+        "similarity": "172.30.254.248",
+        "language": "172.30.254.247",
+    }
+    assert probe_hosts == {
+        "normalizer": "172.30.254.240",
+        "grader": "172.30.254.239",
+        "similarity": "172.30.254.238",
+        "language": "172.30.254.237",
+    }
+    assert not set(scenario_hosts.values()) & set(probe_hosts.values())
+
+
+def test_connect_timeout_host_probe_accepts_only_connect_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class TimeoutClient:
+        def __init__(self, *, timeout: httpx.Timeout, trust_env: bool) -> None:
+            captured["timeout"] = timeout
+            captured["trust_env"] = trust_env
+
+        def __enter__(self) -> TimeoutClient:
+            return self
+
+        def __exit__(self, *_arguments: object) -> None:
+            return None
+
+        def post(self, target: str) -> None:
+            captured["target"] = target
+            raise httpx.ConnectTimeout("controlled timeout")
+
+    monkeypatch.setattr(evidence.httpx, "Client", TimeoutClient)
+
+    evidence._assert_host_connect_timeout("172.30.254.240")
+
+    assert captured["trust_env"] is False
+    assert captured["target"] == "http://172.30.254.240:8010/connect-timeout-probe"
+
+
+@pytest.mark.parametrize("network", ["172.30.254.0/25", "8.8.8.0/24"])
+def test_connect_timeout_hosts_reject_invalid_bridge_network(network: str) -> None:
+    with pytest.raises(ValueError, match="private IPv4 /24"):
+        evidence._connect_timeout_hosts(network)
 
 
 def test_language_fault_proxy_control_rejects_invalid_configuration() -> None:
@@ -131,3 +197,12 @@ def test_language_fault_proxy_control_rejects_invalid_configuration() -> None:
             "http://127.0.0.1:58012",
             request_timeout_seconds=0,
         )
+
+
+def test_language_connect_timeout_preserves_outer_grader_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(evidence.settings, "grader_request_timeout_seconds", 15.0)
+
+    assert evidence._connect_outage_request_timeout("grader") == 0.25
+    assert evidence._connect_outage_request_timeout("language") == 15.0

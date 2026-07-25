@@ -74,3 +74,35 @@ services:
     depends_on:
       language-fault-proxy:
         condition: service_healthy
+
+  language-connect-grader:
+    image: edu-homework-grader/grader:release-evidence
+    build:
+      context: ../..
+      dockerfile: services/grader/Dockerfile
+    environment:
+      APP_ENV: test
+      GRADER_MATH_CPU_SECONDS: 2
+      GRADER_MATH_MEMORY_BYTES: 536870912
+      GRADER_MATH_TIMEOUT_SECONDS: 5
+      LANGUAGETOOL_BASE_URL: "http://${RELEASE_EVIDENCE_LANGUAGE_CONNECT_TIMEOUT_HOST:-172.30.254.247}:8010/v2"
+      LANGUAGETOOL_TIMEOUT_SECONDS: 0.25
+      ENGLISH_EMBEDDING_MODEL_DIRECTORY: /opt/english-model
+      ENGLISH_EMBEDDING_MODEL_ID: sentence-transformers/all-MiniLM-L6-v2
+      ENGLISH_EMBEDDING_MODEL_REVISION: 1110a243fdf4706b3f48f1d95db1a4f5529b4d41
+      ENGLISH_EMBEDDING_MODEL_DIGEST: sha256:84714cdabb16d132cbe6e1a4cbd21167abd09eccbdaf69dd053136ae68cc7c17
+      PROCESSOR_ALLOWED_HOSTS: "grader,languagetool,localhost,127.0.0.1,${RELEASE_EVIDENCE_LANGUAGE_CONNECT_TIMEOUT_HOST:-172.30.254.247}"
+      GENERATION_PROVIDER: fake
+    ports:
+      - "${RELEASE_EVIDENCE_LANGUAGE_CONNECT_GRADER_PORT:-58013}:8010"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8010/health')"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: "${RELEASE_EVIDENCE_CONNECT_TIMEOUT_NETWORK:-172.30.254.0/24}"

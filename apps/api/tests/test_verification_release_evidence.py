@@ -99,6 +99,40 @@ def evidence_report() -> dict[str, object]:
     }
 
 
+def test_compose_context_overrides_environment_for_every_compose_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        env: dict[str, str],
+    ) -> None:
+        captured["command"] = command
+        captured["check"] = check
+        captured["environment"] = env
+
+    monkeypatch.setattr(evidence.subprocess, "run", fake_run)
+    context = evidence.ComposeContext(
+        compose_file=Path("compose.yaml"),
+        project_name="evidence-test",
+        database_url="postgresql://example",
+        grader_url="http://grader",
+        languagetool_health_url="http://languagetool",
+        compose_environment={"RELEASE_EVIDENCE_LANGUAGE_CONNECT_TIMEOUT_HOST": "172.29.254.247"},
+    )
+
+    evidence._compose(context, "config", "--quiet")
+
+    assert captured["check"] is True
+    assert captured["environment"] == {
+        **__import__("os").environ,
+        "RELEASE_EVIDENCE_LANGUAGE_CONNECT_TIMEOUT_HOST": "172.29.254.247",
+    }
+
+
 def test_release_evidence_writes_deidentified_json_and_markdown(tmp_path: Path) -> None:
     report = evidence_report()
 

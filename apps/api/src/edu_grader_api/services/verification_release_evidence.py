@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import json
 import os
@@ -90,6 +90,7 @@ class ComposeContext:
     database_url: str
     grader_url: str
     languagetool_health_url: str
+    compose_environment: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def command_prefix(self) -> list[str]:
@@ -596,10 +597,12 @@ def _run_snapshot(run: GenerationValidationRun) -> dict[str, object]:
 
 
 def _compose(context: ComposeContext, *arguments: str) -> None:
+    environment = os.environ.copy()
+    environment.update(context.compose_environment)
     subprocess.run(
         [*context.command_prefix, *arguments],
         check=True,
-        env=os.environ.copy(),
+        env=environment,
     )
 
 
