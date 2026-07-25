@@ -1,0 +1,441 @@
+name: PR 110 duplicate boundary integrator
+
+on:
+  push:
+    branches:
+      - agent/verification-duplicate-boundaries-v2
+
+concurrency:
+  group: pr110-duplicate-boundaries-v2
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/verification-duplicate-boundaries-v2
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Apply duplicate-query and persistence budget boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"marker missing in {path}: {old[:80]!r}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          capacity_path = "apps/api/src/edu_grader_api/services/capacity_aware_verification.py"
+          replace_once(
+              capacity_path,
+              "from .objective_prerequisites import unavailable_objective_prerequisite_signal\n",
+              "from .objective_prerequisites import unavailable_objective_prerequisite_signal\n"
+              "from .verification_budget import (\n"
+              "    VerificationBudget,\n"
+              "    VerificationBudgetExceeded,\n"
+              "    VerificationDependencyTimeout,\n"
+              ")\n",
+          )
+          replace_once(
+              capacity_path,
+              "    grader_client: verification.VerificationGraderClient,\n) -> GenerationValidationRun:\n",
+              "    grader_client: verification.VerificationGraderClient,\n"
+              "    budget: VerificationBudget | None = None,\n"
+              ") -> GenerationValidationRun:\n",
+          )
+          replace_once(
+              capacity_path,
+              "    try:\n        capacity = evaluate_verification_capacity(revision.candidate_json)\n"
+              "    except Exception:\n        run = _persist_capacity_failure(\n",
+              "    if budget is not None:\n"
+              "        budget.check(\"capacity_preflight\")\n\n"
+              "    try:\n"
+              "        capacity = evaluate_verification_capacity(revision.candidate_json)\n"
+              "    except (VerificationBudgetExceeded, VerificationDependencyTimeout):\n"
+              "        raise\n"
+              "    except Exception:\n"
+              "        if budget is not None:\n"
+              "            budget.check(\"capacity_preflight\")\n"
+              "        run = _persist_capacity_failure(\n",
+          )
+          replace_once(
+              capacity_path,
+              "            reason=\"capacity_preflight_unavailable\",\n        )\n        return run\n\n"
+              "    capacity_signal = capacity.feature_summary()\n",
+              "            reason=\"capacity_preflight_unavailable\",\n"
+              "            budget=budget,\n"
+              "        )\n"
+              "        return run\n\n"
+              "    if budget is not None:\n"
+              "        budget.check(\"capacity_preflight\")\n\n"
+              "    capacity_signal = capacity.feature_summary()\n",
+          )
+          replace_once(
+              capacity_path,
+              "            grader_client=grader_client,\n        )\n",
+              "            grader_client=grader_client,\n"
+              "            budget=budget,\n"
+              "        )\n",
+          )
+          replace_once(
+              capacity_path,
+              "        reason=\"capacity_preflight_blocked\",\n    )\n",
+              "        reason=\"capacity_preflight_blocked\",\n"
+              "        budget=budget,\n"
+              "    )\n",
+          )
+          replace_once(
+              capacity_path,
+              "    reason: str,\n) -> GenerationValidationRun:\n",
+              "    reason: str,\n"
+              "    budget: VerificationBudget | None = None,\n"
+              ") -> GenerationValidationRun:\n",
+          )
+          replace_once(
+              capacity_path,
+              "        math_semantics_signal=unavailable_math_semantics_signal(reason),\n    )\n",
+              "        math_semantics_signal=unavailable_math_semantics_signal(reason),\n"
+              "        budget=budget,\n"
+              "    )\n",
+          )
+
+          core_path = "apps/api/src/edu_grader_api/services/question_verification.py"
+          replace_once(
+              core_path,
+              "from .questions import GradeResult\n",
+              "from .questions import GradeResult\n"
+              "from .verification_budget import (\n"
+              "    VerificationBudget,\n"
+              "    VerificationBudgetExceeded,\n"
+              "    VerificationDependencyTimeout,\n"
+              ")\n",
+          )
+          replace_once(
+              core_path,
+              "    grader_client: VerificationGraderClient,\n) -> GenerationValidationRun:\n",
+              "    grader_client: VerificationGraderClient,\n"
+              "    budget: VerificationBudget | None = None,\n"
+              ") -> GenerationValidationRun:\n",
+          )
+          replace_once(
+              core_path,
+              "        job = session.get(GenerationJob, draft.job_id)\n"
+              "        if job is not None and isinstance(prompt, str):\n"
+              "            duplicate_snapshot = _capture_duplicate_snapshot(\n",
+              "        job = session.get(GenerationJob, draft.job_id)\n"
+              "        if job is not None and isinstance(prompt, str):\n"
+              "            if budget is not None:\n"
+              "                budget.check(\"duplicate_check\")\n"
+              "            duplicate_snapshot = _capture_duplicate_snapshot(\n",
+          )
+          replace_once(
+              core_path,
+              "                threshold=duplicate_threshold,\n            )\n"
+              "        evaluation = _evaluate_candidate(\n",
+              "                threshold=duplicate_threshold,\n"
+              "            )\n"
+              "            if budget is not None:\n"
+              "                budget.check(\"duplicate_check\")\n"
+              "        evaluation = _evaluate_candidate(\n",
+          )
+          replace_once(
+              core_path,
+              "            duplicate_snapshot=duplicate_snapshot,\n        )\n"
+              "    except Exception:\n",
+              "            duplicate_snapshot=duplicate_snapshot,\n"
+              "        )\n"
+              "    except (VerificationBudgetExceeded, VerificationDependencyTimeout):\n"
+              "        raise\n"
+              "    except Exception:\n",
+          )
+          replace_once(
+              core_path,
+              "        math_semantics_signal=evaluation.math_semantics_signal,\n    )\n",
+              "        math_semantics_signal=evaluation.math_semantics_signal,\n"
+              "        budget=budget,\n"
+              "    )\n",
+          )
+          replace_once(
+              core_path,
+              "    math_semantics_signal: dict[str, object],\n) -> GenerationValidationRun:\n"
+              "    snapshot_changed_before_lock = draft.current_revision_id != evaluated_revision_id\n",
+              "    math_semantics_signal: dict[str, object],\n"
+              "    budget: VerificationBudget | None = None,\n"
+              ") -> GenerationValidationRun:\n"
+              "    if budget is not None:\n"
+              "        budget.check(\"persist\")\n\n"
+              "    snapshot_changed_before_lock = draft.current_revision_id != evaluated_revision_id\n",
+          )
+
+          budget_wrapper_path = "apps/api/src/edu_grader_api/services/budget_aware_verification.py"
+          replace_once(
+              budget_wrapper_path,
+              'BUDGET_AWARE_VALIDATOR_VERSION = "verification-v10"\n'
+              'BUDGET_AWARE_RULESET_VERSION = "rules-v10"\n',
+              'BUDGET_AWARE_VALIDATOR_VERSION = "verification-v11"\n'
+              'BUDGET_AWARE_RULESET_VERSION = "rules-v11"\n',
+          )
+          replace_once(
+              budget_wrapper_path,
+              "            grader_client=budgeted_client,\n        )\n",
+              "            grader_client=budgeted_client,\n"
+              "            budget=budget,\n"
+              "        )\n",
+          )
+
+          test_path = Path("apps/api/tests/test_budget_aware_verification.py")
+          test_text = test_path.read_text(encoding="utf-8")
+          test_text = test_text.replace("test_completed_run_gets_v10_budget_signal", "test_completed_run_gets_v11_budget_signal")
+          test_text = test_text.replace('assert run.validator_version == "verification-v10"', 'assert run.validator_version == "verification-v11"')
+          test_text = test_text.replace('assert run.ruleset_version == "rules-v10"', 'assert run.ruleset_version == "rules-v11"')
+          test_text = test_text.replace('assert persisted.validator_version == "verification-v10"', 'assert persisted.validator_version == "verification-v11"')
+          test_path.write_text(test_text, encoding="utf-8")
+
+          boundary_tests = dedent('''
+              from __future__ import annotations
+
+              from dataclasses import dataclass
+              from types import SimpleNamespace
+              from uuid import uuid4
+
+              import pytest
+
+              from edu_grader_api.services import capacity_aware_verification as capacity
+              from edu_grader_api.services import question_verification as core
+              from edu_grader_api.services.verification_budget import (
+                  VerificationBudget,
+                  VerificationBudgetExceeded,
+                  VerificationDependencyTimeout,
+              )
+
+
+              @dataclass
+              class FakeClock:
+                  current: float = 10.0
+
+                  def __call__(self) -> float:
+                      return self.current
+
+                  def advance(self, seconds: float) -> None:
+                      self.current += seconds
+
+
+              def draft_and_revision() -> tuple[SimpleNamespace, SimpleNamespace]:
+                  draft_id = uuid4()
+                  revision_id = uuid4()
+                  return (
+                      SimpleNamespace(
+                          id=draft_id,
+                          job_id=uuid4(),
+                          current_revision_id=revision_id,
+                      ),
+                      SimpleNamespace(
+                          id=revision_id,
+                          generated_question_draft_id=draft_id,
+                          candidate_json={"prompt": "safe candidate"},
+                          content_hash="a" * 64,
+                      ),
+                  )
+
+
+              def test_capacity_preflight_post_boundary_propagates_timeout(
+                  monkeypatch: pytest.MonkeyPatch,
+              ) -> None:
+                  clock = FakeClock()
+                  budget = VerificationBudget(total_seconds=1, clock=clock)
+                  draft, revision = draft_and_revision()
+
+                  def evaluate(candidate: object) -> object:
+                      clock.advance(1)
+                      return SimpleNamespace(blocked=False, feature_summary=lambda: {})
+
+                  monkeypatch.setattr(capacity, "evaluate_verification_capacity", evaluate)
+                  monkeypatch.setattr(
+                      capacity.verification,
+                      "run_candidate_verification",
+                      lambda *args, **kwargs: (_ for _ in ()).throw(
+                          AssertionError("core verification must not start after timeout")
+                      ),
+                  )
+
+                  with pytest.raises(VerificationBudgetExceeded) as raised:
+                      capacity.run_capacity_aware_candidate_verification(
+                          SimpleNamespace(),  # type: ignore[arg-type]
+                          draft=draft,  # type: ignore[arg-type]
+                          revision=revision,  # type: ignore[arg-type]
+                          grader_client=SimpleNamespace(),  # type: ignore[arg-type]
+                          budget=budget,
+                      )
+
+                  assert raised.value.stage == "capacity_preflight"
+
+
+              def test_duplicate_query_post_boundary_propagates_timeout(
+                  monkeypatch: pytest.MonkeyPatch,
+              ) -> None:
+                  clock = FakeClock()
+                  budget = VerificationBudget(total_seconds=1, clock=clock)
+                  draft, revision = draft_and_revision()
+
+                  class FakeSession:
+                      def get(self, model: object, key: object) -> object:
+                          return SimpleNamespace(tenant_id=uuid4())
+
+                  original_capture = core._capture_duplicate_snapshot
+
+                  def capture(*args: object, **kwargs: object) -> object:
+                      clock.advance(1)
+                      return original_capture(*args, **kwargs)
+
+                  monkeypatch.setattr(core, "_capture_duplicate_snapshot", capture)
+                  monkeypatch.setattr(
+                      core,
+                      "_evaluate_candidate",
+                      lambda *args, **kwargs: (_ for _ in ()).throw(
+                          AssertionError("candidate evaluation must not start after timeout")
+                      ),
+                  )
+
+                  class SnapshotSession(FakeSession):
+                      def execute(self, statement: object) -> object:
+                          return SimpleNamespace(first=lambda: None, all=lambda: [])
+
+                      def scalars(self, statement: object) -> list[object]:
+                          return []
+
+                  with pytest.raises(VerificationBudgetExceeded) as raised:
+                      core.run_candidate_verification(
+                          SnapshotSession(),  # type: ignore[arg-type]
+                          draft=draft,  # type: ignore[arg-type]
+                          revision=revision,  # type: ignore[arg-type]
+                          grader_client=SimpleNamespace(),  # type: ignore[arg-type]
+                          budget=budget,
+                      )
+
+                  assert raised.value.stage == "duplicate_check"
+
+
+              def test_persist_boundary_runs_before_database_writes() -> None:
+                  clock = FakeClock()
+                  budget = VerificationBudget(total_seconds=1, clock=clock)
+                  clock.advance(1)
+                  draft, revision = draft_and_revision()
+
+                  class NoWriteSession:
+                      def flush(self) -> None:
+                          raise AssertionError("persistence must not start after timeout")
+
+                  with pytest.raises(VerificationBudgetExceeded) as raised:
+                      core._persist_run(
+                          NoWriteSession(),  # type: ignore[arg-type]
+                          draft=draft,  # type: ignore[arg-type]
+                          evaluated_revision_id=revision.id,
+                          evaluated_revision_hash=revision.content_hash,
+                          findings=[],
+                          duplicate_feature_summary={},
+                          difficulty_signal={},
+                          grade_complexity_signal={},
+                          objective_prerequisite_signal={},
+                          math_semantics_signal={},
+                          budget=budget,
+                      )
+
+                  assert raised.value.stage == "persist"
+
+
+              def test_terminal_dependency_timeout_prevents_generic_run_persistence() -> None:
+                  budget = VerificationBudget(total_seconds=30, clock=FakeClock())
+                  budget.mark_dependency_timeout("grader")
+                  draft, revision = draft_and_revision()
+
+                  class NoWriteSession:
+                      def flush(self) -> None:
+                          raise AssertionError("generic persistence must not start after dependency timeout")
+
+                  with pytest.raises(VerificationDependencyTimeout) as raised:
+                      core._persist_run(
+                          NoWriteSession(),  # type: ignore[arg-type]
+                          draft=draft,  # type: ignore[arg-type]
+                          evaluated_revision_id=revision.id,
+                          evaluated_revision_hash=revision.content_hash,
+                          findings=[],
+                          duplicate_feature_summary={},
+                          difficulty_signal={},
+                          grade_complexity_signal={},
+                          objective_prerequisite_signal={},
+                          math_semantics_signal={},
+                          budget=budget,
+                      )
+
+                  assert raised.value.dependency == "grader"
+              ''').lstrip()
+          Path("apps/api/tests/test_verification_budget_stage_boundaries.py").write_text(
+              boundary_tests,
+              encoding="utf-8",
+          )
+
+          docs_path = Path("docs/verification-budget.md")
+          docs = docs_path.read_text(encoding="utf-8")
+          docs = docs.replace(
+              "| Budget-aware production wrapper | `verification-v10` / `rules-v10` |",
+              "| Budget-aware production wrapper | `verification-v11` / `rules-v11` |",
+          )
+          docs = docs.replace(
+              "The initial production integration checks the budget before and after Normalizer, Grader and Similarity calls, and again before final persistence. Additional explicit duplicate-query and LanguageTool stage boundaries remain follow-up work in #110.",
+              "The production integration checks the budget before and after capacity preflight, before and after duplicate fingerprint/comparator database queries, before and after Normalizer, Grader and Similarity calls, and before final persistence. Independent LanguageTool propagation when the Grader does not expose that timeout remains follow-up work in #110.",
+          )
+          docs_path.write_text(docs, encoding="utf-8")
+          PY
+
+      - name: Install, format, lint, and run focused regression
+        run: |
+          set -euo pipefail
+          make install-python >/dev/null
+          python -m ruff format \
+            apps/api/src/edu_grader_api/services/capacity_aware_verification.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/src/edu_grader_api/services/budget_aware_verification.py \
+            apps/api/tests/test_budget_aware_verification.py \
+            apps/api/tests/test_verification_budget_stage_boundaries.py
+          python -m ruff check --config ruff.toml \
+            apps/api/src/edu_grader_api/services/capacity_aware_verification.py \
+            apps/api/src/edu_grader_api/services/question_verification.py \
+            apps/api/src/edu_grader_api/services/budget_aware_verification.py \
+            apps/api/tests/test_budget_aware_verification.py \
+            apps/api/tests/test_verification_budget_stage_boundaries.py
+          python -m pytest \
+            apps/api/tests/test_budget_aware_verification.py \
+            apps/api/tests/test_capacity_aware_verification.py \
+            apps/api/tests/test_question_verification.py \
+            apps/api/tests/test_verification_budget.py \
+            apps/api/tests/test_verification_budget_stage_boundaries.py -q
+          git diff --check
+
+      - name: Remove one-shot files and push implementation
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/pr110-duplicate-boundaries-integrator.yml \
+            .github/.pr110-duplicate-boundaries-trigger
+          git add -A
+          git commit -m 'feat: enforce duplicate and persistence budget boundaries'
+          git push origin HEAD:agent/verification-duplicate-boundaries-v2
