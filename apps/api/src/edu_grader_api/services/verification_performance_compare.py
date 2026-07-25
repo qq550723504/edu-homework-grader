@@ -46,7 +46,11 @@ def validate_report(report: Mapping[str, object]) -> None:
     if report.get("report_version") != REPORT_VERSION:
         raise ValueError("performance report version is incompatible")
     matrix_version = report.get("matrix_version")
-    if isinstance(matrix_version, bool) or not isinstance(matrix_version, int) or matrix_version <= 0:
+    if (
+        isinstance(matrix_version, bool)
+        or not isinstance(matrix_version, int)
+        or matrix_version <= 0
+    ):
         raise ValueError("performance matrix version is invalid")
     matrix_digest = report.get("matrix_digest")
     if not isinstance(matrix_digest, str) or not matrix_digest.startswith("sha256:"):
@@ -69,7 +73,9 @@ def validate_report(report: Mapping[str, object]) -> None:
     failure_count = summary.get("failure_count")
     if case_count != len(cases):
         raise ValueError("performance summary case count is inconsistent")
-    expected_samples = sum(_integer(case["sample_count"], "sample_count", minimum=1) for case in cases.values())
+    expected_samples = sum(
+        _integer(case["sample_count"], "sample_count", minimum=1) for case in cases.values()
+    )
     if sample_count != expected_samples:
         raise ValueError("performance summary sample count is inconsistent")
     expected_failures = sum(
@@ -339,9 +345,7 @@ def _change_section(title: str, value: object) -> list[str]:
     for item in value:
         if not isinstance(item, Mapping):
             raise ValueError("comparison changed case is invalid")
-        lines.append(
-            f"- `{item['case_id']}` ({item['question_type']}, {item['load_bucket']})"
-        )
+        lines.append(f"- `{item['case_id']}` ({item['question_type']}, {item['load_bucket']})")
     return lines
 
 
