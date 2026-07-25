@@ -120,6 +120,18 @@ def _assert_host_connect_timeout(host: str) -> None:
     raise base.ProductRegression("connect_timeout_probe_connected")
 
 
+def _connect_timeout_scenario_id(dependency: DependencyKind) -> str:
+    if dependency == "language":
+        return _LANGUAGE_CONNECT_SCENARIO_ID
+    return _CONNECT_SCENARIO_ID[dependency]
+
+
+def _connect_outage_request_timeout(dependency: DependencyKind) -> float:
+    if dependency == "language":
+        return float(settings.grader_request_timeout_seconds)
+    return CONNECT_TIMEOUT_SECONDS
+
+
 class _FaultProxyHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     block_on_close = False
@@ -781,7 +793,7 @@ def _dependency_timeout_recovery_scenario(
 def _connect_timeout_recovery_scenario(
     session: Session,
     *,
-    dependency: Literal["normalizer", "grader", "similarity"],
+    dependency: DependencyKind,
     outage_grader_url: str,
     grader_url: str,
     ordinal: int,
@@ -796,7 +808,7 @@ def _connect_timeout_recovery_scenario(
     versions_before = base._question_version_count(session)
     outage_grader = HttpGraderClient(
         outage_grader_url,
-        request_timeout_seconds=CONNECT_TIMEOUT_SECONDS,
+        request_timeout_seconds=_connect_outage_request_timeout(dependency),
     )
 
     outage_run = run_budget_aware_candidate_verification(
@@ -842,7 +854,7 @@ def _connect_timeout_recovery_scenario(
         and versions_after == versions_before
     )
     return {
-        "scenario_id": _CONNECT_SCENARIO_ID[dependency],
+        "scenario_id": _connect_timeout_scenario_id(dependency),
         "dependency": dependency,
         "fault_mode": "connect_timeout",
         "outage_status": outage_run.status.value,

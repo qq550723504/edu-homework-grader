@@ -134,6 +134,7 @@ def test_connect_timeout_catalog_is_explicit() -> None:
 
 def test_language_connect_timeout_catalog_is_explicit() -> None:
     assert evidence._LANGUAGE_CONNECT_SCENARIO_ID == "language_connect_timeout_recovery"
+    assert evidence._connect_timeout_scenario_id("language") == "language_connect_timeout_recovery"
 
 
 def test_connect_timeout_hosts_use_distinct_private_bridge_addresses() -> None:
@@ -196,3 +197,12 @@ def test_language_fault_proxy_control_rejects_invalid_configuration() -> None:
             "http://127.0.0.1:58012",
             request_timeout_seconds=0,
         )
+
+
+def test_language_connect_timeout_preserves_outer_grader_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(evidence.settings, "grader_request_timeout_seconds", 15.0)
+
+    assert evidence._connect_outage_request_timeout("grader") == 0.25
+    assert evidence._connect_outage_request_timeout("language") == 15.0
