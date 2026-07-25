@@ -124,6 +124,19 @@ class VerificationFinding:
 
 
 @dataclass(frozen=True)
+class VerificationPersistencePlan:
+    findings: tuple[VerificationFinding, ...]
+    validator_version: str
+    ruleset_version: str
+    feature_summary_extensions: dict[str, object]
+
+
+VerificationPersistenceFinalizer = Callable[
+    [VerificationPersistencePlan], VerificationPersistencePlan
+]
+
+
+@dataclass(frozen=True)
 class _CandidateEvaluation:
     findings: list[VerificationFinding]
     duplicate_feature_summary: dict[str, object]
@@ -155,6 +168,7 @@ def run_candidate_verification(
     revision: GeneratedQuestionDraftRevision,
     grader_client: VerificationGraderClient,
     budget: VerificationBudget | None = None,
+    persistence_finalizer: VerificationPersistenceFinalizer | None = None,
 ) -> GenerationValidationRun:
     """Evaluate a candidate and append a new, immutable verification result."""
 
@@ -224,6 +238,7 @@ def run_candidate_verification(
         objective_prerequisite_signal=evaluation.objective_prerequisite_signal,
         math_semantics_signal=evaluation.math_semantics_signal,
         budget=budget,
+        persistence_finalizer=persistence_finalizer,
     )
 
 
@@ -1619,6 +1634,7 @@ def _persist_run(
     objective_prerequisite_signal: dict[str, object],
     math_semantics_signal: dict[str, object],
     budget: VerificationBudget | None = None,
+    persistence_finalizer: VerificationPersistenceFinalizer | None = None,
 ) -> GenerationValidationRun:
     if budget is not None:
         budget.check("persist")
@@ -1646,6 +1662,15 @@ def _persist_run(
     evaluated_revision = (evaluated_revision_id, evaluated_revision_hash)
     if snapshot_changed_before_lock or current_revision != evaluated_revision:
         findings = [_duplicate_unavailable_finding()]
+    plan = VerificationPersistencePlan(
+        findings=tuple(findings),
+        validator_version=VALIDATOR_VERSION,
+        ruleset_version=RULESET_VERSION,
+        feature_summary_extensions={},
+    )
+    if persistence_finalizer is not None:
+        plan = persistence_finalizer(plan)
+    findings = list(plan.findings)
     latest_run_number = session.scalar(
         select(func.max(GenerationValidationRun.run_number)).where(
             GenerationValidationRun.generated_question_draft_id == draft.id
@@ -1657,8 +1682,8 @@ def _persist_run(
         generation_job_id=draft.job_id,
         draft_revision_id=evaluated_revision_id,
         run_number=(latest_run_number or 0) + 1,
-        validator_version=VALIDATOR_VERSION,
-        ruleset_version=RULESET_VERSION,
+        validator_version=plan.validator_version,
+        ruleset_version=plan.ruleset_version,
         status=status,
         feature_summary_json={
             "finding_count": len(findings),
@@ -1668,6 +1693,7 @@ def _persist_run(
             "objective_prerequisite_signal": objective_prerequisite_signal,
             "math_semantics_signal": math_semantics_signal,
             **duplicate_feature_summary,
+            **plan.feature_summary_extensions,
         },
     )
     session.add(run)

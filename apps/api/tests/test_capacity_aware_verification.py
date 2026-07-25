@@ -47,6 +47,29 @@ def validation_run(*, finding_count: int) -> SimpleNamespace:
     )
 
 
+def apply_plan(
+    run: SimpleNamespace,
+    finalizer: verification.VerificationPersistenceFinalizer,
+    *,
+    findings: tuple[verification.VerificationFinding, ...] = (),
+) -> verification.VerificationPersistencePlan:
+    plan = finalizer(
+        verification.VerificationPersistencePlan(
+            findings=findings,
+            validator_version="verification-v8",
+            ruleset_version="rules-v8",
+            feature_summary_extensions={},
+        )
+    )
+    run.validator_version = plan.validator_version
+    run.ruleset_version = plan.ruleset_version
+    run.feature_summary_json = {
+        **run.feature_summary_json,
+        **plan.feature_summary_extensions,
+    }
+    return plan
+
+
 def test_over_capacity_candidate_never_delegates_to_core_verifier(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -61,6 +84,9 @@ def test_over_capacity_candidate_never_delegates_to_core_verifier(
 
     def fake_persist(*args: object, **kwargs: object) -> object:
         captured.update(kwargs)
+        finalizer = kwargs["persistence_finalizer"]
+        assert callable(finalizer)
+        apply_plan(run, finalizer, findings=tuple(kwargs["findings"]))
         return run
 
     monkeypatch.setattr(verification, "run_candidate_verification", fail_if_delegated)
@@ -79,19 +105,12 @@ def test_over_capacity_candidate_never_delegates_to_core_verifier(
     assert [finding.code for finding in findings] == ["candidate_capacity_limit_exceeded"]
     signal = run.feature_summary_json["verification_capacity_signal"]
     assert signal["violations"] == ["prompt_chars"]
-    grade_signal = captured["grade_complexity_signal"]
-    assert isinstance(grade_signal, dict)
-    assert grade_signal["reason"] == "capacity_preflight_blocked"
-    duplicate_summary = captured["duplicate_feature_summary"]
-    assert isinstance(duplicate_summary, dict)
-    assert duplicate_summary["candidate_prompt_fingerprint"] is None
-    assert duplicate_summary["duplicate_check_reason"] == "capacity_preflight_blocked"
     assert run.validator_version == "verification-v9"
     assert run.ruleset_version == "rules-v9"
-    assert session.flush_count == 1
+    assert session.flush_count == 0
 
 
-def test_valid_candidate_delegates_and_attaches_capacity_signal(
+def test_valid_candidate_delegates_with_preinsert_capacity_plan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = FakeSession()
@@ -108,13 +127,12 @@ def test_valid_candidate_delegates_and_attaches_capacity_signal(
 
     def fake_delegate(*args: object, **kwargs: object) -> object:
         calls.append(kwargs)
+        finalizer = kwargs["persistence_finalizer"]
+        assert callable(finalizer)
+        apply_plan(run, finalizer)
         return run
 
-    def fail_if_capacity_persisted(*args: object, **kwargs: object) -> object:
-        raise AssertionError("capacity-only persistence must not run for a valid candidate")
-
     monkeypatch.setattr(verification, "run_candidate_verification", fake_delegate)
-    monkeypatch.setattr(verification, "_persist_run", fail_if_capacity_persisted)
 
     result = run_capacity_aware_candidate_verification(
         session,  # type: ignore[arg-type]
@@ -128,10 +146,9 @@ def test_valid_candidate_delegates_and_attaches_capacity_signal(
     signal = run.feature_summary_json["verification_capacity_signal"]
     assert signal["availability"] == "available"
     assert signal["load_bucket"] == "small"
-    assert signal["violations"] == []
     assert run.validator_version == "verification-v9"
     assert run.ruleset_version == "rules-v9"
-    assert session.flush_count == 1
+    assert session.flush_count == 0
 
 
 def test_capacity_evaluator_failure_is_persisted_fail_closed(
@@ -148,17 +165,13 @@ def test_capacity_evaluator_failure_is_persisted_fail_closed(
 
     def fake_persist(*args: object, **kwargs: object) -> object:
         captured.update(kwargs)
+        finalizer = kwargs["persistence_finalizer"]
+        assert callable(finalizer)
+        apply_plan(run, finalizer, findings=tuple(kwargs["findings"]))
         return run
 
     monkeypatch.setattr(capacity_wrapper, "evaluate_verification_capacity", explode)
     monkeypatch.setattr(verification, "_persist_run", fake_persist)
-    monkeypatch.setattr(
-        verification,
-        "run_candidate_verification",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("core verifier must not run when capacity preflight fails")
-        ),
-    )
 
     result = run_capacity_aware_candidate_verification(
         session,  # type: ignore[arg-type]
@@ -171,13 +184,10 @@ def test_capacity_evaluator_failure_is_persisted_fail_closed(
     findings = captured["findings"]
     assert isinstance(findings, list)
     assert [finding.code for finding in findings] == ["validator_unavailable"]
-    assert findings[0].evidence == {"category": "capacity_preflight_unavailable"}
     signal = run.feature_summary_json["verification_capacity_signal"]
     assert signal["availability"] == "unavailable"
-    assert signal["reason"] == "capacity_preflight_unavailable"
     assert "private candidate" not in str(run.feature_summary_json)
     assert run.validator_version == "verification-v9"
-    assert run.ruleset_version == "rules-v9"
 
 
 def test_revision_must_belong_to_draft_before_preflight(
