@@ -159,7 +159,7 @@ class _RecoveringLanguageGrader:
     def grade(self, *args: object, **kwargs: object) -> object:
         self.calls += 1
         if self.calls == 1:
-            raise RuntimeError("synthetic warmup")
+            raise evidence.GraderRequestTimeoutError("language")
         return object()
 
 
@@ -207,3 +207,54 @@ def test_language_tool_warmup_uses_check_endpoint(
     request = captured["request"]
     assert getattr(request, "full_url").endswith("/v2/check")
     assert captured["timeout"] == 120
+
+
+class _CapturingLanguageGrader:
+    def __init__(self) -> None:
+        self.answer_json: dict[str, object] | None = None
+
+    def grade(
+        self,
+        question_type: str,
+        rule_json: dict[str, object],
+        answer_json: dict[str, object],
+        *,
+        policy_version: str | None = None,
+    ) -> object:
+        self.answer_json = answer_json
+        return object()
+
+
+def test_language_dependency_readiness_uses_text_v1_envelope() -> None:
+    grader = _CapturingLanguageGrader()
+
+    evidence._wait_for_language_dependency(  # type: ignore[arg-type]
+        grader,
+        timeout_seconds=1,
+    )
+
+    assert grader.answer_json == {
+        "format": "text-v1",
+        "text": "I travelled by train.",
+    }
+
+
+class _InvalidContractGrader:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def grade(self, *args: object, **kwargs: object) -> object:
+        self.calls += 1
+        raise ValueError("invalid local adapter contract")
+
+
+def test_language_dependency_readiness_does_not_mask_contract_errors() -> None:
+    grader = _InvalidContractGrader()
+
+    with pytest.raises(ValueError, match="invalid local adapter contract"):
+        evidence._wait_for_language_dependency(  # type: ignore[arg-type]
+            grader,
+            timeout_seconds=1,
+        )
+
+    assert grader.calls == 1

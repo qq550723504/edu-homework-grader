@@ -17,6 +17,7 @@ from typing import Mapping
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+import httpx
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import Session
 
@@ -31,7 +32,7 @@ from .budget_aware_verification import (
     BUDGET_AWARE_VALIDATOR_VERSION,
     run_budget_aware_candidate_verification,
 )
-from .grader import HttpGraderClient
+from .grader import GraderRequestTimeoutError, HttpGraderClient
 from .verification_budget import VERIFICATION_BUDGET_RULESET_VERSION
 from .verification_capacity import (
     MAX_CANDIDATE_BYTES,
@@ -423,11 +424,11 @@ def _wait_for_language_dependency(
                     "accepted_answers": ["I travelled by train."],
                     "max_score": 1,
                 },
-                {"text": "I travelled by train."},
+                {"format": "text-v1", "text": "I travelled by train."},
                 policy_version="1",
             )
             return
-        except Exception:
+        except (GraderRequestTimeoutError, httpx.HTTPError):
             time.sleep(1)
     raise RuntimeError("language dependency did not recover")
 
