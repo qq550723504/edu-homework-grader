@@ -45,8 +45,27 @@ class SemanticSimilarityResult:
 class HttpGraderClient:
     """Synchronous adapter for the internal deterministic Grader service."""
 
-    def __init__(self, base_url: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        request_timeout_seconds: float | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
+        timeout = (
+            settings.grader_request_timeout_seconds
+            if request_timeout_seconds is None
+            else request_timeout_seconds
+        )
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, int | float)
+            or not math.isfinite(timeout)
+            or timeout <= 0
+            or timeout > 60
+        ):
+            raise ValueError("grader request timeout must be finite and between 0 and 60 seconds")
+        self.request_timeout_seconds = float(timeout)
 
     def grade(
         self,
@@ -149,7 +168,7 @@ class HttpGraderClient:
             response = httpx.post(
                 f"{self.base_url}{path}",
                 json=payload,
-                timeout=settings.grader_request_timeout_seconds,
+                timeout=self.request_timeout_seconds,
             )
         except httpx.TimeoutException as error:
             raise GraderRequestTimeoutError(operation) from error
