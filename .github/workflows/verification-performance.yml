@@ -1,0 +1,81 @@
+name: Verification performance artifact
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      warmups:
+        description: Warmup runs per benchmark case
+        required: false
+        default: '1'
+      iterations:
+        description: Measured runs per benchmark case
+        required: false
+        default: '5'
+      seed:
+        description: Stable matrix ordering seed
+        required: false
+        default: '119'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verification-performance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  performance-report:
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    env:
+      WARMUPS: ${{ inputs.warmups || '1' }}
+      ITERATIONS: ${{ inputs.iterations || '5' }}
+      SEED: ${{ inputs.seed || '119' }}
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      OUTPUT_DIR: artifacts/verification-performance
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Install Python packages
+        run: make install-python
+
+      - name: Generate observational performance report
+        id: benchmark
+        continue-on-error: true
+        run: |
+          VERIFICATION_PERFORMANCE_SOURCE_REVISION="$SOURCE_SHA" \
+            make verification-performance \
+              OUTPUT="$OUTPUT_DIR" \
+              WARMUPS="$WARMUPS" \
+              ITERATIONS="$ITERATIONS" \
+              SEED="$SEED"
+
+      - name: Publish report summary
+        if: always()
+        run: |
+          if [[ -s "$OUTPUT_DIR/verification-performance-v1.md" ]]; then
+            cat "$OUTPUT_DIR/verification-performance-v1.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Verification performance report was not generated.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ "${{ steps.benchmark.outcome }}" != 'success' ]]; then
+            echo '' >> "$GITHUB_STEP_SUMMARY"
+            echo '> The observational benchmark reported a failure. This workflow is intentionally non-blocking; investigate the artifact and normal CI tests.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload performance artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-performance-v1-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/verification-performance
+          if-no-files-found: warn
+          retention-days: 14

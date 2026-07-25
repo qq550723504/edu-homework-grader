@@ -1,4 +1,4 @@
-.PHONY: install-python test lint format ruff-version-check api-test api-lint api-migrate question-test calibration-report ai-evaluation ai-evaluation-operational verification-regression verification-performance docs-check web-install web-test web-build web-e2e dev down
+.PHONY: install-python test lint format ruff-version-check api-test api-lint api-migrate question-test calibration-report ai-evaluation ai-evaluation-operational verification-regression verification-performance verification-performance-compare docs-check web-install web-test web-build web-e2e dev down
 
 RUFF_CONFIG := ruff.toml
 RUFF_VERSION := 0.16.0
@@ -41,6 +41,14 @@ verification-performance:
 		--warmups "$(or $(WARMUPS),1)" \
 		--iterations "$(or $(ITERATIONS),5)" \
 		--seed "$(or $(SEED),119)"
+
+verification-performance-compare:
+	test -n "$(BASELINE)" || (echo "BASELINE=/path/to/verification-performance-v1.json is required" >&2; exit 1)
+	test -n "$(CANDIDATE)" || (echo "CANDIDATE=/path/to/verification-performance-v1.json is required" >&2; exit 1)
+	python -m edu_grader_api.services.verification_performance_compare \
+		"$(BASELINE)" \
+		"$(CANDIDATE)" \
+		--output-dir "$(or $(OUTPUT),artifacts/verification-performance-comparison)"
 
 docs-check:
 	python scripts/check_docs_status.py
