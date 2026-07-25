@@ -1,0 +1,362 @@
+name: PR 110 LanguageTool timeout integrator
+
+on:
+  pull_request:
+    types: [opened, reopened]
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    if: github.head_ref == 'agent/languagetool-timeout-v1'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/languagetool-timeout-v1
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Implement stable LanguageTool timeout propagation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"marker missing in {path}: {old[:100]!r}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          dependencies_path = "services/grader/src/edu_grader/english_dependencies.py"
+          replace_once(
+              dependencies_path,
+              '''class EnglishDependencyError(RuntimeError):
+              """Raised when an optional English scoring dependency cannot provide a safe signal."""
+
+
+          @dataclass(frozen=True)
+          ''',
+              '''class EnglishDependencyError(RuntimeError):
+              """Raised when an optional English scoring dependency cannot provide a safe signal."""
+
+
+          class EnglishDependencyTimeoutError(EnglishDependencyError):
+              """Stable timeout subtype without transport, URL, or payload diagnostics."""
+
+
+          @dataclass(frozen=True)
+          ''',
+          )
+          replace_once(
+              dependencies_path,
+              '''        except (httpx.HTTPError, OSError, ValueError) as error:
+                      raise EnglishDependencyError("LanguageTool is unavailable.") from error
+          ''',
+              '''        except httpx.TimeoutException as error:
+                      raise EnglishDependencyTimeoutError("LanguageTool timed out.") from error
+                  except (httpx.HTTPError, OSError, ValueError) as error:
+                      raise EnglishDependencyError("LanguageTool is unavailable.") from error
+          ''',
+          )
+
+          orchestrator_path = "services/grader/src/edu_grader/english_orchestrator.py"
+          replace_once(
+              orchestrator_path,
+              '''    EnglishDependencyError,
+              GrammarChecker,
+          ''',
+              '''    EnglishDependencyError,
+              EnglishDependencyTimeoutError,
+              GrammarChecker,
+          ''',
+          )
+          replace_once(
+              orchestrator_path,
+              '''        except EnglishDependencyError as error:
+                      return _review_result("grammar_dependency", str(error), max_score=max_score)
+          ''',
+              '''        except EnglishDependencyTimeoutError:
+                      return _review_result(
+                          "grammar_dependency_timeout",
+                          "LanguageTool timed out.",
+                          max_score=max_score,
+                          signals=[{"kind": "dependency_timeout", "dependency": "language"}],
+                      )
+                  except EnglishDependencyError as error:
+                      return _review_result("grammar_dependency", str(error), max_score=max_score)
+          ''',
+          )
+          replace_once(
+              orchestrator_path,
+              '''def _review_result(code: str, message: str, *, max_score: float = 1.0) -> GradingResult:
+              return GradingResult(
+          ''',
+              '''def _review_result(
+              code: str,
+              message: str,
+              *,
+              max_score: float = 1.0,
+              signals: list[dict[str, object]] | None = None,
+          ) -> GradingResult:
+              return GradingResult(
+          ''',
+          )
+          replace_once(
+              orchestrator_path,
+              '''        feedback=[Feedback(type="dependency", message=message)],
+                  requires_review=True,
+          ''',
+              '''        feedback=[Feedback(type="dependency", message=message)],
+                  signals=signals or [],
+                  requires_review=True,
+          ''',
+          )
+
+          adapter_path = "apps/api/src/edu_grader_api/services/grader.py"
+          replace_once(
+              adapter_path,
+              '''        if not isinstance(data, dict):
+                      raise ValueError("grader response must be an object")
+                  return GradeResult(
+          ''',
+              '''        if not isinstance(data, dict):
+                      raise ValueError("grader response must be an object")
+                  timeout_operation = _dependency_timeout_operation(data.get("signals"))
+                  if timeout_operation is not None:
+                      raise GraderRequestTimeoutError(timeout_operation)
+                  return GradeResult(
+          ''',
+          )
+          replace_once(
+              adapter_path,
+              '''def _error_payload(error: httpx.HTTPStatusError) -> dict[str, object]:
+          ''',
+              '''def _dependency_timeout_operation(value: object) -> str | None:
+              if not isinstance(value, list):
+                  return None
+              for signal in value:
+                  if not isinstance(signal, dict) or signal.get("kind") != "dependency_timeout":
+                      continue
+                  dependency = signal.get("dependency")
+                  if dependency == "language":
+                      return dependency
+              return None
+
+
+          def _error_payload(error: httpx.HTTPStatusError) -> dict[str, object]:
+          ''',
+          )
+
+          wrapper_path = "apps/api/src/edu_grader_api/services/budget_aware_verification.py"
+          replace_once(
+              wrapper_path,
+              'BUDGET_AWARE_VALIDATOR_VERSION = "verification-v11"\nBUDGET_AWARE_RULESET_VERSION = "rules-v11"\n',
+              'BUDGET_AWARE_VALIDATOR_VERSION = "verification-v12"\nBUDGET_AWARE_RULESET_VERSION = "rules-v12"\n',
+          )
+
+          dependencies_tests = Path("services/grader/tests/test_english_dependencies.py")
+          dependencies_text = dependencies_tests.read_text(encoding="utf-8")
+          dependencies_text = dependencies_text.replace(
+              "import pytest\n",
+              "import httpx\nimport pytest\n",
+              1,
+          )
+          dependencies_text = dependencies_text.replace(
+              "    EnglishDependencyError,\n",
+              "    EnglishDependencyError,\n    EnglishDependencyTimeoutError,\n",
+              1,
+          )
+          dependencies_text += dedent('''
+
+
+              def test_languagetool_preserves_timeout_as_stable_subtype() -> None:
+                  def timeout_post(*args: object, **kwargs: object) -> object:
+                      raise httpx.ReadTimeout("private transport diagnostic")
+
+                  client = LanguageToolClient(
+                      "http://languagetool:8010/v2",
+                      timeout_seconds=1,
+                      post=timeout_post,
+                  )
+
+                  with pytest.raises(EnglishDependencyTimeoutError, match="LanguageTool timed out"):
+                      client.check("private candidate text")
+              ''')
+          dependencies_tests.write_text(dependencies_text, encoding="utf-8")
+
+          orchestrator_tests = Path("services/grader/tests/test_english_orchestrator.py")
+          orchestrator_text = orchestrator_tests.read_text(encoding="utf-8")
+          orchestrator_text = orchestrator_text.replace(
+              "from edu_grader.english_dependencies import GrammarMatch, StaticSimilarity\n",
+              "from edu_grader.english_dependencies import (\n"
+              "    EnglishDependencyTimeoutError,\n"
+              "    GrammarMatch,\n"
+              "    StaticSimilarity,\n"
+              ")\n",
+              1,
+          )
+          orchestrator_text += dedent('''
+
+
+              def test_e3_emits_only_stable_language_timeout_signal() -> None:
+                  class TimeoutGrammarChecker:
+                      def check(self, text: str) -> list[GrammarMatch]:
+                          raise EnglishDependencyTimeoutError("private upstream timeout details")
+
+                  result = grade_english(
+                      {
+                          "question_type": "E3",
+                          "policy_version": "1",
+                          "rule": {"grammar_feedback_required": True, "max_score": 1},
+                          "answer": {"answer": "private candidate text"},
+                      },
+                      grammar_checker=TimeoutGrammarChecker(),
+                      similarity=StaticSimilarity(0),
+                  )
+
+                  assert result.decision == "needs_review"
+                  assert result.criteria[0].code == "grammar_dependency_timeout"
+                  assert result.feedback[0].message == "LanguageTool timed out."
+                  assert result.signals == [
+                      {"kind": "dependency_timeout", "dependency": "language"}
+                  ]
+                  assert "private" not in str(result.model_dump())
+              ''')
+          orchestrator_tests.write_text(orchestrator_text, encoding="utf-8")
+
+          adapter_tests = dedent('''
+              from __future__ import annotations
+
+              import pytest
+
+              from edu_grader_api.services import grader as adapter
+              from edu_grader_api.services.grader import HttpGraderClient
+              from edu_grader_api.services.verification_budget import (
+                  BudgetedGraderClient,
+                  VerificationBudget,
+                  VerificationDependencyTimeout,
+              )
+
+
+              class FakeResponse:
+                  def raise_for_status(self) -> None:
+                      return None
+
+                  def json(self) -> dict[str, object]:
+                      return {
+                          "decision": "needs_review",
+                          "score": 0,
+                          "grader_version": "test-v1",
+                          "signals": [
+                              {"kind": "dependency_timeout", "dependency": "language"}
+                          ],
+                      }
+
+
+              def test_language_timeout_signal_terminates_shared_budget(
+                  monkeypatch: pytest.MonkeyPatch,
+              ) -> None:
+                  monkeypatch.setattr(
+                      adapter.httpx,
+                      "post",
+                      lambda *args, **kwargs: FakeResponse(),
+                  )
+                  budget = VerificationBudget(total_seconds=30, clock=lambda: 10.0)
+                  client = BudgetedGraderClient(
+                      HttpGraderClient("http://localhost:8010"),
+                      budget,
+                  )
+
+                  with pytest.raises(VerificationDependencyTimeout) as raised:
+                      client.grade(
+                          "E3",
+                          {"grammar_feedback_required": True, "max_score": 1},
+                          {"format": "text-v1", "text": "safe candidate"},
+                          policy_version="1",
+                      )
+
+                  assert raised.value.dependency == "language"
+                  assert budget.feature_summary() == {
+                      "availability": "available",
+                      "version": "verification-budget-v1",
+                      "total_budget_seconds": 30.0,
+                      "status": "dependency_timeout",
+                      "terminal_stage": None,
+                      "terminal_dependency": "language",
+                  }
+              ''').lstrip()
+          Path("apps/api/tests/test_grader_language_timeout.py").write_text(
+              adapter_tests,
+              encoding="utf-8",
+          )
+
+          docs_path = Path("docs/verification-budget.md")
+          docs = docs_path.read_text(encoding="utf-8")
+          docs = docs.replace(
+              "| Budget-aware production wrapper | `verification-v11` / `rules-v11` |",
+              "| Budget-aware production wrapper | `verification-v12` / `rules-v12` |",
+          )
+          docs = docs.replace(
+              "The production integration checks the budget before and after capacity preflight, before and after duplicate fingerprint/comparator database queries, before and after Normalizer, Grader and Similarity calls, and before final persistence. Independent LanguageTool propagation when the Grader does not expose that timeout remains follow-up work in #110.",
+              "The production integration checks the budget before and after capacity preflight, before and after duplicate fingerprint/comparator database queries, before and after Normalizer, Grader and Similarity calls, and before final persistence. LanguageTool transport timeouts are emitted by the Grader only as a stable `dependency_timeout` / `language` signal; the Core API maps that signal to the terminal shared-budget `language_timeout` classification.",
+          )
+          docs = docs.replace(
+              "- independent LanguageTool timeout classification when the Grader service does not expose it;\n",
+              "",
+          )
+          docs = docs.replace(
+              "Those items remain in #110 and #108.",
+              "Those items remain in #108 and later release-hardening work.",
+          )
+          docs_path.write_text(docs, encoding="utf-8")
+          PY
+
+      - name: Format, lint, and run cross-service regression
+        run: |
+          set -euo pipefail
+          make install-python >/dev/null
+          python -m ruff format \
+            services/grader/src/edu_grader/english_dependencies.py \
+            services/grader/src/edu_grader/english_orchestrator.py \
+            services/grader/tests/test_english_dependencies.py \
+            services/grader/tests/test_english_orchestrator.py \
+            apps/api/src/edu_grader_api/services/grader.py \
+            apps/api/src/edu_grader_api/services/budget_aware_verification.py \
+            apps/api/tests/test_grader_language_timeout.py
+          python -m ruff check --config ruff.toml \
+            services/grader/src/edu_grader/english_dependencies.py \
+            services/grader/src/edu_grader/english_orchestrator.py \
+            services/grader/tests/test_english_dependencies.py \
+            services/grader/tests/test_english_orchestrator.py \
+            apps/api/src/edu_grader_api/services/grader.py \
+            apps/api/src/edu_grader_api/services/budget_aware_verification.py \
+            apps/api/tests/test_grader_language_timeout.py
+          python -m pytest \
+            services/grader/tests/test_english_dependencies.py \
+            services/grader/tests/test_english_orchestrator.py \
+            apps/api/tests/test_grader_language_timeout.py \
+            apps/api/tests/test_budget_aware_verification.py \
+            apps/api/tests/test_verification_budget.py -q
+          git diff --check
+
+      - name: Remove one-shot workflow and push implementation
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/pr110-language-timeout-integrator.yml
+          git add -A
+          git commit -m 'feat: propagate stable LanguageTool timeouts'
+          git push origin HEAD:agent/languagetool-timeout-v1
