@@ -36,6 +36,7 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
           import subprocess
 
           workflow = Path(
@@ -62,37 +63,40 @@ jobs:
               "apps/api/src/edu_grader_api/services/question_verification.py"
           )
           core = core_path.read_text(encoding="utf-8")
-          bad_plan = '''    plan = VerificationPersistencePlan(
-              findings=tuple(findings),
-              validator_version=plan.validator_version,
-              ruleset_version=plan.ruleset_version,
-              feature_summary_extensions={},
+          plan_pattern = re.compile(
+              r"(plan = VerificationPersistencePlan\(\n"
+              r"\s+findings=tuple\(findings\),\n)"
+              r"(?P<indent>\s+)validator_version=plan\.validator_version,\n"
+              r"\s+ruleset_version=plan\.ruleset_version,"
           )
-          '''
-          good_plan = '''    plan = VerificationPersistencePlan(
-              findings=tuple(findings),
-              validator_version=VALIDATOR_VERSION,
-              ruleset_version=RULESET_VERSION,
-              feature_summary_extensions={},
+
+          def restore_plan(match: re.Match[str]) -> str:
+              indent = match.group("indent")
+              return (
+                  match.group(1)
+                  + f"{indent}validator_version=VALIDATOR_VERSION,\n"
+                  + f"{indent}ruleset_version=RULESET_VERSION,"
+              )
+
+          core, plan_count = plan_pattern.subn(restore_plan, core, count=1)
+          if plan_count != 1:
+              raise SystemExit("persistence plan version pattern did not match once")
+
+          constructor_start = core.index("    run = GenerationValidationRun(")
+          prefix = core[:constructor_start]
+          constructor = core[constructor_start:]
+          default_versions = (
+              "        validator_version=VALIDATOR_VERSION,\n"
+              "        ruleset_version=RULESET_VERSION,"
           )
-          '''
-          if bad_plan not in core:
-              raise SystemExit("bad persistence plan marker missing")
-          core = core.replace(bad_plan, good_plan, 1)
-          old_constructor = '''        run_number=(latest_run_number or 0) + 1,
-              validator_version=VALIDATOR_VERSION,
-              ruleset_version=RULESET_VERSION,
-              status=status,
-          '''
-          new_constructor = '''        run_number=(latest_run_number or 0) + 1,
-              validator_version=plan.validator_version,
-              ruleset_version=plan.ruleset_version,
-              status=status,
-          '''
-          if old_constructor not in core:
-              raise SystemExit("validation run constructor marker missing")
+          final_versions = (
+              "        validator_version=plan.validator_version,\n"
+              "        ruleset_version=plan.ruleset_version,"
+          )
+          if default_versions not in constructor:
+              raise SystemExit("validation run version fields were not found")
           core_path.write_text(
-              core.replace(old_constructor, new_constructor, 1),
+              prefix + constructor.replace(default_versions, final_versions, 1),
               encoding="utf-8",
           )
           PY
