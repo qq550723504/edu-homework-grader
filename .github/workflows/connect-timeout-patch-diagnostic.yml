@@ -1,0 +1,63 @@
+name: Connect-timeout generated-source diagnostic
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  diagnose:
+    if: >-
+      github.head_ref == 'agent/dependency-connect-timeout-evidence-v1' &&
+      github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/dependency-connect-timeout-evidence-v1
+
+      - name: Apply bootstrap patch
+        id: patch
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          workflow = Path(
+              ".github/workflows/connect-timeout-evidence-bootstrap.yml"
+          ).read_text(encoding="utf-8")
+          start_marker = "            python - <<'PY'\n"
+          end_marker = "          PY\n          } 2>&1 | tee /tmp/connect-bootstrap-patch.log"
+          start = workflow.index(start_marker) + len(start_marker)
+          end = workflow.index(end_marker, start)
+          script = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in workflow[start:end].splitlines()
+          )
+          path = Path("/tmp/connect-bootstrap-patch.py")
+          path.write_text(script + "\n", encoding="utf-8")
+          subprocess.run(["python", str(path)], check=True)
+          PY
+
+      - name: Publish generated source window
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo '### Connect-timeout generated-source diagnostic'
+            echo
+            echo '```text'
+            echo "patch_outcome=${{ steps.patch.outcome }}"
+            nl -ba apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py | sed -n '630,710p'
+            echo '```'
+          } > /tmp/comment.md
+          gh pr comment 127 --repo "$GITHUB_REPOSITORY" --body-file /tmp/comment.md
