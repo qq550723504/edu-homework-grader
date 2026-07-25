@@ -115,3 +115,19 @@ def test_call_buckets_are_stable() -> None:
     assert evidence._call_bucket(0) == "none"
     assert evidence._call_bucket(1) == "single"
     assert evidence._call_bucket(2) == "multiple"
+
+
+def test_language_timeout_catalog_is_explicit() -> None:
+    assert evidence.SCENARIO_CATALOG_VERSION == 3
+    assert evidence._EXPECTED_TIMEOUT_FINDING["language"] == "language_timeout"
+    assert evidence._SCENARIO_ID["language"] == "language_read_timeout_recovery"
+
+
+def test_language_fault_proxy_control_rejects_invalid_configuration() -> None:
+    with pytest.raises(ValueError, match="invalid"):
+        evidence.LanguageToolFaultProxyControl("", request_timeout_seconds=1)
+    with pytest.raises(ValueError, match="invalid"):
+        evidence.LanguageToolFaultProxyControl(
+            "http://127.0.0.1:58012",
+            request_timeout_seconds=0,
+        )
