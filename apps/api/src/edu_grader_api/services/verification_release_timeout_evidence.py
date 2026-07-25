@@ -8,6 +8,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from ipaddress import IPv4Network, ip_network
 import os
 from pathlib import Path
 from threading import Lock, Thread
@@ -44,6 +45,7 @@ DEFAULT_DATABASE_URL = base.DEFAULT_DATABASE_URL
 DEFAULT_GRADER_URL = base.DEFAULT_GRADER_URL
 DEFAULT_LANGUAGETOOL_HEALTH_URL = base.DEFAULT_LANGUAGETOOL_HEALTH_URL
 DEFAULT_LANGUAGE_FAULT_PROXY_URL = "http://127.0.0.1:58012"
+DEFAULT_CONNECT_TIMEOUT_NETWORK = "172.30.254.0/24"
 
 DependencyKind = Literal["normalizer", "grader", "language", "similarity"]
 ProxyMode = Literal["stall", "forward"]
@@ -60,6 +62,36 @@ _SCENARIO_ID: Mapping[DependencyKind, str] = {
     "language": "language_read_timeout_recovery",
     "similarity": "similarity_read_timeout_recovery",
 }
+
+
+def _connect_timeout_hosts(
+    network_cidr: str,
+) -> tuple[dict[DependencyKind, str], dict[DependencyKind, str]]:
+    network = ip_network(network_cidr, strict=True)
+    if not isinstance(network, IPv4Network) or network.prefixlen != 24 or not network.is_private:
+        raise ValueError("connect-timeout network must be a private IPv4 /24")
+
+    scenario_offsets: Mapping[DependencyKind, int] = {
+        "normalizer": 5,
+        "grader": 6,
+        "similarity": 7,
+        "language": 8,
+    }
+    probe_offsets: Mapping[DependencyKind, int] = {
+        "normalizer": 15,
+        "grader": 16,
+        "similarity": 17,
+        "language": 18,
+    }
+    scenario_hosts = {
+        dependency: str(network.broadcast_address - offset)
+        for dependency, offset in scenario_offsets.items()
+    }
+    probe_hosts = {
+        dependency: str(network.broadcast_address - offset)
+        for dependency, offset in probe_offsets.items()
+    }
+    return scenario_hosts, probe_hosts
 
 
 class _FaultProxyHTTPServer(ThreadingHTTPServer):
@@ -267,6 +299,7 @@ def run_release_evidence(
     grader_url: str = DEFAULT_GRADER_URL,
     languagetool_health_url: str = DEFAULT_LANGUAGETOOL_HEALTH_URL,
     language_fault_proxy_url: str = DEFAULT_LANGUAGE_FAULT_PROXY_URL,
+    connect_timeout_network: str = DEFAULT_CONNECT_TIMEOUT_NETWORK,
 ) -> tuple[dict[str, object], base.ReportPaths]:
     if REPORT_VERSION != "verification-release-evidence-v1":
         raise RuntimeError("unsupported base release-evidence contract")
@@ -274,6 +307,7 @@ def run_release_evidence(
         raise ValueError("release evidence requires at least two repetitions")
     if not compose_file.is_file():
         raise ValueError("release evidence compose file does not exist")
+    _connect_timeout_hosts(connect_timeout_network)
 
     repetition_reports: list[dict[str, object]] = []
     environment: dict[str, object] = base.runtime_environment()
@@ -779,6 +813,13 @@ def _parser() -> argparse.ArgumentParser:
             DEFAULT_LANGUAGE_FAULT_PROXY_URL,
         ),
     )
+    parser.add_argument(
+        "--connect-timeout-network",
+        default=os.environ.get(
+            "RELEASE_EVIDENCE_CONNECT_TIMEOUT_NETWORK",
+            DEFAULT_CONNECT_TIMEOUT_NETWORK,
+        ),
+    )
     return parser
 
 
@@ -792,6 +833,7 @@ def main(argv: list[str] | None = None) -> int:
         grader_url=arguments.grader_url,
         languagetool_health_url=arguments.languagetool_health_url,
         language_fault_proxy_url=arguments.language_fault_proxy_url,
+        connect_timeout_network=arguments.connect_timeout_network,
     )
     print(paths.json_path)
     print(paths.markdown_path)

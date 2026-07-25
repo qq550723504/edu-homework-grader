@@ -123,6 +123,30 @@ def test_language_timeout_catalog_is_explicit() -> None:
     assert evidence._SCENARIO_ID["language"] == "language_read_timeout_recovery"
 
 
+def test_connect_timeout_hosts_use_distinct_private_bridge_addresses() -> None:
+    scenario_hosts, probe_hosts = evidence._connect_timeout_hosts("172.30.254.0/24")
+
+    assert scenario_hosts == {
+        "normalizer": "172.30.254.250",
+        "grader": "172.30.254.249",
+        "similarity": "172.30.254.248",
+        "language": "172.30.254.247",
+    }
+    assert probe_hosts == {
+        "normalizer": "172.30.254.240",
+        "grader": "172.30.254.239",
+        "similarity": "172.30.254.238",
+        "language": "172.30.254.237",
+    }
+    assert not set(scenario_hosts.values()) & set(probe_hosts.values())
+
+
+@pytest.mark.parametrize("network", ["172.30.254.0/25", "8.8.8.0/24"])
+def test_connect_timeout_hosts_reject_invalid_bridge_network(network: str) -> None:
+    with pytest.raises(ValueError, match="private IPv4 /24"):
+        evidence._connect_timeout_hosts(network)
+
+
 def test_language_fault_proxy_control_rejects_invalid_configuration() -> None:
     with pytest.raises(ValueError, match="invalid"):
         evidence.LanguageToolFaultProxyControl("", request_timeout_seconds=1)

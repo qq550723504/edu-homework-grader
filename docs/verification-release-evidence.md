@@ -19,6 +19,8 @@ The Core API code runs from the checked-out package on the GitHub runner and con
 
 Every repetition uses a unique Compose project and a fresh PostgreSQL volume. The runner performs at least two complete repetitions and removes containers and volumes after each repetition.
 
+The Compose project uses an isolated private `/24` bridge. The runner accepts only a private IPv4 `/24` for this network, and CI reserves four distinct unassigned addresses for the forthcoming Normalizer, Grader, LanguageTool and Similarity connection-timeout scenarios. The CIDR may be overridden through `RELEASE_EVIDENCE_CONNECT_TIMEOUT_NETWORK`; network addresses are never written to the evidence reports.
+
 ## Scenario catalog v3
 
 ### Capacity candidate bytes

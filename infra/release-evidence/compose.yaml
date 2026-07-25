@@ -74,3 +74,9 @@ services:
     depends_on:
       language-fault-proxy:
         condition: service_healthy
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: "${RELEASE_EVIDENCE_CONNECT_TIMEOUT_NETWORK:-172.30.254.0/24}"
