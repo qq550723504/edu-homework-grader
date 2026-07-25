@@ -16,6 +16,11 @@ from . import question_verification as verification
 from .grade_complexity import unavailable_grade_complexity_signal
 from .math_semantics import unavailable_math_semantics_signal
 from .objective_prerequisites import unavailable_objective_prerequisite_signal
+from .verification_budget import (
+    VerificationBudget,
+    VerificationBudgetExceeded,
+    VerificationDependencyTimeout,
+)
 from .verification_capacity import (
     evaluate_verification_capacity,
     unavailable_verification_capacity_signal,
@@ -31,15 +36,23 @@ def run_capacity_aware_candidate_verification(
     draft: GeneratedQuestionDraft,
     revision: GeneratedQuestionDraftRevision,
     grader_client: verification.VerificationGraderClient,
+    budget: VerificationBudget | None = None,
 ) -> GenerationValidationRun:
     """Reject over-capacity candidates before recursive or external work."""
 
     if revision.generated_question_draft_id != draft.id:
         raise ValueError("candidate revision does not belong to the draft")
 
+    if budget is not None:
+        budget.check("capacity_preflight")
+
     try:
         capacity = evaluate_verification_capacity(revision.candidate_json)
+    except (VerificationBudgetExceeded, VerificationDependencyTimeout):
+        raise
     except Exception:
+        if budget is not None:
+            budget.check("capacity_preflight")
         run = _persist_capacity_failure(
             session,
             draft=draft,
@@ -56,8 +69,12 @@ def run_capacity_aware_candidate_verification(
             ],
             signal=unavailable_verification_capacity_signal("capacity_preflight_unavailable"),
             reason="capacity_preflight_unavailable",
+            budget=budget,
         )
         return run
+
+    if budget is not None:
+        budget.check("capacity_preflight")
 
     capacity_signal = capacity.feature_summary()
     if not capacity.blocked:
@@ -66,6 +83,7 @@ def run_capacity_aware_candidate_verification(
             draft=draft,
             revision=revision,
             grader_client=grader_client,
+            budget=budget,
         )
         _finalize_capacity_evidence(session, run=run, signal=capacity_signal)
         return run
@@ -86,6 +104,7 @@ def run_capacity_aware_candidate_verification(
         findings=findings,
         signal=capacity_signal,
         reason="capacity_preflight_blocked",
+        budget=budget,
     )
 
 
@@ -97,6 +116,7 @@ def _persist_capacity_failure(
     findings: list[verification.VerificationFinding],
     signal: dict[str, object],
     reason: str,
+    budget: VerificationBudget | None = None,
 ) -> GenerationValidationRun:
     run = verification._persist_run(
         session,
@@ -109,6 +129,7 @@ def _persist_capacity_failure(
         grade_complexity_signal=unavailable_grade_complexity_signal(reason),
         objective_prerequisite_signal=unavailable_objective_prerequisite_signal(reason),
         math_semantics_signal=unavailable_math_semantics_signal(reason),
+        budget=budget,
     )
     _finalize_capacity_evidence(session, run=run, signal=signal)
     return run

@@ -20,7 +20,7 @@ Capacity limits bound the amount of work. The timeout budget prevents a slow or 
 | --- | --- |
 | Core deterministic validator | `verification-v8` / `rules-v8` |
 | Capacity-aware wrapper | `verification-v9` / `rules-v9` |
-| Budget-aware production wrapper | `verification-v10` / `rules-v10` |
+| Budget-aware production wrapper | `verification-v11` / `rules-v11` |
 | Capacity rules | `verification-capacity-v1` |
 | Timeout budget rules | `verification-budget-v1` |
 
@@ -57,7 +57,7 @@ It recognizes these dependency identifiers:
 - `language`
 - `similarity`
 
-The initial production integration checks the budget before and after Normalizer, Grader and Similarity calls, and again before final persistence. Additional explicit duplicate-query and LanguageTool stage boundaries remain follow-up work in #110.
+The production integration checks the budget before and after capacity preflight, before and after duplicate fingerprint/comparator database queries, before and after Normalizer, Grader and Similarity calls, and before final persistence. Independent LanguageTool propagation when the Grader does not expose that timeout remains follow-up work in #110.
 
 ## Findings
 

@@ -35,8 +35,8 @@ from .verification_budget import (
 )
 from .verification_capacity import unavailable_verification_capacity_signal
 
-BUDGET_AWARE_VALIDATOR_VERSION = "verification-v10"
-BUDGET_AWARE_RULESET_VERSION = "rules-v10"
+BUDGET_AWARE_VALIDATOR_VERSION = "verification-v11"
+BUDGET_AWARE_RULESET_VERSION = "rules-v11"
 
 
 def run_budget_aware_candidate_verification(
@@ -64,6 +64,7 @@ def run_budget_aware_candidate_verification(
             draft=draft,
             revision=revision,
             grader_client=budgeted_client,
+            budget=budget,
         )
     except VerificationBudgetExceeded as error:
         return _persist_terminal_failure(

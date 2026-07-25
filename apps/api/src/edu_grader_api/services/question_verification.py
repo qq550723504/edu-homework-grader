@@ -48,6 +48,11 @@ from .objective_prerequisites import (
 )
 from .question_fingerprints import FINGERPRINT_VERSION, PromptFingerprints, fingerprint_prompt
 from .questions import GradeResult
+from .verification_budget import (
+    VerificationBudget,
+    VerificationBudgetExceeded,
+    VerificationDependencyTimeout,
+)
 
 VALIDATOR_VERSION = "verification-v8"
 RULESET_VERSION = "rules-v8"
@@ -149,6 +154,7 @@ def run_candidate_verification(
     draft: GeneratedQuestionDraft,
     revision: GeneratedQuestionDraftRevision,
     grader_client: VerificationGraderClient,
+    budget: VerificationBudget | None = None,
 ) -> GenerationValidationRun:
     """Evaluate a candidate and append a new, immutable verification result."""
 
@@ -166,6 +172,8 @@ def run_candidate_verification(
     try:
         job = session.get(GenerationJob, draft.job_id)
         if job is not None and isinstance(prompt, str):
+            if budget is not None:
+                budget.check("duplicate_check")
             duplicate_snapshot = _capture_duplicate_snapshot(
                 session,
                 draft=draft,
@@ -173,6 +181,8 @@ def run_candidate_verification(
                 prompt=prompt,
                 threshold=duplicate_threshold,
             )
+            if budget is not None:
+                budget.check("duplicate_check")
         evaluation = _evaluate_candidate(
             session,
             draft=draft,
@@ -180,6 +190,8 @@ def run_candidate_verification(
             grader_client=grader_client,
             duplicate_snapshot=duplicate_snapshot,
         )
+    except (VerificationBudgetExceeded, VerificationDependencyTimeout):
+        raise
     except Exception:
         evaluation = _CandidateEvaluation(
             findings=[
@@ -211,6 +223,7 @@ def run_candidate_verification(
         grade_complexity_signal=evaluation.grade_complexity_signal,
         objective_prerequisite_signal=evaluation.objective_prerequisite_signal,
         math_semantics_signal=evaluation.math_semantics_signal,
+        budget=budget,
     )
 
 
@@ -1605,7 +1618,11 @@ def _persist_run(
     grade_complexity_signal: dict[str, object],
     objective_prerequisite_signal: dict[str, object],
     math_semantics_signal: dict[str, object],
+    budget: VerificationBudget | None = None,
 ) -> GenerationValidationRun:
+    if budget is not None:
+        budget.check("persist")
+
     snapshot_changed_before_lock = draft.current_revision_id != evaluated_revision_id
 
     session.flush()
