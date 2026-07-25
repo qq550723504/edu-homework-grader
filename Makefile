@@ -1,4 +1,4 @@
-.PHONY: install-python test lint format ruff-version-check api-test api-lint api-migrate question-test calibration-report ai-evaluation ai-evaluation-operational verification-regression verification-performance verification-performance-compare docs-check web-install web-test web-build web-e2e dev down
+.PHONY: install-python test lint format ruff-version-check api-test api-lint api-migrate question-test calibration-report ai-evaluation ai-evaluation-operational verification-regression verification-performance verification-performance-compare verification-release-evidence docs-check web-install web-test web-build web-e2e dev down
 
 RUFF_CONFIG := ruff.toml
 RUFF_VERSION := 0.16.0
@@ -49,6 +49,12 @@ verification-performance-compare:
 		"$(BASELINE)" \
 		"$(CANDIDATE)" \
 		--output-dir "$(or $(OUTPUT),artifacts/verification-performance-comparison)"
+
+verification-release-evidence:
+	python -m edu_grader_api.services.verification_release_evidence \
+		--compose-file "$(or $(COMPOSE_FILE),infra/release-evidence/compose.yaml)" \
+		--output-dir "$(or $(OUTPUT),artifacts/verification-release-evidence)" \
+		--repetitions "$(or $(REPETITIONS),2)"
 
 docs-check:
 	python scripts/check_docs_status.py
