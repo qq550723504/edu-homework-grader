@@ -2,7 +2,7 @@ import hashlib
 import hmac
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 from sqlalchemy.orm import Session
@@ -24,9 +24,21 @@ def generate_activation_code() -> str:
     return secrets.token_urlsafe(24)
 
 
+def is_expired(expires_at: datetime | None, *, now: datetime) -> bool:
+    if expires_at is None:
+        return True
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at <= now
+
+
 class StudentProvisioner(Protocol):
     def ensure_student(self, *, school_id: str, display_name: str, activation_code: str) -> str: ...
     def disable_temporary_password(self, keycloak_user_id: str) -> None: ...
+
+
+class ActivationExpiredError(Exception):
+    """Raised before an expired activation can bind an OIDC identity."""
 
 
 @dataclass(frozen=True)
@@ -78,6 +90,25 @@ def issue_activation(
     return IssuedActivation(activation_id=activation.id, code=code)
 
 
+def ensure_activation_can_bind(session: Session, *, student: User, now: datetime) -> None:
+    """Reject an expired first login without permanently binding the identity."""
+    activation = session.scalar(
+        select(StudentActivation)
+        .where(
+            StudentActivation.student_id == student.id,
+            StudentActivation.status == StudentActivationStatus.ISSUED,
+        )
+        .with_for_update()
+    )
+    if activation is None:
+        return
+    if is_expired(activation.expires_at, now=now):
+        activation.status = StudentActivationStatus.EXPIRED
+        activation.expired_at = now
+        session.commit()
+        raise ActivationExpiredError
+
+
 def consume_pending_activation(session: Session, *, student: User, now: datetime) -> bool:
     activation = session.scalar(
         select(StudentActivation)
@@ -89,7 +120,7 @@ def consume_pending_activation(session: Session, *, student: User, now: datetime
     )
     if activation is None:
         return True
-    if activation.expires_at is None or activation.expires_at <= now:
+    if is_expired(activation.expires_at, now=now):
         activation.status = StudentActivationStatus.EXPIRED
         activation.expired_at = now
         session.commit()

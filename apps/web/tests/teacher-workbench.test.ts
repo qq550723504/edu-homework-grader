@@ -37,6 +37,14 @@ describe('teacher workbench UI contract', () => {
     expect(teacherPage).toContain('removeTeacherRosterStudent')
   })
 
+  it('offers secure per-student and batch activation-code downloads only in the roster', () => {
+    const teacherPage = readFileSync(new URL('../app/pages/teacher/index.vue', import.meta.url), 'utf8')
+
+    expect(teacherPage).toContain('为全部未激活学生生成激活码')
+    expect(teacherPage).toContain('issueRosterActivations([student])')
+    expect(teacherPage).toContain('激活码仅可下载一次')
+  })
+
   it('mounts the workbench navigation and live workspace modules on the teacher route', () => {
     const teacherPage = readFileSync(new URL('../app/pages/teacher/index.vue', import.meta.url), 'utf8')
     const overview = readFileSync(new URL('../app/components/teacher/TeacherOverview.vue', import.meta.url), 'utf8')

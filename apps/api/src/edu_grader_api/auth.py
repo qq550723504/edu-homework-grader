@@ -20,7 +20,11 @@ from .audit import append_audit_event
 from .db import get_session
 from .models import Role, Tenant, User
 from .models import utc_now
-from .services.student_activations import consume_pending_activation
+from .services.student_activations import (
+    ActivationExpiredError,
+    consume_pending_activation,
+    ensure_activation_can_bind,
+)
 from .settings import settings
 
 
@@ -137,7 +141,10 @@ def get_current_principal(
         )
     )
     if user is None:
-        user = bind_rostered_student(session, identity)
+        try:
+            user = bind_rostered_student(session, identity)
+        except ActivationExpiredError:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="activation code expired") from None
 
     if user is None:
         tenant = session.scalar(select(Tenant).where(Tenant.slug == settings.oidc_tenant_slug))
@@ -189,6 +196,8 @@ def bind_rostered_student(session: Session, identity: VerifiedIdentity) -> User 
     )
     if user is None:
         return None
+
+    ensure_activation_can_bind(session, student=user, now=utc_now())
 
     user.oidc_issuer = identity.issuer
     user.oidc_subject = identity.subject

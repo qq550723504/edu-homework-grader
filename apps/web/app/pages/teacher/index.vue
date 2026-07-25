@@ -116,13 +116,12 @@
         <label>作业学科<select v-model="assignmentForm.subject" aria-label="作业学科" :disabled="saving || Boolean(pendingAssignmentId)"><option value="mathematics">数学</option><option value="english">英语</option></select></label>
         <label>截止时间<input v-model="assignmentForm.dueAt" aria-label="截止时间" required type="datetime-local"></label>
         <label><input v-model="assignmentForm.allowLate" type="checkbox"> 允许迟交</label>
-        <section class="stack" aria-labelledby="available-questions-heading">
+      <section class="stack" aria-labelledby="available-questions-heading">
           <h3 id="available-questions-heading">可添加的已发布题目</h3>
           <article v-for="version in availableAssignmentQuestions" :key="version.id" class="assignment">
             <div><span class="subject">{{ version.question_type }} · {{ version.policy_version }} · {{ version.max_score }} 分</span><h4>{{ version.title }}</h4><p>{{ version.prompt }}</p></div>
             <button class="button secondary" :aria-label="`添加题目 ${version.question_type}`" :disabled="saving || selectedAssignmentQuestions.some((item) => item.id === version.id)" type="button" @click="addAssignmentQuestion(version)">添加</button>
           </article>
-          <button v-if="student.account_state === 'unbound'" class="button secondary" :disabled="saving" type="button" @click="issueRosterActivation(student)">生成激活码</button>
           <p v-if="availableAssignmentQuestions.length === 0" class="notice">当前学科没有可添加的已发布题目。</p>
         </section>
         <section class="stack" aria-labelledby="assignment-composition-heading">
@@ -168,10 +167,11 @@
       </div>
       <section v-if="selectedRosterClassId" class="stack" aria-labelledby="roster-students-heading">
         <h3 id="roster-students-heading">班级学生</h3>
+        <button v-if="unboundRosterStudents.length" class="button secondary" :disabled="saving" type="button" @click="issueRosterActivations(unboundRosterStudents)">为全部未激活学生生成激活码</button>
         <template v-for="student in rosterStudents" :key="student.id">
           <article class="assignment">
             <div><span class="subject">{{ student.school_id }}</span><h4>{{ student.display_name }}</h4></div>
-            <div class="actions"><span class="tag">{{ student.account_state === 'bound' ? '已绑定' : student.account_state === 'activation_issued' ? '待激活' : '未激活' }}</span><button class="button secondary" :disabled="saving" type="button" @click="beginRosterStudentEdit(student)">编辑姓名</button><button class="button secondary" :disabled="saving" type="button" @click="removeRosterStudent(student)">移出班级</button></div>
+            <div class="actions"><span class="tag">{{ student.account_state === 'bound' ? '已绑定' : student.account_state === 'activation_issued' ? '待激活' : '未激活' }}</span><button v-if="student.account_state !== 'bound'" class="button secondary" :disabled="saving" type="button" @click="issueRosterActivations([student])">生成激活码</button><button class="button secondary" :disabled="saving" type="button" @click="beginRosterStudentEdit(student)">编辑姓名</button><button class="button secondary" :disabled="saving" type="button" @click="removeRosterStudent(student)">移出班级</button></div>
           </article>
           <form v-if="editingRosterStudentId === student.id" class="stack" @submit.prevent="saveRosterStudentName(student.id)">
             <label>学生姓名<input v-model.trim="editingRosterStudentName" required maxlength="200"></label>
@@ -214,6 +214,7 @@ import { clearGuardianConsentEvidence, guardianConsentFieldsRequired, teacherErr
 const workspace = ref<{ classes: Array<{ id: string; code: string; name: string }>; questionVersions: TeacherQuestionVersion[]; assignments: TeacherAssignment[]; reviewMetrics: Record<string, unknown>; reviewTasks: Array<{ id: string }> }>({ classes: [], questionVersions: [], assignments: [], reviewMetrics: {}, reviewTasks: [] })
 const rosterClasses = ref<TeacherRosterClass[]>([])
 const rosterStudents = ref<TeacherRosterStudent[]>([])
+const unboundRosterStudents = computed(() => rosterStudents.value.filter((student) => student.account_state !== 'bound'))
 const selectedRosterClassId = ref('')
 const editingRosterStudentId = ref<string | null>(null)
 const editingRosterStudentName = ref('')
@@ -465,11 +466,11 @@ async function removeRosterStudent(student: TeacherRosterStudent) {
   finally { saving.value = false }
 }
 
-async function issueRosterActivation(student: TeacherRosterStudent) {
+async function issueRosterActivations(students: TeacherRosterStudent[]) {
   if (!selectedRosterClassId.value || !window.confirm('激活码仅可下载一次；下载后无法再次查看。是否继续？')) return
   saving.value = true
   try {
-    const result = await downloadTeacherActivationCodes(fetch, await csrfToken(), selectedRosterClassId.value, [student.id])
+    const result = await downloadTeacherActivationCodes(fetch, await csrfToken(), selectedRosterClassId.value, students.map((student) => student.id))
     const url = URL.createObjectURL(result.blob)
     Object.assign(document.createElement('a'), { href: url, download: result.filename }).click()
     URL.revokeObjectURL(url)
