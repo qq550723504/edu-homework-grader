@@ -17,7 +17,9 @@ concurrency:
 
 jobs:
   integrate:
-    if: github.head_ref == 'agent/languagetool-read-timeout-evidence-v1'
+    if: >-
+      github.head_ref == 'agent/languagetool-read-timeout-evidence-v1' &&
+      github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
@@ -119,11 +121,7 @@ jobs:
               "  grader:\n"
           )
           if self_cycle in compose_text:
-              compose_text = compose_text.replace(
-                  self_cycle,
-                  proxy_dependency,
-                  1,
-              )
+              compose_text = compose_text.replace(self_cycle, proxy_dependency, 1)
           grader_start = compose_text.index("\n  grader:\n")
           grader_prefix = compose_text[:grader_start]
           grader_section = compose_text[grader_start:]
@@ -216,7 +214,7 @@ jobs:
           } > /tmp/comment.md
           gh pr comment 126 --repo "$GITHUB_REPOSITORY" --body-file /tmp/comment.md
 
-      - name: Remove temporary workflows and push implementation
+      - name: Push non-workflow implementation files
         id: publish
         if: steps.patch.outcome == 'success' && steps.regression.outcome == 'success'
         continue-on-error: true
@@ -226,15 +224,17 @@ jobs:
           {
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            rm -f \
-              .github/workflows/languagetool-read-timeout-integrator.yml \
-              .github/workflows/languagetool-read-timeout-pr-bootstrap.yml \
-              .github/.languagetool-read-timeout-trigger
-            git add -A
+            rm -f .github/.languagetool-read-timeout-trigger
+            git add \
+              .github/.languagetool-read-timeout-trigger \
+              apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py \
+              apps/api/tests/test_languagetool_fault_proxy.py \
+              apps/api/tests/test_verification_release_timeout_evidence.py \
+              docs/verification-release-evidence.md \
+              infra/release-evidence/compose.yaml \
+              infra/release-evidence/languagetool_fault_proxy.py
             git status --short
             git commit -m 'feat: add LanguageTool read-timeout evidence'
-            git fetch origin agent/languagetool-read-timeout-evidence-v1
-            git rebase origin/agent/languagetool-read-timeout-evidence-v1
             git push origin HEAD:agent/languagetool-read-timeout-evidence-v1
           } 2>&1 | tee /tmp/languagetool-publish.log
 
