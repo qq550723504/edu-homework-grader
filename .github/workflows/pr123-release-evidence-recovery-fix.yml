@@ -94,22 +94,6 @@ jobs:
           )
           module_path.write_text(prefix + function + suffix, encoding="utf-8")
 
-          workflow_path = Path(".github/workflows/verification-release-evidence.yml")
-          workflow = workflow_path.read_text(encoding="utf-8")
-          env_marker = (
-              "      RELEASE_EVIDENCE_LANGUAGETOOL_HEALTH_URL: "
-              "http://127.0.0.1:58011/v2/languages\n"
-          )
-          if env_marker not in workflow:
-              raise SystemExit("release evidence source revision env marker missing")
-          workflow = workflow.replace(
-              env_marker,
-              env_marker
-              + "      RELEASE_EVIDENCE_SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}\n",
-              1,
-          )
-          workflow_path.write_text(workflow, encoding="utf-8")
-
           test_path = Path("apps/api/tests/test_verification_release_evidence.py")
           test = test_path.read_text(encoding="utf-8")
           import_marker = "import pytest\n\n"
@@ -152,14 +136,15 @@ jobs:
           docker compose --file infra/release-evidence/compose.yaml config --quiet
           git diff --check
 
-      - name: Remove diagnostics and push fix
+      - name: Push verified code changes
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          rm -f \
-            .github/workflows/pr123-release-evidence-recovery-fix.yml \
+          rm -f .github/pr123-recovery-diagnostic.txt
+          git add \
+            apps/api/src/edu_grader_api/services/verification_release_evidence.py \
+            apps/api/tests/test_verification_release_evidence.py \
             .github/pr123-recovery-diagnostic.txt
-          git add -A
           git commit -m 'fix: stabilize release evidence recovery'
           git fetch origin agent/verification-release-evidence-v1
           git rebase origin/agent/verification-release-evidence-v1
