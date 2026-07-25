@@ -56,6 +56,14 @@ jobs:
               line[10:] if line.startswith("          ") else line
               for line in workflow[start:end].splitlines()
           )
+          script = script.replace(
+              "'''    depends_on:\n    languagetool:\n      condition: service_healthy\n'''",
+              "'''    depends_on:\n      languagetool:\n        condition: service_healthy\n'''",
+          )
+          script = script.replace(
+              "'''    depends_on:\n    language-fault-proxy:\n      condition: service_healthy\n'''",
+              "'''    depends_on:\n      language-fault-proxy:\n        condition: service_healthy\n'''",
+          )
           patch = Path("/tmp/languagetool-read-timeout-patch.py")
           patch.write_text(script + "\n", encoding="utf-8")
           subprocess.run(["python", str(patch)], check=True)
