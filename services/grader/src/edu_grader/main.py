@@ -173,7 +173,8 @@ def semantic_similarity(request: SemanticSimilarityRequest) -> SemanticSimilarit
         scores = app.state.semantic_similarity.score_many(request.query, request.comparisons)
         if len(scores) != len(request.comparisons):
             raise EnglishDependencyError("English embedding model returned an incomplete batch.")
-        validated_scores = [_valid_similarity(score) for score in scores]
+        # Negative cosine scores carry no duplicate evidence; expose the [0, 1] duplicate-score contract.
+        validated_scores = [max(0.0, _valid_similarity(score)) for score in scores]
     except Exception as error:
         raise HTTPException(status_code=503, detail="semantic similarity is unavailable") from error
     return SemanticSimilarityResponse(
