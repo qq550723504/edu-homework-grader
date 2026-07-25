@@ -194,7 +194,10 @@ class SyntheticVerificationExecutor:
             raise RuntimeError("unexpected benchmark validator version")
         if run.ruleset_version != BUDGET_AWARE_RULESET_VERSION:
             raise RuntimeError("unexpected benchmark ruleset version")
-        if not isinstance(capacity_signal, dict) or capacity_signal.get("load_bucket") != case.load_bucket:
+        if (
+            not isinstance(capacity_signal, dict)
+            or capacity_signal.get("load_bucket") != case.load_bucket
+        ):
             raise RuntimeError("synthetic benchmark capacity bucket changed")
         if not isinstance(budget_signal, dict) or budget_signal.get("status") != "completed":
             raise RuntimeError("synthetic benchmark budget did not complete")
