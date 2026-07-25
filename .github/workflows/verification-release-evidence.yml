@@ -1,0 +1,83 @@
+name: Verification release evidence
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/verification-release-evidence.yml"
+      - "Makefile"
+      - "apps/api/src/edu_grader_api/services/verification_release_evidence.py"
+      - "apps/api/tests/test_verification_release_evidence.py"
+      - "infra/release-evidence/**"
+      - "infra/languagetool/**"
+      - "services/grader/**"
+      - "docs/verification-release-evidence.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verification-release-evidence-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PROCESSOR_ALLOWED_HOSTS: grader,languagetool,localhost,127.0.0.1
+      GRADER_REQUEST_TIMEOUT_SECONDS: "5"
+      VERIFICATION_TOTAL_TIMEOUT_SECONDS: "30"
+      RELEASE_EVIDENCE_DATABASE_URL: postgresql+psycopg://release_evidence:release-evidence-password@127.0.0.1:55432/release_evidence
+      RELEASE_EVIDENCE_GRADER_URL: http://127.0.0.1:58010
+      RELEASE_EVIDENCE_LANGUAGETOOL_HEALTH_URL: http://127.0.0.1:58011/v2/languages
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install Python packages
+        run: make install-python
+
+      - name: Validate isolated Compose definition
+        run: docker compose --file infra/release-evidence/compose.yaml config --quiet
+
+      - name: Execute release evidence scenarios
+        id: evidence
+        continue-on-error: true
+        run: >-
+          make verification-release-evidence
+          OUTPUT=artifacts/verification-release-evidence
+          REPETITIONS=2
+
+      - name: Publish evidence summary
+        if: always()
+        run: |
+          if [[ -f artifacts/verification-release-evidence/verification-release-evidence-v1.md ]]; then
+            cat artifacts/verification-release-evidence/verification-release-evidence-v1.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Release evidence report was not produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload release evidence artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-release-evidence-v1-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/verification-release-evidence
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Record observational pull-request failure
+        if: github.event_name == 'pull_request' && steps.evidence.outcome != 'success'
+        run: echo "::warning::Release evidence is observational on pull requests; inspect the uploaded de-identified artifact."
+
+      - name: Enforce manual and release-candidate execution
+        if: github.event_name != 'pull_request' && steps.evidence.outcome != 'success'
+        run: exit 1
