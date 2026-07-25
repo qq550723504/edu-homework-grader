@@ -1,7 +1,9 @@
+import csv
+from io import StringIO
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -11,7 +13,20 @@ from ..audit import append_audit_event
 from ..auth import CurrentPrincipal
 from ..db import get_session
 from ..dependencies import require_role
-from ..models import ClassTeacher, Classroom, Enrollment, GuardianConsentStatus, Role, User
+from ..models import (
+    ClassTeacher,
+    Classroom,
+    Enrollment,
+    GuardianConsentStatus,
+    Role,
+    StudentActivation,
+    StudentActivationStatus,
+    User,
+    utc_now,
+)
+from ..services.keycloak_admin import KeycloakAdminClient
+from ..services.student_activations import StudentProvisioner, issue_activation
+from ..settings import settings
 from ..services.roster import (
     RosterRow,
     RosterValidationError,
@@ -40,6 +55,19 @@ class CreateStudentRequest(BaseModel):
 
 class UpdateStudentRequest(BaseModel):
     display_name: str = Field(min_length=1, max_length=200)
+
+
+class IssueActivationCodesRequest(BaseModel):
+    student_ids: list[UUID] = Field(min_length=1, max_length=100)
+
+
+def get_student_provisioner() -> StudentProvisioner:
+    return KeycloakAdminClient(
+        base_url=settings.keycloak_admin_base_url,
+        realm=settings.oidc_issuer.rstrip("/").rsplit("/", 1)[-1],
+        client_id=settings.keycloak_student_provisioner_client_id,
+        client_secret=settings.keycloak_student_provisioner_client_secret,
+    )
 
 
 def owned_class_or_404(session: Session, principal: CurrentPrincipal, class_id: UUID) -> Classroom:
@@ -192,10 +220,49 @@ def list_students(
                 "id": str(student.id),
                 "school_id": student.school_id,
                 "display_name": student.display_name,
+                "account_state": (
+                    "bound"
+                    if student.oidc_subject is not None
+                    else "activation_issued"
+                    if session.scalar(
+                        select(StudentActivation.id).where(
+                            StudentActivation.student_id == student.id,
+                            StudentActivation.status == StudentActivationStatus.ISSUED,
+                        )
+                    )
+                    is not None
+                    else "unbound"
+                ),
             }
             for student in students
         ]
     }
+
+
+@router.post("/classes/{class_id}/activation-codes")
+def issue_activation_codes(
+    class_id: UUID,
+    body: IssueActivationCodesRequest,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+    provisioner: Annotated[StudentProvisioner, Depends(get_student_provisioner)],
+) -> Response:
+    classroom = owned_class_or_404(session, principal, class_id)
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["school_id", "activation_code", "expires_at"])
+    for student_id in body.student_ids:
+        student, _ = enrolled_student_or_404(session, principal, class_id, student_id)
+        issued = issue_activation(
+            session, teacher=session.get(User, UUID(principal.user_id)), classroom=classroom,
+            student=student, keycloak=provisioner, now=utc_now(),
+        )
+        activation = session.get(StudentActivation, issued.activation_id)
+        writer.writerow([student.school_id, issued.code, activation.expires_at.isoformat()])
+    return Response(output.getvalue(), media_type="text/csv", headers={
+        "Cache-Control": "no-store",
+        "Content-Disposition": 'attachment; filename="student-activation-codes.csv"',
+    })
 
 
 @router.post("/classes/{class_id}/students", status_code=status.HTTP_201_CREATED)
