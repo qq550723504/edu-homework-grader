@@ -51,7 +51,7 @@ verification-performance-compare:
 		--output-dir "$(or $(OUTPUT),artifacts/verification-performance-comparison)"
 
 verification-release-evidence:
-	python -m edu_grader_api.services.verification_release_evidence \
+	python -m edu_grader_api.services.verification_release_timeout_evidence \
 		--compose-file "$(or $(COMPOSE_FILE),infra/release-evidence/compose.yaml)" \
 		--output-dir "$(or $(OUTPUT),artifacts/verification-release-evidence)" \
 		--repetitions "$(or $(REPETITIONS),2)"
