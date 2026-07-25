@@ -4,7 +4,7 @@
 
 `verification-performance-v1` creates a repeatable, non-blocking performance baseline for the production candidate-verification path.
 
-The initial report measures the real `run_budget_aware_candidate_verification` wrapper with synthetic curriculum data, an in-memory SQLite database and a deterministic, network-free Grader implementation. It does not use real students, classes, assignments, prompts or provider traffic.
+The report measures the real `run_budget_aware_candidate_verification` wrapper with synthetic curriculum data, an in-memory SQLite database and a deterministic, network-free Grader implementation. It does not use real students, classes, assignments, prompts or provider traffic.
 
 ## Matrix
 
@@ -76,9 +76,52 @@ The JSON report contains:
 
 The Markdown report presents the same contract and measurements in a reviewable table.
 
+## Baseline and candidate comparison
+
+Two version 1 JSON reports can be compared with:
+
+```bash
+make verification-performance-compare \
+  BASELINE=/path/to/baseline/verification-performance-v1.json \
+  CANDIDATE=/path/to/candidate/verification-performance-v1.json
+```
+
+The comparison writes:
+
+```text
+artifacts/verification-performance-comparison/verification-performance-comparison-v1.json
+artifacts/verification-performance-comparison/verification-performance-comparison-v1.md
+```
+
+The comparison contract:
+
+- validates both input reports and fails closed on malformed schema, inconsistent totals, invalid latency ordering or incompatible report versions;
+- requires the same matrix version and verification contract versions;
+- requires shared case identifiers to retain question type, load bucket, policy version, candidate byte count and expected status;
+- reports added and removed cases separately;
+- reports P50, P95, P99 and throughput percentage changes for comparable cases;
+- records failure-count changes;
+- treats a zero baseline as not comparable unless both values are zero;
+- applies no latency or throughput threshold and always labels the result `observational_only`.
+
+A comparison never causes failure merely because performance improved or regressed. Normal CI still blocks malformed code, schema handling and report logic through deterministic tests.
+
+## GitHub Actions artifact
+
+`.github/workflows/verification-performance.yml` runs on pull requests and manual dispatch. It:
+
+- uses the same Makefile runner and versioned report contract;
+- records the pull-request head SHA or dispatched commit SHA;
+- publishes the Markdown report to the workflow summary;
+- uploads JSON and Markdown as `verification-performance-v1-<sha>`;
+- retains the artifact for 14 days;
+- is intentionally non-blocking and has no performance thresholds.
+
+The workflow job uses `continue-on-error` so an observational benchmark failure does not replace normal CI policy. The benchmark script, schema validation, privacy guard and unit tests remain part of the regular protected Python checks.
+
 ## Privacy and safety
 
-The report writer fails closed when a report contains fields associated with educational content or internal diagnostics. Reports must not contain:
+The report and comparison writers fail closed when content contains fields associated with educational content or internal diagnostics. Outputs must not contain:
 
 - prompts, reading material or expected answers;
 - grading rules or verification assertions;
@@ -87,16 +130,15 @@ The report writer fails closed when a report contains fields associated with edu
 - student, teacher, class, assignment or submission data;
 - raw provider or dependency responses.
 
-Only synthetic case identifiers, numeric payload observations, stable statuses and environment metadata are allowed.
+Only synthetic case identifiers, numeric payload observations, stable statuses, source revisions and environment metadata are allowed.
 
 ## Current limitations
 
 Version 1 does not yet provide:
 
-- baseline-versus-candidate comparison;
-- a GitHub Actions artifact workflow;
 - blocking latency or throughput thresholds;
 - multi-process or concurrent-load measurements;
+- automatic retrieval of a historical baseline artifact;
 - real PostgreSQL, Grader or LanguageTool fault-injection evidence;
 - release-environment acceptance evidence for #31.
 
