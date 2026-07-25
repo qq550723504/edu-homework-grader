@@ -1,5 +1,6 @@
 name: Agent apply similarity contract fix
 
+# One-shot, branch-restricted workflow used to apply the reviewed contract patch.
 on:
   pull_request:
     types: [opened, reopened, synchronize]
