@@ -357,6 +357,9 @@ def run_release_evidence(
             database_url=database_url,
             grader_url=grader_url,
             languagetool_health_url=languagetool_health_url,
+            compose_environment={
+                "RELEASE_EVIDENCE_LANGUAGE_CONNECT_TIMEOUT_HOST": connect_hosts["language"],
+            },
         )
         repetition_report, discovered_environment = _run_repetition(
             context,
