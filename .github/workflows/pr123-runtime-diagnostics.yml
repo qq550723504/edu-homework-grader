@@ -45,7 +45,7 @@ jobs:
       - name: Install Python packages
         run: make install-python
 
-      - name: Execute stages independently
+      - name: Execute PostgreSQL stages independently
         id: diagnose
         continue-on-error: true
         shell: bash
@@ -55,6 +55,7 @@ jobs:
           import os
 
           from edu_grader_api.services import verification_release_evidence as evidence
+          from edu_grader_api.services.grader import HttpGraderClient
 
 
           def safe_error(error: Exception) -> str:
@@ -75,6 +76,28 @@ jobs:
               return ":".join(parts)
 
 
+          def seed_case(session, *, question_type: str, ordinal: int, oversize: bool):
+              candidate = evidence._base_candidate(question_type)
+              if oversize:
+                  candidate["release_evidence_padding"] = "x" * (
+                      evidence.MAX_CANDIDATE_BYTES + 4096
+                  )
+              capacity = evidence.evaluate_verification_capacity(candidate)
+              bucket = capacity.load_bucket
+              case = evidence.BenchmarkCase(
+                  case_id=f"diagnostic-{question_type.lower()}-{ordinal}",
+                  question_type=question_type,
+                  load_bucket=bucket,
+                  policy_version="1",
+                  expected_status="blocked" if oversize else "passed",
+                  candidate_bytes=capacity.observations["candidate_bytes"],
+                  candidate=candidate,
+              )
+              draft = evidence._create_synthetic_draft(session, case=case, ordinal=ordinal)
+              session.commit()
+              return draft
+
+
           context = evidence.ComposeContext(
               compose_file=Path("infra/release-evidence/compose.yaml"),
               project_name=f"pr123-runtime-diagnostic-{os.getpid()}",
@@ -85,47 +108,91 @@ jobs:
               ],
           )
           outcomes: list[str] = []
+          capacity_draft = None
+          language_draft = None
           try:
               evidence._compose(
                   context,
                   "up",
                   "--detach",
-                  "--build",
                   "--wait",
                   "--wait-timeout",
-                  "240",
+                  "120",
                   "postgres",
-                  "languagetool",
-                  "grader",
               )
-              outcomes.append("compose_start=success")
+              outcomes.append("postgres_start=success")
               evidence._run_migrations(context.database_url)
               outcomes.append("database_migration=success")
-              evidence._capture_service_environment(context)
-              outcomes.append("environment_capture=success")
               with evidence._session(context.database_url) as session:
                   try:
-                      result = evidence._capacity_gate_scenario(session)
-                      outcomes.append(
-                          "capacity_scenario="
-                          + ("success" if result.get("passed") is True else "failed_result")
+                      capacity_draft = seed_case(
+                          session,
+                          question_type="E3",
+                          ordinal=1,
+                          oversize=True,
                       )
+                      outcomes.append("capacity_seed=success")
                   except Exception as error:
-                      outcomes.append(
-                          "capacity_scenario=raised:" + safe_error(error)
-                      )
+                      outcomes.append("capacity_seed=raised:" + safe_error(error))
                       session.rollback()
+
+                  if capacity_draft is not None:
+                      try:
+                          revision = evidence._revision(session, capacity_draft)
+                          run = evidence.run_budget_aware_candidate_verification(
+                              session,
+                              draft=capacity_draft,
+                              revision=revision,
+                              grader_client=HttpGraderClient("http://127.0.0.1:9"),
+                          )
+                          session.commit()
+                          outcomes.append(
+                              "capacity_verify="
+                              + ("success" if run.status.value == "blocked" else "failed_result")
+                          )
+                      except Exception as error:
+                          outcomes.append("capacity_verify=raised:" + safe_error(error))
+                          session.rollback()
+
                   try:
-                      result = evidence._language_recovery_scenario(session, context)
-                      outcomes.append(
-                          "language_recovery_scenario="
-                          + ("success" if result.get("passed") is True else "failed_result")
+                      language_draft = seed_case(
+                          session,
+                          question_type="E3",
+                          ordinal=2,
+                          oversize=False,
                       )
+                      outcomes.append("language_seed=success")
                   except Exception as error:
-                      outcomes.append(
-                          "language_recovery_scenario=raised:" + safe_error(error)
-                      )
+                      outcomes.append("language_seed=raised:" + safe_error(error))
                       session.rollback()
+
+              if language_draft is not None:
+                  evidence._compose(
+                      context,
+                      "up",
+                      "--detach",
+                      "--build",
+                      "--wait",
+                      "--wait-timeout",
+                      "240",
+                      "languagetool",
+                      "grader",
+                  )
+                  outcomes.append("grader_stack_start=success")
+                  with evidence._session(context.database_url) as session:
+                      stored_draft = session.get(type(language_draft), language_draft.id)
+                      if stored_draft is None:
+                          outcomes.append("language_recovery=failed_missing_draft")
+                      else:
+                          try:
+                              result = evidence._language_recovery_scenario(session, context)
+                              outcomes.append(
+                                  "language_recovery="
+                                  + ("success" if result.get("passed") is True else "failed_result")
+                              )
+                          except Exception as error:
+                              outcomes.append("language_recovery=raised:" + safe_error(error))
+                              session.rollback()
           except Exception as error:
               outcomes.append("orchestration=raised:" + safe_error(error))
           finally:
@@ -136,8 +203,6 @@ jobs:
               "\n".join(outcomes) + "\n",
               encoding="utf-8",
           )
-          if not any(line.endswith("=success") for line in outcomes if "scenario=" in line):
-              raise SystemExit(1)
           PY
 
       - name: Publish de-identified diagnostic
@@ -146,7 +211,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           {
-            echo '### PR #123 runtime diagnostic'
+            echo '### PR #123 PostgreSQL stage diagnostic'
             echo
             echo '```text'
             cat /tmp/pr123-runtime-diagnostic.txt 2>/dev/null || echo 'diagnostic output unavailable'
