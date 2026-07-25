@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from edu_grader_api.services import verification_release_evidence as evidence
 from edu_grader_api.services.verification_release_evidence import (
     JSON_FILENAME,
     MARKDOWN_FILENAME,
@@ -140,3 +141,12 @@ def test_release_evidence_requires_two_isolated_repetitions(tmp_path: Path) -> N
             output_dir=tmp_path / "artifacts",
             repetitions=1,
         )
+
+
+def test_source_revision_prefers_explicit_evidence_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RELEASE_EVIDENCE_SOURCE_REVISION", "head-sha")
+    monkeypatch.setenv("GITHUB_SHA", "merge-sha")
+
+    assert evidence._source_revision() == "head-sha"

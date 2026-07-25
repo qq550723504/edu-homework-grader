@@ -289,6 +289,7 @@ def _language_recovery_scenario(
     context: ComposeContext,
 ) -> dict[str, object]:
     candidate = _base_candidate("E3")
+    candidate["difficulty"] = 0.2
     capacity = evaluate_verification_capacity(candidate)
     _require(not capacity.blocked, "language_fixture_blocked")
     case = BenchmarkCase(
@@ -318,6 +319,8 @@ def _language_recovery_scenario(
 
     _compose(context, "start", "languagetool")
     _wait_for_http(context.languagetool_health_url, timeout_seconds=90)
+    _compose(context, "restart", "grader")
+    _wait_for_http(f"{context.grader_url}/health", timeout_seconds=90)
     recovery_run = run_budget_aware_candidate_verification(
         session,
         draft=draft,
@@ -613,7 +616,7 @@ def _cleanup(context: ComposeContext) -> dict[str, object]:
 
 
 def _source_revision() -> str:
-    configured = os.environ.get("GITHUB_SHA")
+    configured = os.environ.get("RELEASE_EVIDENCE_SOURCE_REVISION") or os.environ.get("GITHUB_SHA")
     if configured:
         return configured
     completed = subprocess.run(
