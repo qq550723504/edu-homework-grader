@@ -95,6 +95,11 @@ class Settings(BaseSettings):
     generation_governance_admin_subjects: str = ""
     audit_hmac_key: str = DEFAULT_AUDIT_HMAC_KEY
     audit_hmac_key_version: str = "dev-1"
+    student_activation_hmac_key: str = "development-only-student-activation-hmac-key"
+    student_activation_expiry_days: int = 7
+    keycloak_admin_base_url: str = "http://keycloak:8080"
+    keycloak_student_provisioner_client_id: str = "student-provisioner"
+    keycloak_student_provisioner_client_secret: str = ""
     processor_allowed_hosts: str = "grader,languagetool,localhost"
     generation_provider: str = "fake"
     openai_api_key: str = ""
