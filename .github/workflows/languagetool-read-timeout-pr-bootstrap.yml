@@ -103,6 +103,54 @@ jobs:
               test_text.replace(load_marker, load_replacement, 1),
               encoding="utf-8",
           )
+
+          compose_path = Path("infra/release-evidence/compose.yaml")
+          compose_text = compose_path.read_text(encoding="utf-8")
+          self_cycle = (
+              "    depends_on:\n"
+              "      language-fault-proxy:\n"
+              "        condition: service_healthy\n\n"
+              "  grader:\n"
+          )
+          proxy_dependency = (
+              "    depends_on:\n"
+              "      languagetool:\n"
+              "        condition: service_healthy\n\n"
+              "  grader:\n"
+          )
+          if self_cycle in compose_text:
+              compose_text = compose_text.replace(
+                  self_cycle,
+                  proxy_dependency,
+                  1,
+              )
+          grader_start = compose_text.index("\n  grader:\n")
+          grader_prefix = compose_text[:grader_start]
+          grader_section = compose_text[grader_start:]
+          grader_old_dependency = (
+              "    depends_on:\n"
+              "      languagetool:\n"
+              "        condition: service_healthy\n"
+          )
+          grader_new_dependency = (
+              "    depends_on:\n"
+              "      language-fault-proxy:\n"
+              "        condition: service_healthy\n"
+          )
+          if (
+              grader_old_dependency not in grader_section
+              and grader_new_dependency not in grader_section
+          ):
+              raise SystemExit("grader dependency marker missing")
+          compose_path.write_text(
+              grader_prefix
+              + grader_section.replace(
+                  grader_old_dependency,
+                  grader_new_dependency,
+                  1,
+              ),
+              encoding="utf-8",
+          )
           PY
           } 2>&1 | tee /tmp/languagetool-bootstrap.log
 
