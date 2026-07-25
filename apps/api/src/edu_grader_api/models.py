@@ -90,6 +90,15 @@ class GuardianConsentStatus(StrEnum):
     WITHDRAWN = "withdrawn"
 
 
+class StudentActivationStatus(StrEnum):
+    PROVISIONING = "provisioning"
+    ISSUED = "issued"
+    CONSUMED = "consumed"
+    EXPIRED = "expired"
+    REVOKED = "revoked"
+    FAILED = "failed"
+
+
 class PrivacyRequestType(StrEnum):
     ERASURE = "erasure"
 
@@ -231,6 +240,9 @@ class User(Base):
     )
     student_attempts: Mapped[list[StudentAttempt]] = relationship(back_populates="student")
     submission_receipts: Mapped[list[SubmissionReceipt]] = relationship(back_populates="student")
+    activations: Mapped[list[StudentActivation]] = relationship(
+        back_populates="student", foreign_keys="StudentActivation.student_id"
+    )
 
 
 class Classroom(Base):
@@ -250,6 +262,7 @@ class Classroom(Base):
     teachers: Mapped[list[ClassTeacher]] = relationship(back_populates="classroom")
     enrollments: Mapped[list[Enrollment]] = relationship(back_populates="classroom")
     assignments: Mapped[list[Assignment]] = relationship(back_populates="classroom")
+    student_activations: Mapped[list[StudentActivation]] = relationship(back_populates="classroom")
 
 
 class ClassTeacher(Base):
@@ -272,6 +285,43 @@ class Enrollment(Base):
 
     classroom: Mapped[Classroom] = relationship(back_populates="enrollments")
     student: Mapped[User] = relationship(back_populates="enrollments")
+
+
+class StudentActivation(Base):
+    __tablename__ = "student_activations"
+    __table_args__ = (
+        CheckConstraint(
+            "status != 'issued' OR (code_hmac IS NOT NULL AND expires_at IS NOT NULL AND keycloak_user_id IS NOT NULL)",
+            name="ck_student_activations_issued_has_credential",
+        ),
+        Index("ix_student_activations_student_status", "student_id", "status"),
+        Index("ix_student_activations_status_expires_at", "status", "expires_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    student_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    class_id: Mapped[UUID] = mapped_column(ForeignKey("classes.id"), nullable=False)
+    keycloak_user_id: Mapped[str | None] = mapped_column(String(255))
+    code_hmac: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[StudentActivationStatus] = mapped_column(
+        Enum(StudentActivationStatus, native_enum=False, values_callable=role_values), nullable=False
+    )
+    issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disclosed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failure_reason: Mapped[str | None] = mapped_column(String(200))
+    issued_by_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    request_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, default=uuid4)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+    student: Mapped[User] = relationship(back_populates="activations", foreign_keys=[student_id])
+    classroom: Mapped[Classroom] = relationship(back_populates="student_activations")
 
 
 class AuditLog(Base):
