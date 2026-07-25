@@ -2,10 +2,12 @@ import math
 import sys
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from edu_grader.english_dependencies import (
     EnglishDependencyError,
+    EnglishDependencyTimeoutError,
     LanguageToolClient,
     SentenceTransformerSimilarity,
     StaticSimilarity,
@@ -113,3 +115,17 @@ def test_sentence_transformer_similarity_rejects_empty_embeddings(tmp_path, monk
 
     with pytest.raises(EnglishDependencyError, match="could not score"):
         similarity.score_many("query", ["comparison"])
+
+
+def test_languagetool_preserves_timeout_as_stable_subtype() -> None:
+    def timeout_post(*args: object, **kwargs: object) -> object:
+        raise httpx.ReadTimeout("private transport diagnostic")
+
+    client = LanguageToolClient(
+        "http://languagetool:8010/v2",
+        timeout_seconds=1,
+        post=timeout_post,
+    )
+
+    with pytest.raises(EnglishDependencyTimeoutError, match="LanguageTool timed out"):
+        client.check("private candidate text")

@@ -14,6 +14,10 @@ class EnglishDependencyError(RuntimeError):
     """Raised when an optional English scoring dependency cannot provide a safe signal."""
 
 
+class EnglishDependencyTimeoutError(EnglishDependencyError):
+    """Stable timeout subtype without transport, URL, or payload diagnostics."""
+
+
 @dataclass(frozen=True)
 class GrammarMatch:
     offset: int
@@ -61,6 +65,8 @@ class LanguageToolClient:
             )
             response.raise_for_status()
             payload = response.json()
+        except httpx.TimeoutException as error:
+            raise EnglishDependencyTimeoutError("LanguageTool timed out.") from error
         except (httpx.HTTPError, OSError, ValueError) as error:
             raise EnglishDependencyError("LanguageTool is unavailable.") from error
         if not isinstance(payload, dict):

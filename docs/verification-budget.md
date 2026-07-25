@@ -20,7 +20,7 @@ Capacity limits bound the amount of work. The timeout budget prevents a slow or 
 | --- | --- |
 | Core deterministic validator | `verification-v8` / `rules-v8` |
 | Capacity-aware wrapper | `verification-v9` / `rules-v9` |
-| Budget-aware production wrapper | `verification-v11` / `rules-v11` |
+| Budget-aware production wrapper | `verification-v12` / `rules-v12` |
 | Capacity rules | `verification-capacity-v1` |
 | Timeout budget rules | `verification-budget-v1` |
 
@@ -57,7 +57,7 @@ It recognizes these dependency identifiers:
 - `language`
 - `similarity`
 
-The production integration checks the budget before and after capacity preflight, before and after duplicate fingerprint/comparator database queries, before and after Normalizer, Grader and Similarity calls, and before final persistence. Independent LanguageTool propagation when the Grader does not expose that timeout remains follow-up work in #110.
+The production integration checks the budget before and after capacity preflight, before and after duplicate fingerprint/comparator database queries, before and after Normalizer, Grader and Similarity calls, and before final persistence. LanguageTool transport timeouts are emitted by the Grader only as a stable `dependency_timeout` / `language` signal; the Core API maps that signal to the terminal shared-budget `language_timeout` classification.
 
 ## Findings
 
@@ -137,9 +137,8 @@ This contract does not yet claim:
 
 - hard cancellation of arbitrary Python or database work already executing;
 - a separate timeout value for every dependency;
-- independent LanguageTool timeout classification when the Grader service does not expose it;
 - P50, P95 or P99 latency objectives;
 - throughput or concurrency objectives;
 - release-environment fault-injection completion.
 
-Those items remain in #110 and #108. Performance evidence must be generated before any percentile threshold becomes a protected release gate.
+Those items remain in #108 and later release-hardening work. Performance evidence must be generated before any percentile threshold becomes a protected release gate.

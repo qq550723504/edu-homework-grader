@@ -66,6 +66,9 @@ class HttpGraderClient:
         data = response.json()
         if not isinstance(data, dict):
             raise ValueError("grader response must be an object")
+        timeout_operation = _dependency_timeout_operation(data.get("signals"))
+        if timeout_operation is not None:
+            raise GraderRequestTimeoutError(timeout_operation)
         return GradeResult(
             decision=data["decision"],
             score=data["score"],
@@ -242,6 +245,18 @@ def _mathjson_request(
             "max_score": max_score,
         },
     )
+
+
+def _dependency_timeout_operation(value: object) -> str | None:
+    if not isinstance(value, list):
+        return None
+    for signal in value:
+        if not isinstance(signal, dict) or signal.get("kind") != "dependency_timeout":
+            continue
+        dependency = signal.get("dependency")
+        if dependency == "language":
+            return dependency
+    return None
 
 
 def _error_payload(error: httpx.HTTPStatusError) -> dict[str, object]:

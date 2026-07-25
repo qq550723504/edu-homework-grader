@@ -35,8 +35,8 @@ from .verification_budget import (
 )
 from .verification_capacity import unavailable_verification_capacity_signal
 
-BUDGET_AWARE_VALIDATOR_VERSION = "verification-v11"
-BUDGET_AWARE_RULESET_VERSION = "rules-v11"
+BUDGET_AWARE_VALIDATOR_VERSION = "verification-v12"
+BUDGET_AWARE_RULESET_VERSION = "rules-v12"
 
 
 def run_budget_aware_candidate_verification(

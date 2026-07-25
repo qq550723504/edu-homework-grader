@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from .english import grade_english_rule, normalize_answer
 from .english_dependencies import (
     EnglishDependencyError,
+    EnglishDependencyTimeoutError,
     GrammarChecker,
     GrammarMatch,
     SemanticSimilarity,
@@ -52,6 +53,13 @@ def _grade_e3(request: Mapping[str, object], grammar_checker: GrammarChecker) ->
     if rule.get("grammar_feedback_required") is True:
         try:
             matches = grammar_checker.check(answer)
+        except EnglishDependencyTimeoutError:
+            return _review_result(
+                "grammar_dependency_timeout",
+                "LanguageTool timed out.",
+                max_score=max_score,
+                signals=[{"kind": "dependency_timeout", "dependency": "language"}],
+            )
         except EnglishDependencyError as error:
             return _review_result("grammar_dependency", str(error), max_score=max_score)
         feedback = [_grammar_feedback(match) for match in matches]
@@ -207,7 +215,13 @@ def _grammar_signal(match: GrammarMatch) -> dict[str, object]:
     }
 
 
-def _review_result(code: str, message: str, *, max_score: float = 1.0) -> GradingResult:
+def _review_result(
+    code: str,
+    message: str,
+    *,
+    max_score: float = 1.0,
+    signals: list[dict[str, object]] | None = None,
+) -> GradingResult:
     return GradingResult(
         decision="needs_review",
         score=0.0,
@@ -217,5 +231,6 @@ def _review_result(code: str, message: str, *, max_score: float = 1.0) -> Gradin
             Criterion(code=code, score=0.0, max_score=max_score, passed=False, evidence=message)
         ],
         feedback=[Feedback(type="dependency", message=message)],
+        signals=signals or [],
         requires_review=True,
     )

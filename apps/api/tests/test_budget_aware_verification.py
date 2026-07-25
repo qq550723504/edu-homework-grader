@@ -99,7 +99,7 @@ def validation_run(*, findings: list[object] | None = None) -> SimpleNamespace:
     )
 
 
-def test_completed_run_gets_v11_budget_signal(
+def test_completed_run_gets_v12_budget_signal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = FakeSession()
@@ -126,8 +126,8 @@ def test_completed_run_gets_v11_budget_signal(
     )
 
     assert result is run
-    assert run.validator_version == "verification-v11"
-    assert run.ruleset_version == "rules-v11"
+    assert run.validator_version == "verification-v12"
+    assert run.ruleset_version == "rules-v12"
     assert run.feature_summary_json["verification_budget_signal"] == {
         "availability": "available",
         "version": VERIFICATION_BUDGET_RULESET_VERSION,
@@ -188,7 +188,7 @@ def test_total_timeout_is_persisted_as_stable_blocking_finding(
     }
     assert "text" not in str(findings[0].evidence)
     assert persisted.status is ValidationRunStatus.BLOCKED
-    assert persisted.validator_version == "verification-v11"
+    assert persisted.validator_version == "verification-v12"
 
 
 def test_swallowed_dependency_timeout_is_added_to_existing_run(
