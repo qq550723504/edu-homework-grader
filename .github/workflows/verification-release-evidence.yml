@@ -75,31 +75,31 @@ jobs:
           )
 
           helper_marker = "\ndef _capture_service_environment("
-          helper = '''
-
-def _wait_for_language_dependency(
-    grader: HttpGraderClient,
-    *,
-    timeout_seconds: float,
-) -> None:
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        try:
-            grader.grade(
-                "E3",
-                {
-                    "grammar_feedback_required": True,
-                    "accepted_answers": ["I travelled by train."],
-                    "max_score": 1,
-                },
-                {"text": "I travelled by train."},
-                policy_version="1",
-            )
-            return
-        except Exception:
-            time.sleep(1)
-    raise RuntimeError("language dependency did not recover")
-'''
+          helper = (
+              "\n\n"
+              "def _wait_for_language_dependency(\n"
+              "    grader: HttpGraderClient,\n"
+              "    *,\n"
+              "    timeout_seconds: float,\n"
+              ") -> None:\n"
+              "    deadline = time.monotonic() + timeout_seconds\n"
+              "    while time.monotonic() < deadline:\n"
+              "        try:\n"
+              "            grader.grade(\n"
+              "                'E3',\n"
+              "                {\n"
+              "                    'grammar_feedback_required': True,\n"
+              "                    'accepted_answers': ['I travelled by train.'],\n"
+              "                    'max_score': 1,\n"
+              "                },\n"
+              "                {'text': 'I travelled by train.'},\n"
+              "                policy_version='1',\n"
+              "            )\n"
+              "            return\n"
+              "        except Exception:\n"
+              "            time.sleep(1)\n"
+              "    raise RuntimeError('language dependency did not recover')\n"
+          )
           if helper_marker not in module:
               raise SystemExit("language readiness helper marker missing")
           module = module.replace(helper_marker, helper + helper_marker, 1)
@@ -107,33 +107,27 @@ def _wait_for_language_dependency(
 
           test_path = Path("apps/api/tests/test_verification_release_evidence.py")
           test = test_path.read_text(encoding="utf-8")
-          test += '''
-
-class _RecoveringLanguageGrader:
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def grade(self, *args: object, **kwargs: object) -> object:
-        self.calls += 1
-        if self.calls == 1:
-            raise RuntimeError("synthetic warmup")
-        return object()
-
-
-def test_language_dependency_readiness_retries_without_persisting(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    grader = _RecoveringLanguageGrader()
-    monkeypatch.setattr(evidence.time, "monotonic", lambda: 0.0)
-    monkeypatch.setattr(evidence.time, "sleep", lambda seconds: None)
-
-    evidence._wait_for_language_dependency(  # type: ignore[arg-type]
-        grader,
-        timeout_seconds=1,
-    )
-
-    assert grader.calls == 2
-'''
+          test += (
+              "\n\nclass _RecoveringLanguageGrader:\n"
+              "    def __init__(self) -> None:\n"
+              "        self.calls = 0\n\n"
+              "    def grade(self, *args: object, **kwargs: object) -> object:\n"
+              "        self.calls += 1\n"
+              "        if self.calls == 1:\n"
+              "            raise RuntimeError('synthetic warmup')\n"
+              "        return object()\n\n\n"
+              "def test_language_dependency_readiness_retries_without_persisting(\n"
+              "    monkeypatch: pytest.MonkeyPatch,\n"
+              ") -> None:\n"
+              "    grader = _RecoveringLanguageGrader()\n"
+              "    monkeypatch.setattr(evidence.time, 'monotonic', lambda: 0.0)\n"
+              "    monkeypatch.setattr(evidence.time, 'sleep', lambda seconds: None)\n\n"
+              "    evidence._wait_for_language_dependency(  # type: ignore[arg-type]\n"
+              "        grader,\n"
+              "        timeout_seconds=1,\n"
+              "    )\n\n"
+              "    assert grader.calls == 2\n"
+          )
           test_path.write_text(test, encoding="utf-8")
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write("changed=true\n")
