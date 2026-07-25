@@ -13,9 +13,8 @@ import platform
 import subprocess
 import sys
 import time
-from typing import Any, Mapping
+from typing import Mapping
 from urllib.request import urlopen
-from uuid import UUID
 
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import Session
@@ -140,8 +139,7 @@ def run_release_evidence(
 
     succeeded = all(item.get("status") == "succeeded" for item in repetition_reports)
     cleanup_succeeded = all(
-        isinstance(item.get("cleanup"), Mapping)
-        and item["cleanup"].get("status") == "succeeded"  # type: ignore[index]
+        isinstance(item.get("cleanup"), Mapping) and item["cleanup"].get("status") == "succeeded"  # type: ignore[index]
         for item in repetition_reports
     )
     report: dict[str, object] = {
@@ -434,9 +432,19 @@ def render_markdown(report: Mapping[str, object]) -> str:
                     passed=scenario.get("passed", False),
                 )
             )
-    lines.extend(["", "## Cleanup", "", "| Repetition | Status | Containers removed | Volumes removed |", "| ---: | --- | --- | --- |"])
+    lines.extend(
+        [
+            "",
+            "## Cleanup",
+            "",
+            "| Repetition | Status | Containers removed | Volumes removed |",
+            "| ---: | --- | --- | --- |",
+        ]
+    )
     for repetition in repetitions:
-        if not isinstance(repetition, Mapping) or not isinstance(repetition.get("cleanup"), Mapping):
+        if not isinstance(repetition, Mapping) or not isinstance(
+            repetition.get("cleanup"), Mapping
+        ):
             continue
         cleanup = repetition["cleanup"]
         lines.append(
