@@ -27,7 +27,7 @@ jobs:
     timeout-minutes: 45
     env:
       PROCESSOR_ALLOWED_HOSTS: grader,languagetool,localhost,127.0.0.1
-      GRADER_REQUEST_TIMEOUT_SECONDS: "5"
+      GRADER_REQUEST_TIMEOUT_SECONDS: "15"
       VERIFICATION_TOTAL_TIMEOUT_SECONDS: "30"
       RELEASE_EVIDENCE_DATABASE_URL: postgresql+psycopg://release_evidence:release-evidence-password@127.0.0.1:55432/release_evidence
       RELEASE_EVIDENCE_GRADER_URL: http://127.0.0.1:58010
