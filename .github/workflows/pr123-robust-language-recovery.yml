@@ -1,0 +1,199 @@
+name: PR 123 robust language recovery
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr123-robust-language-recovery
+  cancel-in-progress: true
+
+jobs:
+  fix-and-test:
+    if: github.head_ref == 'agent/verification-release-evidence-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/verification-release-evidence-v1
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Apply robust recovery and scenario evidence
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("apps/api/src/edu_grader_api/services/verification_release_evidence.py")
+          text = path.read_text(encoding="utf-8")
+
+          old_import = "from urllib.request import urlopen\n"
+          new_import = "from urllib.parse import urlencode\nfrom urllib.request import Request, urlopen\n"
+          if old_import not in text:
+              raise SystemExit("urllib import marker missing")
+          text = text.replace(old_import, new_import, 1)
+
+          old_scenarios = (
+              "            scenarios = [\n"
+              "                _capacity_gate_scenario(session),\n"
+              "                _language_recovery_scenario(session, context),\n"
+              "            ]\n"
+          )
+          new_scenarios = (
+              "            scenarios: list[dict[str, object]] = []\n"
+              "            try:\n"
+              "                scenarios.append(_capacity_gate_scenario(session))\n"
+              "            except Exception:\n"
+              "                session.rollback()\n"
+              "                scenarios.append(\n"
+              "                    {\n"
+              "                        'scenario_id': 'capacity_candidate_bytes',\n"
+              "                        'failure_code': 'capacity_scenario_execution_failed',\n"
+              "                        'passed': False,\n"
+              "                    }\n"
+              "                )\n"
+              "            try:\n"
+              "                scenarios.append(_language_recovery_scenario(session, context))\n"
+              "            except Exception:\n"
+              "                session.rollback()\n"
+              "                scenarios.append(\n"
+              "                    {\n"
+              "                        'scenario_id': 'language_dependency_recovery',\n"
+              "                        'failure_code': 'language_recovery_execution_failed',\n"
+              "                        'passed': False,\n"
+              "                    }\n"
+              "                )\n"
+          )
+          if old_scenarios not in text:
+              raise SystemExit("scenario block marker missing")
+          text = text.replace(old_scenarios, new_scenarios, 1)
+
+          old_restore = (
+              "    _compose(context, 'start', 'languagetool')\n"
+          )
+          if old_restore not in text:
+              old_restore = (
+                  '    _compose(context, "start", "languagetool")\n'
+                  '    _wait_for_http(context.languagetool_health_url, timeout_seconds=90)\n'
+                  '    _compose(context, "restart", "grader")\n'
+                  '    _wait_for_http(f"{context.grader_url}/health", timeout_seconds=90)\n'
+                  '    _wait_for_language_dependency(grader, timeout_seconds=90)\n'
+              )
+          new_restore = (
+              '    _compose(\n'
+              '        context,\n'
+              '        "up",\n'
+              '        "--detach",\n'
+              '        "--force-recreate",\n'
+              '        "--wait",\n'
+              '        "--wait-timeout",\n'
+              '        "240",\n'
+              '        "languagetool",\n'
+              '        "grader",\n'
+              '    )\n'
+              '    _warm_language_tool(context.languagetool_health_url, timeout_seconds=120)\n'
+              '    _wait_for_http(f"{context.grader_url}/health", timeout_seconds=90)\n'
+              '    _wait_for_language_dependency(grader, timeout_seconds=120)\n'
+          )
+          if old_restore not in text:
+              raise SystemExit("restore block marker missing")
+          text = text.replace(old_restore, new_restore, 1)
+
+          helper_marker = "\ndef _wait_for_language_dependency("
+          helper = (
+              "\n\ndef _warm_language_tool(\n"
+              "    health_url: str,\n"
+              "    *,\n"
+              "    timeout_seconds: float,\n"
+              ") -> None:\n"
+              "    check_url = f\"{health_url.rsplit('/', 1)[0]}/check\"\n"
+              "    request = Request(\n"
+              "        check_url,\n"
+              "        data=urlencode(\n"
+              "            {'text': 'I travelled by train.', 'language': 'en-US'}\n"
+              "        ).encode('utf-8'),\n"
+              "        headers={'Content-Type': 'application/x-www-form-urlencoded'},\n"
+              "        method='POST',\n"
+              "    )\n"
+              "    with urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310\n"
+              "        if not 200 <= response.status < 300:\n"
+              "            raise RuntimeError('language dependency warmup failed')\n"
+          )
+          if helper_marker not in text:
+              raise SystemExit("readiness helper marker missing")
+          text = text.replace(helper_marker, helper + helper_marker, 1)
+          path.write_text(text, encoding="utf-8")
+
+          test_path = Path("apps/api/tests/test_verification_release_evidence.py")
+          test = test_path.read_text(encoding="utf-8")
+          test += (
+              "\n\nclass _WarmupResponse:\n"
+              "    status = 200\n\n"
+              "    def __enter__(self) -> '_WarmupResponse':\n"
+              "        return self\n\n"
+              "    def __exit__(self, *args: object) -> None:\n"
+              "        return None\n\n\n"
+              "def test_language_tool_warmup_uses_check_endpoint(\n"
+              "    monkeypatch: pytest.MonkeyPatch,\n"
+              ") -> None:\n"
+              "    captured: dict[str, object] = {}\n\n"
+              "    def fake_urlopen(request: object, *, timeout: float) -> _WarmupResponse:\n"
+              "        captured['request'] = request\n"
+              "        captured['timeout'] = timeout\n"
+              "        return _WarmupResponse()\n\n"
+              "    monkeypatch.setattr(evidence, 'urlopen', fake_urlopen)\n"
+              "    evidence._warm_language_tool(\n"
+              "        'http://127.0.0.1:58011/v2/languages',\n"
+              "        timeout_seconds=120,\n"
+              "    )\n\n"
+              "    request = captured['request']\n"
+              "    assert getattr(request, 'full_url').endswith('/v2/check')\n"
+              "    assert captured['timeout'] == 120\n"
+          )
+          test_path.write_text(test, encoding="utf-8")
+          PY
+
+      - name: Format, lint, and run focused regression
+        run: |
+          set -euo pipefail
+          make install-python >/dev/null
+          python -m ruff format \
+            apps/api/src/edu_grader_api/services/verification_release_evidence.py \
+            apps/api/tests/test_verification_release_evidence.py
+          python -m ruff check --fix --config ruff.toml \
+            apps/api/src/edu_grader_api/services/verification_release_evidence.py \
+            apps/api/tests/test_verification_release_evidence.py
+          python -m ruff check --config ruff.toml \
+            apps/api/src/edu_grader_api/services/verification_release_evidence.py \
+            apps/api/tests/test_verification_release_evidence.py
+          python -m pytest \
+            apps/api/tests/test_verification_release_evidence.py \
+            apps/api/tests/test_budget_aware_verification.py \
+            apps/api/tests/test_capacity_aware_verification.py -q
+          docker compose --file infra/release-evidence/compose.yaml config --quiet
+          git diff --check
+
+      - name: Push verified code changes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            apps/api/src/edu_grader_api/services/verification_release_evidence.py \
+            apps/api/tests/test_verification_release_evidence.py
+          git commit -m 'fix: warm LanguageTool before recovery verification'
+          git fetch origin agent/verification-release-evidence-v1
+          git rebase origin/agent/verification-release-evidence-v1
+          git push origin HEAD:agent/verification-release-evidence-v1
