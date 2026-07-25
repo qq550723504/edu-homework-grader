@@ -254,15 +254,23 @@ def issue_activation_codes(
     for student_id in body.student_ids:
         student, _ = enrolled_student_or_404(session, principal, class_id, student_id)
         issued = issue_activation(
-            session, teacher=session.get(User, UUID(principal.user_id)), classroom=classroom,
-            student=student, keycloak=provisioner, now=utc_now(),
+            session,
+            teacher=session.get(User, UUID(principal.user_id)),
+            classroom=classroom,
+            student=student,
+            keycloak=provisioner,
+            now=utc_now(),
         )
         activation = session.get(StudentActivation, issued.activation_id)
         writer.writerow([student.school_id, issued.code, activation.expires_at.isoformat()])
-    return Response(output.getvalue(), media_type="text/csv", headers={
-        "Cache-Control": "no-store",
-        "Content-Disposition": 'attachment; filename="student-activation-codes.csv"',
-    })
+    return Response(
+        output.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": 'attachment; filename="student-activation-codes.csv"',
+        },
+    )
 
 
 @router.post("/classes/{class_id}/students", status_code=status.HTTP_201_CREATED)

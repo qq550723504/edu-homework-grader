@@ -15,7 +15,9 @@ def test_keycloak_adapter_provisions_student_with_temporary_password() -> None:
         if request.method == "GET" and request.url.path.endswith("/users"):
             return httpx.Response(200, json=[])
         if request.method == "POST" and request.url.path.endswith("/users"):
-            return httpx.Response(201, headers={"Location": "http://keycloak:8080/admin/realms/edu-grader/users/kc-1"})
+            return httpx.Response(
+                201, headers={"Location": "http://keycloak:8080/admin/realms/edu-grader/users/kc-1"}
+            )
         if request.url.path.endswith("/roles/student"):
             return httpx.Response(200, json={"id": "student-role", "name": "student"})
         return httpx.Response(204)
@@ -31,7 +33,11 @@ def test_keycloak_adapter_provisions_student_with_temporary_password() -> None:
 
     assert result == "kc-1"
     assert any(request.url.path.endswith("/role-mappings/realm") for request in requests)
-    password_request = next(request for request in requests if request.url.path.endswith("/reset-password"))
+    password_request = next(
+        request for request in requests if request.url.path.endswith("/reset-password")
+    )
     assert json.loads(password_request.content) == {
-        "type": "password", "value": "activation-code", "temporary": True
+        "type": "password",
+        "value": "activation-code",
+        "temporary": True,
     }

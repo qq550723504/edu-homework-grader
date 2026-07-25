@@ -304,7 +304,8 @@ class StudentActivation(Base):
     keycloak_user_id: Mapped[str | None] = mapped_column(String(255))
     code_hmac: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[StudentActivationStatus] = mapped_column(
-        Enum(StudentActivationStatus, native_enum=False, values_callable=role_values), nullable=False
+        Enum(StudentActivationStatus, native_enum=False, values_callable=role_values),
+        nullable=False,
     )
     issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     disclosed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

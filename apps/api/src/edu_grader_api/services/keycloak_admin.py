@@ -35,29 +35,40 @@ class KeycloakAdminClient:
         else:
             created = self.client.post(
                 f"{self.base_url}/admin/realms/{self.realm}/users",
-                json={"username": school_id, "enabled": True, "attributes": {"school_id": [school_id]}},
+                json={
+                    "username": school_id,
+                    "enabled": True,
+                    "attributes": {"school_id": [school_id]},
+                },
                 headers=headers,
             )
             created.raise_for_status()
             user_id = created.headers["Location"].rstrip("/").rsplit("/", 1)[1]
         role = self.client.get(
-            f"{self.base_url}/admin/realms/{self.realm}/roles/{quote('student', safe='')}", headers=headers
+            f"{self.base_url}/admin/realms/{self.realm}/roles/{quote('student', safe='')}",
+            headers=headers,
         )
         role.raise_for_status()
         self.client.post(
             f"{self.base_url}/admin/realms/{self.realm}/users/{user_id}/role-mappings/realm",
-            json=[role.json()], headers=headers,
+            json=[role.json()],
+            headers=headers,
         ).raise_for_status()
         self.client.put(
             f"{self.base_url}/admin/realms/{self.realm}/users/{user_id}/reset-password",
-            json={"type": "password", "value": activation_code, "temporary": True}, headers=headers,
+            json={"type": "password", "value": activation_code, "temporary": True},
+            headers=headers,
         ).raise_for_status()
         return user_id
 
     def _access_token(self) -> str:
         response = self.client.post(
             f"{self.base_url}/realms/{self.realm}/protocol/openid-connect/token",
-            data={"grant_type": "client_credentials", "client_id": self.client_id, "client_secret": self.client_secret},
+            data={
+                "grant_type": "client_credentials",
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+            },
         )
         response.raise_for_status()
         return str(response.json()["access_token"])

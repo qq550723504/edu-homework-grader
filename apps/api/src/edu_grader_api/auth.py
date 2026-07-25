@@ -144,7 +144,9 @@ def get_current_principal(
         try:
             user = bind_rostered_student(session, identity)
         except ActivationExpiredError:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="activation code expired") from None
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="activation code expired"
+            ) from None
 
     if user is None:
         tenant = session.scalar(select(Tenant).where(Tenant.slug == settings.oidc_tenant_slug))
@@ -162,7 +164,9 @@ def get_current_principal(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="platform membership required"
         )
-    if user.role is Role.STUDENT and not consume_pending_activation(session, student=user, now=utc_now()):
+    if user.role is Role.STUDENT and not consume_pending_activation(
+        session, student=user, now=utc_now()
+    ):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="activation code expired")
     if user.tenant.slug != settings.oidc_tenant_slug:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")

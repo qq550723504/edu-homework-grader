@@ -9,7 +9,14 @@ from sqlalchemy.orm import Session
 from edu_grader_api.auth import VerifiedIdentity, get_token_verifier
 from edu_grader_api.db import Base, get_session
 from edu_grader_api.main import app
-from edu_grader_api.models import Classroom, Role, StudentActivation, StudentActivationStatus, Tenant, User
+from edu_grader_api.models import (
+    Classroom,
+    Role,
+    StudentActivation,
+    StudentActivationStatus,
+    Tenant,
+    User,
+)
 from edu_grader_api.settings import settings
 
 
@@ -115,7 +122,12 @@ def test_expired_activation_does_not_bind_a_first_student_login(
     from edu_grader_api.models import utc_now
 
     tenant = Tenant(slug="pilot", name="Pilot")
-    teacher = User(tenant=tenant, role=Role.TEACHER, display_name="Teacher", work_email="teacher@example.invalid")
+    teacher = User(
+        tenant=tenant,
+        role=Role.TEACHER,
+        display_name="Teacher",
+        work_email="teacher@example.invalid",
+    )
     classroom = Classroom(tenant=tenant, code="7A", name="Year 7 A")
     student = User(tenant=tenant, role=Role.STUDENT, school_id="S-002", display_name="Expired")
     session.add_all([tenant, teacher, classroom, student])
@@ -134,7 +146,9 @@ def test_expired_activation_does_not_bind_a_first_student_login(
         )
     )
     session.commit()
-    set_identity(client, VerifiedIdentity(issuer=ISSUER, subject="expired-subject", school_id="S-002"))
+    set_identity(
+        client, VerifiedIdentity(issuer=ISSUER, subject="expired-subject", school_id="S-002")
+    )
 
     response = client.get("/v1/me", headers={"Authorization": "Bearer test-token"})
 

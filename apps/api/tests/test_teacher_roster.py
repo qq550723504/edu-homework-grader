@@ -134,7 +134,8 @@ def test_teacher_activation_codes_endpoint_is_not_available_before_implementatio
     try:
         response = teacher_context.client.post(
             f"/v1/teacher/classes/{classroom.id}/activation-codes",
-            json={"student_ids": [str(student.id)]}, headers=auth_headers(),
+            json={"student_ids": [str(student.id)]},
+            headers=auth_headers(),
         )
     finally:
         teacher_context.client.app.dependency_overrides.pop(get_student_provisioner, None)

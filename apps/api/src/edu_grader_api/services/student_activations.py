@@ -132,10 +132,14 @@ def consume_pending_activation(session: Session, *, student: User, now: datetime
 
 
 def expire_activations(session: Session, *, keycloak: StudentProvisioner, now: datetime) -> int:
-    expired = list(session.scalars(select(StudentActivation).where(
-        StudentActivation.status == StudentActivationStatus.ISSUED,
-        StudentActivation.expires_at <= now,
-    )))
+    expired = list(
+        session.scalars(
+            select(StudentActivation).where(
+                StudentActivation.status == StudentActivationStatus.ISSUED,
+                StudentActivation.expires_at <= now,
+            )
+        )
+    )
     for activation in expired:
         if activation.keycloak_user_id:
             keycloak.disable_temporary_password(activation.keycloak_user_id)
