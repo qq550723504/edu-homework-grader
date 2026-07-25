@@ -11,6 +11,7 @@ on:
       - "apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py"
       - "apps/api/tests/test_verification_release_evidence.py"
       - "apps/api/tests/test_verification_release_timeout_evidence.py"
+      - "apps/api/tests/test_languagetool_fault_proxy.py"
       - "infra/release-evidence/**"
       - "infra/languagetool/**"
       - "services/grader/**"
@@ -34,6 +35,7 @@ jobs:
       RELEASE_EVIDENCE_DATABASE_URL: postgresql+psycopg://release_evidence:release-evidence-password@127.0.0.1:55432/release_evidence
       RELEASE_EVIDENCE_GRADER_URL: http://127.0.0.1:58010
       RELEASE_EVIDENCE_LANGUAGETOOL_HEALTH_URL: http://127.0.0.1:58011/v2/languages
+      RELEASE_EVIDENCE_LANGUAGE_FAULT_PROXY_URL: http://127.0.0.1:58012
       RELEASE_EVIDENCE_SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Check out source
