@@ -1,0 +1,98 @@
+name: LanguageTool read-timeout PR bootstrap
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: languagetool-read-timeout-pr-bootstrap
+  cancel-in-progress: true
+
+jobs:
+  integrate:
+    if: github.head_ref == 'agent/languagetool-read-timeout-evidence-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/languagetool-read-timeout-evidence-v1
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Apply embedded implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          workflow = Path(
+              ".github/workflows/languagetool-read-timeout-integrator.yml"
+          ).read_text(encoding="utf-8")
+          start_marker = "          python - <<'PY'\n"
+          end_marker = "          PY\n\n      - name: Format, lint, and run focused regression"
+          start = workflow.index(start_marker) + len(start_marker)
+          end = workflow.index(end_marker, start)
+          script = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in workflow[start:end].splitlines()
+          )
+          patch = Path("/tmp/languagetool-read-timeout-patch.py")
+          patch.write_text(script + "\n", encoding="utf-8")
+          subprocess.run(["python", str(patch)], check=True)
+          PY
+
+      - name: Format, lint, and run focused regression
+        run: |
+          set -euo pipefail
+          make install-python >/dev/null
+          python -m ruff format \
+            apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py \
+            apps/api/tests/test_verification_release_timeout_evidence.py \
+            apps/api/tests/test_languagetool_fault_proxy.py \
+            infra/release-evidence/languagetool_fault_proxy.py
+          python -m ruff check --fix --config ruff.toml \
+            apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py \
+            apps/api/tests/test_verification_release_timeout_evidence.py \
+            apps/api/tests/test_languagetool_fault_proxy.py \
+            infra/release-evidence/languagetool_fault_proxy.py
+          python -m ruff check --config ruff.toml \
+            apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py \
+            apps/api/tests/test_verification_release_timeout_evidence.py \
+            apps/api/tests/test_languagetool_fault_proxy.py \
+            infra/release-evidence/languagetool_fault_proxy.py
+          python -m pytest \
+            apps/api/tests/test_verification_release_timeout_evidence.py \
+            apps/api/tests/test_languagetool_fault_proxy.py \
+            apps/api/tests/test_verification_release_evidence.py \
+            apps/api/tests/test_budget_aware_verification.py \
+            apps/api/tests/test_verification_budget.py -q
+          docker compose --file infra/release-evidence/compose.yaml config --quiet
+          git diff --check
+
+      - name: Remove temporary workflows and push implementation
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm -f \
+            .github/workflows/languagetool-read-timeout-integrator.yml \
+            .github/workflows/languagetool-read-timeout-pr-bootstrap.yml \
+            .github/.languagetool-read-timeout-trigger
+          git add -A
+          git commit -m 'feat: add LanguageTool read-timeout evidence'
+          git push origin HEAD:agent/languagetool-read-timeout-evidence-v1
