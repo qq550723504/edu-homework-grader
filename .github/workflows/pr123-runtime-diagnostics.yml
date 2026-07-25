@@ -56,6 +56,25 @@ jobs:
 
           from edu_grader_api.services import verification_release_evidence as evidence
 
+
+          def safe_error(error: Exception) -> str:
+              parts = [type(error).__name__]
+              origin = getattr(error, "orig", None)
+              if origin is not None:
+                  parts.append(type(origin).__name__)
+                  sqlstate = getattr(origin, "sqlstate", None) or getattr(
+                      origin, "pgcode", None
+                  )
+                  if isinstance(sqlstate, str):
+                      parts.append(f"sqlstate={sqlstate}")
+                  diagnostic = getattr(origin, "diag", None)
+                  for name in ("table_name", "column_name", "constraint_name"):
+                      value = getattr(diagnostic, name, None) if diagnostic is not None else None
+                      if isinstance(value, str) and value:
+                          parts.append(f"{name}={value}")
+              return ":".join(parts)
+
+
           context = evidence.ComposeContext(
               compose_file=Path("infra/release-evidence/compose.yaml"),
               project_name=f"pr123-runtime-diagnostic-{os.getpid()}",
@@ -93,7 +112,7 @@ jobs:
                       )
                   except Exception as error:
                       outcomes.append(
-                          f"capacity_scenario=raised:{type(error).__name__}"
+                          "capacity_scenario=raised:" + safe_error(error)
                       )
                       session.rollback()
                   try:
@@ -104,12 +123,11 @@ jobs:
                       )
                   except Exception as error:
                       outcomes.append(
-                          "language_recovery_scenario=raised:"
-                          + type(error).__name__
+                          "language_recovery_scenario=raised:" + safe_error(error)
                       )
                       session.rollback()
           except Exception as error:
-              outcomes.append(f"orchestration=raised:{type(error).__name__}")
+              outcomes.append("orchestration=raised:" + safe_error(error))
           finally:
               cleanup = evidence._cleanup(context)
               outcomes.append(f"cleanup={cleanup.get('status', 'unknown')}")
