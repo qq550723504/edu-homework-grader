@@ -1,0 +1,151 @@
+name: Agent apply similarity contract fix
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/agent-apply-similarity-contract-fix.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/verification-dependency-timeout-evidence'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Apply contract and evidence diagnostics
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          grader = Path("services/grader/src/edu_grader/main.py")
+          grader_text = grader.read_text(encoding="utf-8")
+          old = "        validated_scores = [_valid_similarity(score) for score in scores]\n"
+          new = (
+              "        # Negative cosine scores carry no duplicate evidence; expose [0, 1].\n"
+              "        validated_scores = [max(0.0, _valid_similarity(score)) for score in scores]\n"
+          )
+          if grader_text.count(old) != 1:
+              raise SystemExit("unexpected semantic similarity route shape")
+          grader.write_text(grader_text.replace(old, new), encoding="utf-8")
+
+          evidence = Path(
+              "apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py"
+          )
+          evidence_text = evidence.read_text(encoding="utf-8")
+          replacements = [
+              (
+                  "        with base._session(context.database_url) as session:\n"
+                  "            scenarios: list[dict[str, object]] = []\n",
+                  "        with base._session(context.database_url) as session:\n"
+                  "            scenarios: list[dict[str, object]] = []\n"
+                  "            report[\"scenarios\"] = scenarios\n",
+              ),
+              (
+                  "            base._wait_for_http(\n"
+                  "                f\"{context.grader_url}/health\", timeout_seconds=90\n"
+                  "            )\n"
+                  "            _warm_timeout_dependencies(context.grader_url)\n"
+                  "            stall_seconds = float(settings.grader_request_timeout_seconds) + 1.0\n",
+                  "            stage = \"grader_recovery_health\"\n"
+                  "            base._wait_for_http(\n"
+                  "                f\"{context.grader_url}/health\", timeout_seconds=90\n"
+                  "            )\n"
+                  "            stage = \"dependency_warmup\"\n"
+                  "            _warm_timeout_dependencies(context.grader_url)\n"
+                  "            stage = \"dependency_timeout_scenarios\"\n"
+                  "            stall_seconds = float(settings.grader_request_timeout_seconds) + 1.0\n",
+              ),
+          ]
+          for old_value, new_value in replacements:
+              if evidence_text.count(old_value) != 1:
+                  raise SystemExit("unexpected release evidence runner shape")
+              evidence_text = evidence_text.replace(old_value, new_value)
+          evidence.write_text(evidence_text, encoding="utf-8")
+
+          test_path = Path("services/grader/tests/test_semantic_similarity_contract.py")
+          if test_path.exists():
+              raise SystemExit("semantic similarity contract test already exists")
+          test_path.write_text(
+              '''from __future__ import annotations
+
+import pytest
+
+from edu_grader.english_dependencies import StaticSimilarity
+from edu_grader.main import SemanticSimilarityRequest, app, semantic_similarity
+
+
+@pytest.mark.parametrize(
+    ("cosine_score", "duplicate_score"),
+    [
+        (-1.0, 0.0),
+        (-0.2, 0.0),
+        (0.0, 0.0),
+        (0.75, 0.75),
+        (1.0, 1.0),
+    ],
+)
+def test_semantic_similarity_route_maps_cosine_to_duplicate_score(
+    monkeypatch: pytest.MonkeyPatch,
+    cosine_score: float,
+    duplicate_score: float,
+) -> None:
+    monkeypatch.setattr(
+        app.state,
+        "semantic_similarity",
+        StaticSimilarity(cosine_score),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        app.state,
+        "embedding_dependency_version",
+        {
+            "id": "test-model",
+            "revision": "test-revision",
+            "digest": "sha256:test",
+        },
+        raising=False,
+    )
+
+    response = semantic_similarity(
+        SemanticSimilarityRequest(
+            query="Synthetic comparison query.",
+            comparisons=["Synthetic comparison peer."],
+        )
+    )
+
+    assert response.scores == [duplicate_score]
+''',
+              encoding="utf-8",
+          )
+          PY
+
+          python -m pip install --quiet ruff==0.16.0
+          python -m ruff format \
+            services/grader/src/edu_grader/main.py \
+            services/grader/tests/test_semantic_similarity_contract.py \
+            apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py
+          python -m ruff check --config ruff.toml \
+            services/grader/src/edu_grader/main.py \
+            services/grader/tests/test_semantic_similarity_contract.py \
+            apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py
+
+      - name: Commit branch update
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            services/grader/src/edu_grader/main.py \
+            services/grader/tests/test_semantic_similarity_contract.py \
+            apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py
+          git commit -m "fix: align semantic similarity score contract"
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
