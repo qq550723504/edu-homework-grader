@@ -217,19 +217,44 @@ jobs:
           gh pr comment 126 --repo "$GITHUB_REPOSITORY" --body-file /tmp/comment.md
 
       - name: Remove temporary workflows and push implementation
+        id: publish
         if: steps.patch.outcome == 'success' && steps.regression.outcome == 'success'
+        continue-on-error: true
+        shell: bash
         run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          rm -f \
-            .github/workflows/languagetool-read-timeout-integrator.yml \
-            .github/workflows/languagetool-read-timeout-pr-bootstrap.yml \
-            .github/.languagetool-read-timeout-trigger
-          git add -A
-          git commit -m 'feat: add LanguageTool read-timeout evidence'
-          git push origin HEAD:agent/languagetool-read-timeout-evidence-v1
+          set -o pipefail
+          {
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            rm -f \
+              .github/workflows/languagetool-read-timeout-integrator.yml \
+              .github/workflows/languagetool-read-timeout-pr-bootstrap.yml \
+              .github/.languagetool-read-timeout-trigger
+            git add -A
+            git status --short
+            git commit -m 'feat: add LanguageTool read-timeout evidence'
+            git fetch origin agent/languagetool-read-timeout-evidence-v1
+            git rebase origin/agent/languagetool-read-timeout-evidence-v1
+            git push origin HEAD:agent/languagetool-read-timeout-evidence-v1
+          } 2>&1 | tee /tmp/languagetool-publish.log
+
+      - name: Publish branch-write diagnostic
+        if: steps.publish.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo '### LanguageTool read-timeout branch-write diagnostic'
+            echo
+            echo '```text'
+            tail -n 180 /tmp/languagetool-publish.log
+            echo '```'
+          } > /tmp/comment.md
+          gh pr comment 126 --repo "$GITHUB_REPOSITORY" --body-file /tmp/comment.md
 
       - name: Fail when integration failed
-        if: steps.patch.outcome != 'success' || steps.regression.outcome != 'success'
+        if: >-
+          steps.patch.outcome != 'success' ||
+          steps.regression.outcome != 'success' ||
+          steps.publish.outcome == 'failure'
         run: exit 1
