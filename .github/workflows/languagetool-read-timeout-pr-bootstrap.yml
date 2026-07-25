@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
+  issues: write
 
 concurrency:
   group: languagetool-read-timeout-pr-bootstrap
@@ -33,10 +35,13 @@ jobs:
           cache: pip
 
       - name: Apply embedded implementation
+        id: patch
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
-          python - <<'PY'
+          set -o pipefail
+          {
+            python - <<'PY'
           from pathlib import Path
           import subprocess
 
@@ -55,8 +60,24 @@ jobs:
           patch.write_text(script + "\n", encoding="utf-8")
           subprocess.run(["python", str(patch)], check=True)
           PY
+          } 2>&1 | tee /tmp/languagetool-bootstrap.log
+
+      - name: Publish patch diagnostic
+        if: steps.patch.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo '### LanguageTool read-timeout bootstrap diagnostic'
+            echo
+            echo '```text'
+            tail -n 180 /tmp/languagetool-bootstrap.log
+            echo '```'
+          } > /tmp/comment.md
+          gh pr comment 126 --repo "$GITHUB_REPOSITORY" --body-file /tmp/comment.md
 
       - name: Format, lint, and run focused regression
+        if: steps.patch.outcome == 'success'
         run: |
           set -euo pipefail
           make install-python >/dev/null
@@ -85,6 +106,7 @@ jobs:
           git diff --check
 
       - name: Remove temporary workflows and push implementation
+        if: steps.patch.outcome == 'success'
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
@@ -96,3 +118,7 @@ jobs:
           git add -A
           git commit -m 'feat: add LanguageTool read-timeout evidence'
           git push origin HEAD:agent/languagetool-read-timeout-evidence-v1
+
+      - name: Fail when patch failed
+        if: steps.patch.outcome != 'success'
+        run: exit 1
