@@ -21,7 +21,7 @@ Every repetition uses a unique Compose project and a fresh PostgreSQL volume. Th
 
 The Compose project uses an isolated private `/24` bridge. The runner accepts only a private IPv4 `/24` for this network, and before each repetition verifies that four distinct unassigned addresses terminate as `ConnectTimeout` without using environment proxies. These targets are reserved for the Normalizer, Grader, LanguageTool and Similarity connection-timeout scenarios. The CIDR may be overridden through `RELEASE_EVIDENCE_CONNECT_TIMEOUT_NETWORK`; network addresses are never written to the evidence reports.
 
-## Scenario catalog v3
+## Scenario catalog v4
 
 ### Capacity candidate bytes
 
@@ -68,6 +68,12 @@ Each scenario succeeds only when:
 - no `QuestionVersion` is created.
 
 The fault proxy never records request bodies, candidate content, network locations or exception text in the evidence artifact.
+
+### Normalizer, Grader and Similarity connect timeouts
+
+For each category, the runner first proves the isolated bridge's network primitive with a separate unassigned preflight address. The outage run then uses a real `HttpGraderClient` targeting that category's distinct unassigned bridge address and a 250 ms connect deadline. It must fail closed with the category-specific stable Finding and a `dependency_timeout` budget signal. A separate recovery run uses the normal real Grader service and must pass with a completed budget.
+
+Each scenario also requires a distinct immutable blocked run and zero `QuestionVersion` creations. The evidence contains only the stable statuses and Finding codes; it does not contain target addresses, URLs, request payloads or exception details.
 
 
 ### Explicit LanguageTool read timeout
@@ -132,7 +138,7 @@ Artifacts use the source SHA in their name and are retained for 14 days.
 
 Version 1 does not yet provide:
 
-- controlled connect-timeout injection for all four dependency categories;
+- controlled LanguageTool connect-timeout injection through a second real Grader service;
 - every total-budget stage boundary in the real-service environment;
 - a reusable RC workflow callable from the milestone signing pipeline;
 - full OIDC browser acceptance.

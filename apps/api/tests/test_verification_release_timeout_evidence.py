@@ -119,9 +119,17 @@ def test_call_buckets_are_stable() -> None:
 
 
 def test_language_timeout_catalog_is_explicit() -> None:
-    assert evidence.SCENARIO_CATALOG_VERSION == 3
+    assert evidence.SCENARIO_CATALOG_VERSION == 4
     assert evidence._EXPECTED_TIMEOUT_FINDING["language"] == "language_timeout"
     assert evidence._SCENARIO_ID["language"] == "language_read_timeout_recovery"
+
+
+def test_connect_timeout_catalog_is_explicit() -> None:
+    assert evidence._CONNECT_SCENARIO_ID == {
+        "normalizer": "normalizer_connect_timeout_recovery",
+        "grader": "grader_connect_timeout_recovery",
+        "similarity": "similarity_connect_timeout_recovery",
+    }
 
 
 def test_connect_timeout_hosts_use_distinct_private_bridge_addresses() -> None:

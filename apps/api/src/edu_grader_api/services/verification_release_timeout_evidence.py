@@ -39,7 +39,7 @@ from .verification_performance import (
 )
 
 REPORT_VERSION = base.REPORT_VERSION
-SCENARIO_CATALOG_VERSION = 3
+SCENARIO_CATALOG_VERSION = 4
 DEFAULT_REPETITIONS = base.DEFAULT_REPETITIONS
 DEFAULT_DATABASE_URL = base.DEFAULT_DATABASE_URL
 DEFAULT_GRADER_URL = base.DEFAULT_GRADER_URL
@@ -62,6 +62,11 @@ _SCENARIO_ID: Mapping[DependencyKind, str] = {
     "grader": "grader_read_timeout_recovery",
     "language": "language_read_timeout_recovery",
     "similarity": "similarity_read_timeout_recovery",
+}
+_CONNECT_SCENARIO_ID: Mapping[Literal["normalizer", "grader", "similarity"], str] = {
+    "normalizer": "normalizer_connect_timeout_recovery",
+    "grader": "grader_connect_timeout_recovery",
+    "similarity": "similarity_connect_timeout_recovery",
 }
 
 
@@ -325,7 +330,7 @@ def run_release_evidence(
         raise ValueError("release evidence requires at least two repetitions")
     if not compose_file.is_file():
         raise ValueError("release evidence compose file does not exist")
-    _, connect_probe_hosts = _connect_timeout_hosts(connect_timeout_network)
+    connect_hosts, connect_probe_hosts = _connect_timeout_hosts(connect_timeout_network)
 
     repetition_reports: list[dict[str, object]] = []
     environment: dict[str, object] = base.runtime_environment()
@@ -341,6 +346,7 @@ def run_release_evidence(
             context,
             repetition,
             language_fault_proxy_url=language_fault_proxy_url,
+            connect_hosts=connect_hosts,
             connect_probe_hosts=connect_probe_hosts,
         )
         repetition_reports.append(repetition_report)
@@ -364,7 +370,7 @@ def run_release_evidence(
             "ruleset_version": BUDGET_AWARE_RULESET_VERSION,
             "capacity_version": VERIFICATION_CAPACITY_RULESET_VERSION,
             "budget_version": VERIFICATION_BUDGET_RULESET_VERSION,
-            "timeout_fault_version": "verification-dependency-read-timeout-v2",
+            "timeout_fault_version": "verification-dependency-timeout-v3",
         },
         "protocol": {
             "repetitions": repetitions,
@@ -379,6 +385,11 @@ def run_release_evidence(
                 "normalizer",
                 "grader",
                 "language",
+                "similarity",
+            ],
+            "connect_timeout_dependencies": [
+                "normalizer",
+                "grader",
                 "similarity",
             ],
             "isolation": "unique_compose_project_and_volume_per_repetition",
@@ -407,6 +418,7 @@ def _run_repetition(
     repetition: int,
     *,
     language_fault_proxy_url: str,
+    connect_hosts: Mapping[DependencyKind, str],
     connect_probe_hosts: Mapping[DependencyKind, str],
 ) -> tuple[dict[str, object], dict[str, object]]:
     report: dict[str, object] = {
@@ -497,6 +509,24 @@ def _run_repetition(
                             )
                         ),
                     )
+            for index, dependency in enumerate(
+                ("normalizer", "grader", "similarity"),
+                start=1,
+            ):
+                _append_scenario(
+                    session,
+                    scenarios,
+                    _CONNECT_SCENARIO_ID[dependency],
+                    lambda dependency=dependency, ordinal=(repetition * 100 + 60 + index): (
+                        _connect_timeout_recovery_scenario(
+                            session,
+                            dependency=dependency,
+                            connect_host=connect_hosts[dependency],
+                            grader_url=context.grader_url,
+                            ordinal=ordinal,
+                        )
+                    ),
+                )
             report["scenarios"] = scenarios
             if not all(item.get("passed") is True for item in scenarios):
                 raise base.ProductRegression("representative_scenario_failed")
@@ -714,6 +744,87 @@ def _dependency_timeout_recovery_scenario(
         "recovery_status": recovery_run.status.value,
         "recovery_finding_codes": recovery_findings,
         "recovery_call_bucket": _call_bucket(recovery_counts["forward"]),
+        "old_run_immutable": outage_immutable,
+        "fresh_budget_completed": (
+            recovery_budget.get("status") == "completed"
+            if isinstance(recovery_budget, dict)
+            else False
+        ),
+        "question_version_delta": versions_after - versions_before,
+        "passed": passed,
+    }
+
+
+def _connect_timeout_recovery_scenario(
+    session: Session,
+    *,
+    dependency: Literal["normalizer", "grader", "similarity"],
+    connect_host: str,
+    grader_url: str,
+    ordinal: int,
+) -> dict[str, object]:
+    if connect_host not in settings.allowed_processor_hosts:
+        raise base.ProductRegression("connect_timeout_target_not_allowed")
+
+    draft = _create_timeout_draft(session, dependency=dependency, ordinal=ordinal)
+    session.commit()
+    revision = base._revision(session, draft)
+    versions_before = base._question_version_count(session)
+    outage_grader = HttpGraderClient(
+        f"http://{connect_host}:8010",
+        request_timeout_seconds=CONNECT_TIMEOUT_SECONDS,
+    )
+
+    outage_run = run_budget_aware_candidate_verification(
+        session,
+        draft=draft,
+        revision=revision,
+        grader_client=outage_grader,
+    )
+    session.commit()
+    outage_snapshot = base._run_snapshot(outage_run)
+
+    recovery_run = run_budget_aware_candidate_verification(
+        session,
+        draft=draft,
+        revision=revision,
+        grader_client=HttpGraderClient(grader_url),
+    )
+    session.commit()
+    versions_after = base._question_version_count(session)
+
+    session.expire_all()
+    persisted_outage = session.get(base.GenerationValidationRun, outage_run.id)
+    if persisted_outage is None:
+        raise base.ProductRegression("connect_timeout_run_missing")
+    outage_immutable = base._run_snapshot(persisted_outage) == outage_snapshot
+    outage_budget = outage_run.feature_summary_json.get("verification_budget_signal")
+    recovery_budget = recovery_run.feature_summary_json.get("verification_budget_signal")
+    outage_findings = base._finding_codes(outage_run)
+    recovery_findings = base._finding_codes(recovery_run)
+    expected_finding = _EXPECTED_TIMEOUT_FINDING[dependency]
+    passed = (
+        outage_run.status.value == "blocked"
+        and expected_finding in outage_findings
+        and isinstance(outage_budget, dict)
+        and outage_budget.get("status") == "dependency_timeout"
+        and outage_budget.get("terminal_dependency") == dependency
+        and recovery_run.status.value == "passed"
+        and expected_finding not in recovery_findings
+        and isinstance(recovery_budget, dict)
+        and recovery_budget.get("status") == "completed"
+        and outage_run.id != recovery_run.id
+        and outage_immutable
+        and versions_after == versions_before
+    )
+    return {
+        "scenario_id": _CONNECT_SCENARIO_ID[dependency],
+        "dependency": dependency,
+        "fault_mode": "connect_timeout",
+        "outage_status": outage_run.status.value,
+        "outage_finding_codes": outage_findings,
+        "recovery_status": recovery_run.status.value,
+        "recovery_finding_codes": recovery_findings,
         "old_run_immutable": outage_immutable,
         "fresh_budget_completed": (
             recovery_budget.get("status") == "completed"
