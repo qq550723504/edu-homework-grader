@@ -2,9 +2,9 @@
 
 ## Purpose
 
-`verification-release-evidence-v1` provides release-candidate evidence for candidate-verification capacity gating and dependency recovery in an isolated, real-service environment.
+`verification-release-evidence-v1` provides release-candidate evidence for candidate-verification capacity gating, stable dependency-timeout classification and dependency recovery in an isolated, real-service environment.
 
-The first slice runs the production `run_budget_aware_candidate_verification` wrapper against PostgreSQL and the real HTTP Grader/LanguageTool stack. It uses only synthetic curriculum, teacher and candidate records. It does not use real student, teacher, class, assignment or question-bank data.
+The runner executes the production `run_budget_aware_candidate_verification` wrapper against PostgreSQL and the real HTTP Grader/LanguageTool stack. It uses only synthetic curriculum, teacher and candidate records. It does not use real student, teacher, class, assignment or question-bank data.
 
 ## Environment
 
@@ -18,7 +18,7 @@ The Core API code runs from the checked-out package on the GitHub runner and con
 
 Every repetition uses a unique Compose project and a fresh PostgreSQL volume. The runner performs at least two complete repetitions and removes containers and volumes after each repetition.
 
-## Representative scenarios
+## Scenario catalog v2
 
 ### Capacity candidate bytes
 
@@ -45,7 +45,26 @@ The scenario succeeds only when:
 - the recovery budget finishes with `completed`;
 - no `QuestionVersion` is created.
 
-This first slice proves dependency failure and recovery. Explicit connect/read timeout injection for all four dependency categories remains follow-up work in Issue #122.
+### Normalizer, Grader and Similarity read timeouts
+
+The runner places a bounded local HTTP fault proxy between the production Core API wrapper and the real Grader. For each dependency category, the proxy accepts one request and deliberately withholds the response longer than the configured Core API Grader timeout. The same proxy then switches to forwarding mode for a fresh recovery run against the real service.
+
+The three scenarios use production-shaped candidates:
+
+- an M2 candidate reaches MathJSON Normalizer first;
+- an M1 candidate reaches the core Grader first;
+- an M1 candidate with one distinct synthetic peer reaches Semantic Similarity first.
+
+Each scenario succeeds only when:
+
+- the outage run is `blocked` with `normalizer_timeout`, `grader_timeout` or `similarity_timeout` respectively;
+- the budget records `dependency_timeout` and the correct terminal dependency;
+- exactly one delegate request reaches the stalled proxy and no new request starts after terminal timeout;
+- a fresh run forwards to the real Grader and completes with `passed` and a `completed` budget;
+- the old blocked run remains immutable;
+- no `QuestionVersion` is created.
+
+The fault proxy never records request bodies, candidate content, network locations or exception text in the evidence artifact.
 
 ## Evidence outputs
 
@@ -65,10 +84,10 @@ artifacts/verification-release-evidence/verification-release-evidence-v1.md
 The report records:
 
 - source revision;
-- validator, ruleset, capacity and budget contract versions;
+- validator, ruleset, capacity, budget and timeout-fault contract versions;
 - PostgreSQL version and service image identifiers;
 - repetition and scenario status;
-- stable Finding codes;
+- stable Finding codes and dependency call-count buckets;
 - `QuestionVersion` deltas;
 - old-run immutability and fresh-budget completion;
 - container and volume cleanup results.
@@ -94,7 +113,7 @@ Artifacts use the source SHA in their name and are retained for 14 days.
 
 Version 1 does not yet provide:
 
-- controlled connect/read timeout injection for Normalizer, Grader, LanguageTool and Similarity;
+- controlled connect-timeout injection or an explicit LanguageTool read-timeout proxy scenario;
 - every total-budget stage boundary in the real-service environment;
 - a reusable RC workflow callable from the milestone signing pipeline;
 - full OIDC browser acceptance.
