@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
+  issues: write
 
 jobs:
   format-and-test:
@@ -30,18 +32,41 @@ jobs:
         run: make install-python
 
       - name: Format, lint, and test release evidence contract
+        id: validation
+        shell: bash
         run: |
-          python -m ruff format \
-            apps/api/src/edu_grader_api/services/verification_release_evidence.py \
-            apps/api/tests/test_verification_release_evidence.py
-          python -m ruff check --config ruff.toml \
-            apps/api/src/edu_grader_api/services/verification_release_evidence.py \
-            apps/api/tests/test_verification_release_evidence.py
-          python -m pytest apps/api/tests/test_verification_release_evidence.py -q
-          docker compose --file infra/release-evidence/compose.yaml config --quiet
-          git diff --check
+          set -o pipefail
+          {
+            python -m ruff format \
+              apps/api/src/edu_grader_api/services/verification_release_evidence.py \
+              apps/api/tests/test_verification_release_evidence.py
+            python -m ruff check --fix --config ruff.toml \
+              apps/api/src/edu_grader_api/services/verification_release_evidence.py \
+              apps/api/tests/test_verification_release_evidence.py
+            python -m ruff check --config ruff.toml \
+              apps/api/src/edu_grader_api/services/verification_release_evidence.py \
+              apps/api/tests/test_verification_release_evidence.py
+            python -m pytest apps/api/tests/test_verification_release_evidence.py -q
+            docker compose --file infra/release-evidence/compose.yaml config --quiet
+            git diff --check
+          } 2>&1 | tee /tmp/pr123-validation.log
+
+      - name: Publish failure diagnostic
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo '### PR #123 focused validation diagnostic'
+            echo
+            echo '```text'
+            tail -n 160 /tmp/pr123-validation.log 2>/dev/null || echo 'validation log was not produced'
+            echo '```'
+          } > /tmp/comment.md
+          gh pr comment 123 --repo "$GITHUB_REPOSITORY" --body-file /tmp/comment.md
 
       - name: Commit formatted implementation and remove workflow
+        if: success()
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
