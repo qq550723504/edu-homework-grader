@@ -1,0 +1,137 @@
+name: PR 123 release evidence recovery fix
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr123-release-evidence-recovery-fix
+  cancel-in-progress: true
+
+jobs:
+  fix-and-test:
+    if: github.head_ref == 'agent/verification-release-evidence-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/verification-release-evidence-v1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Apply recovery and source revision fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"marker missing in {path}: {old[:120]!r}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+          module = "apps/api/src/edu_grader_api/services/verification_release_evidence.py"
+          replace_once(
+              module,
+              '''    candidate = _base_candidate("E3")
+              capacity = evaluate_verification_capacity(candidate)
+          ''',
+              '''    candidate = _base_candidate("E3")
+              candidate["difficulty"] = 0.2
+              capacity = evaluate_verification_capacity(candidate)
+          ''',
+          )
+          replace_once(
+              module,
+              '''    _compose(context, "start", "languagetool")
+              _wait_for_http(context.languagetool_health_url, timeout_seconds=90)
+              recovery_run = run_budget_aware_candidate_verification(
+          ''',
+              '''    _compose(context, "start", "languagetool")
+              _wait_for_http(context.languagetool_health_url, timeout_seconds=90)
+              _compose(context, "restart", "grader")
+              _wait_for_http(f"{context.grader_url}/health", timeout_seconds=90)
+              recovery_run = run_budget_aware_candidate_verification(
+          ''',
+          )
+          replace_once(
+              module,
+              '''def _source_revision() -> str:
+              configured = os.environ.get("GITHUB_SHA")
+          ''',
+              '''def _source_revision() -> str:
+              configured = os.environ.get("RELEASE_EVIDENCE_SOURCE_REVISION") or os.environ.get(
+                  "GITHUB_SHA"
+              )
+          ''',
+          )
+
+          workflow = ".github/workflows/verification-release-evidence.yml"
+          replace_once(
+              workflow,
+              '''      RELEASE_EVIDENCE_LANGUAGETOOL_HEALTH_URL: http://127.0.0.1:58011/v2/languages
+          ''',
+              '''      RELEASE_EVIDENCE_LANGUAGETOOL_HEALTH_URL: http://127.0.0.1:58011/v2/languages
+              RELEASE_EVIDENCE_SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+          ''',
+          )
+
+          test_path = "apps/api/tests/test_verification_release_evidence.py"
+          replace_once(
+              test_path,
+              '''from edu_grader_api.services.verification_release_evidence import (
+          ''',
+              '''from edu_grader_api.services import verification_release_evidence as evidence
+              from edu_grader_api.services.verification_release_evidence import (
+          ''',
+          )
+          target = Path(test_path)
+          target.write_text(
+              target.read_text(encoding="utf-8")
+              + '''\n\ndef test_source_revision_prefers_explicit_evidence_revision(\n    monkeypatch: pytest.MonkeyPatch,\n) -> None:\n    monkeypatch.setenv("RELEASE_EVIDENCE_SOURCE_REVISION", "head-sha")\n    monkeypatch.setenv("GITHUB_SHA", "merge-sha")\n\n    assert evidence._source_revision() == "head-sha"\n''',
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Format, lint, and run focused regression
+        run: |
+          set -euo pipefail
+          make install-python >/dev/null
+          python -m ruff format \
+            apps/api/src/edu_grader_api/services/verification_release_evidence.py \
+            apps/api/tests/test_verification_release_evidence.py
+          python -m ruff check --fix --config ruff.toml \
+            apps/api/src/edu_grader_api/services/verification_release_evidence.py \
+            apps/api/tests/test_verification_release_evidence.py
+          python -m ruff check --config ruff.toml \
+            apps/api/src/edu_grader_api/services/verification_release_evidence.py \
+            apps/api/tests/test_verification_release_evidence.py
+          python -m pytest \
+            apps/api/tests/test_verification_release_evidence.py \
+            apps/api/tests/test_budget_aware_verification.py \
+            apps/api/tests/test_capacity_aware_verification.py -q
+          docker compose --file infra/release-evidence/compose.yaml config --quiet
+          git diff --check
+
+      - name: Remove one-shot workflow and push fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm -f .github/workflows/pr123-release-evidence-recovery-fix.yml
+          git add -A
+          git commit -m 'fix: stabilize release evidence recovery'
+          git push origin HEAD:agent/verification-release-evidence-v1
