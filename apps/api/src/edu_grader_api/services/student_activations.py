@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Protocol
 
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from ..models import Classroom, StudentActivation, StudentActivationStatus, User
 from ..settings import settings
@@ -63,3 +64,25 @@ def issue_activation(
     activation.expires_at = now + timedelta(days=settings.student_activation_expiry_days)
     session.commit()
     return IssuedActivation(activation_id=activation.id, code=code)
+
+
+def consume_pending_activation(session: Session, *, student: User, now: datetime) -> bool:
+    activation = session.scalar(
+        select(StudentActivation)
+        .where(
+            StudentActivation.student_id == student.id,
+            StudentActivation.status == StudentActivationStatus.ISSUED,
+        )
+        .with_for_update()
+    )
+    if activation is None:
+        return True
+    if activation.expires_at is None or activation.expires_at <= now:
+        activation.status = StudentActivationStatus.EXPIRED
+        activation.expired_at = now
+        session.commit()
+        return False
+    activation.status = StudentActivationStatus.CONSUMED
+    activation.consumed_at = now
+    session.commit()
+    return True

@@ -19,6 +19,8 @@ from sqlalchemy.orm import Session
 from .audit import append_audit_event
 from .db import get_session
 from .models import Role, Tenant, User
+from .models import utc_now
+from .services.student_activations import consume_pending_activation
 from .settings import settings
 
 
@@ -153,6 +155,8 @@ def get_current_principal(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="platform membership required"
         )
+    if user.role is Role.STUDENT and not consume_pending_activation(session, student=user, now=utc_now()):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="activation code expired")
     if user.tenant.slug != settings.oidc_tenant_slug:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
 
