@@ -68,6 +68,29 @@ def test_issue_activation_persists_only_hmac_after_keycloak_provisioning() -> No
         assert activation.keycloak_user_id == "kc-1"
 
 
+def test_reissuing_activation_revokes_the_previous_code() -> None:
+    from edu_grader_api.services.student_activations import issue_activation
+
+    class FakeKeycloak:
+        def ensure_student(self, **_: str) -> str:
+            return "kc-1"
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        tenant = Tenant(slug="pilot", name="Pilot")
+        teacher = User(tenant=tenant, role=Role.TEACHER, oidc_issuer="https://issuer.example.test", oidc_subject="teacher-1", display_name="Teacher", work_email="teacher@example.test")
+        student = User(tenant=tenant, role=Role.STUDENT, school_id="S-001", display_name="Ada")
+        classroom = Classroom(tenant=tenant, code="7A", name="Year 7 A")
+        session.add_all([tenant, teacher, student, classroom])
+        session.commit()
+        first = issue_activation(session, teacher=teacher, classroom=classroom, student=student, keycloak=FakeKeycloak(), now=utc_now())
+        issue_activation(session, teacher=teacher, classroom=classroom, student=student, keycloak=FakeKeycloak(), now=utc_now())
+        first_row = session.get(StudentActivation, first.activation_id)
+        assert first_row is not None
+        assert first_row.status is StudentActivationStatus.REVOKED
+
+
 def test_issued_activation_persists_lifecycle_and_relationships() -> None:
     engine = create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)

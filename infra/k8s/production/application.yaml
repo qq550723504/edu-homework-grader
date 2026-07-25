@@ -98,9 +98,42 @@ spec:
           ports:
             - name: http
               containerPort: 8000
-          envFrom:
-            - secretRef:
-                name: edu-grader-runtime
+          env:
+            - name: APP_ENV
+              value: production
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: DATABASE_URL}
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: REDIS_URL}
+            - name: GRADER_BASE_URL
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: GRADER_BASE_URL}
+            - name: OIDC_ISSUER
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: OIDC_ISSUER}
+            - name: OIDC_AUDIENCE
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: OIDC_AUDIENCE}
+            - name: OIDC_TENANT_SLUG
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: OIDC_TENANT_SLUG}
+            - name: AUDIT_HMAC_KEY
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: AUDIT_HMAC_KEY}
+            - name: AUDIT_HMAC_KEY_VERSION
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: AUDIT_HMAC_KEY_VERSION}
+            - name: PROCESSOR_ALLOWED_HOSTS
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: PROCESSOR_ALLOWED_HOSTS}
+            - name: STUDENT_ACTIVATION_HMAC_KEY
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: STUDENT_ACTIVATION_HMAC_KEY}
+            - name: KEYCLOAK_STUDENT_PROVISIONER_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: KEYCLOAK_STUDENT_PROVISIONER_CLIENT_SECRET}
           readinessProbe:
             httpGet:
               path: /ready

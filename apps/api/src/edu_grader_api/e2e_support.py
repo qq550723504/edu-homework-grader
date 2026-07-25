@@ -408,7 +408,7 @@ def seed_demo_assignment(session: Session) -> None:
         created_by_user=teacher,
         title="Draft isolation",
         subject="mathematics",
-        due_at=now + timedelta(days=7),
+        due_at=now + timedelta(days=8),
         submission_rule_json={"allow_late": False},
         status=AssignmentStatus.PUBLISHED,
         published_at=now,

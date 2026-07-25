@@ -46,6 +46,17 @@ def issue_activation(
 ) -> IssuedActivation:
     if student.oidc_subject is not None or not student.school_id:
         raise ValueError("student is not eligible for activation")
+    previous = session.scalar(
+        select(StudentActivation)
+        .where(
+            StudentActivation.student_id == student.id,
+            StudentActivation.status == StudentActivationStatus.ISSUED,
+        )
+        .with_for_update()
+    )
+    if previous is not None:
+        previous.status = StudentActivationStatus.REVOKED
+        previous.revoked_at = now
     code = generate_activation_code()
     activation = StudentActivation(
         student_id=student.id,
