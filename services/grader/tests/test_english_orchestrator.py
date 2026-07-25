@@ -1,4 +1,8 @@
-from edu_grader.english_dependencies import GrammarMatch, StaticSimilarity
+from edu_grader.english_dependencies import (
+    EnglishDependencyTimeoutError,
+    GrammarMatch,
+    StaticSimilarity,
+)
 from edu_grader.english_orchestrator import NoopGrammarChecker, StaticGrammarChecker, grade_english
 
 
@@ -53,3 +57,26 @@ def test_e3_returns_structured_grammar_feedback_without_rejecting_answer() -> No
     assert result.feedback[0].type == "grammar"
     assert result.feedback[0].offset == 4
     assert result.feedback[0].replacements == ["goes"]
+
+
+def test_e3_emits_only_stable_language_timeout_signal() -> None:
+    class TimeoutGrammarChecker:
+        def check(self, text: str) -> list[GrammarMatch]:
+            raise EnglishDependencyTimeoutError("private upstream timeout details")
+
+    result = grade_english(
+        {
+            "question_type": "E3",
+            "policy_version": "1",
+            "rule": {"grammar_feedback_required": True, "max_score": 1},
+            "answer": {"answer": "private candidate text"},
+        },
+        grammar_checker=TimeoutGrammarChecker(),
+        similarity=StaticSimilarity(0),
+    )
+
+    assert result.decision == "needs_review"
+    assert result.criteria[0].code == "grammar_dependency_timeout"
+    assert result.feedback[0].message == "LanguageTool timed out."
+    assert result.signals == [{"kind": "dependency_timeout", "dependency": "language"}]
+    assert "private" not in str(result.model_dump())
