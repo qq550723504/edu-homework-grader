@@ -42,8 +42,12 @@ def upgrade() -> None:
             name="ck_student_activations_issued_has_credential",
         ),
     )
-    op.create_index("ix_student_activations_student_status", "student_activations", ["student_id", "status"])
-    op.create_index("ix_student_activations_status_expires_at", "student_activations", ["status", "expires_at"])
+    op.create_index(
+        "ix_student_activations_student_status", "student_activations", ["student_id", "status"]
+    )
+    op.create_index(
+        "ix_student_activations_status_expires_at", "student_activations", ["status", "expires_at"]
+    )
 
 
 def downgrade() -> None:
