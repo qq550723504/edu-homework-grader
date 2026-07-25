@@ -1,0 +1,130 @@
+name: PR 123 release evidence runtime diagnostics
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  diagnose:
+    if: github.head_ref == 'agent/verification-release-evidence-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      PROCESSOR_ALLOWED_HOSTS: grader,languagetool,localhost,127.0.0.1
+      GRADER_REQUEST_TIMEOUT_SECONDS: "5"
+      VERIFICATION_TOTAL_TIMEOUT_SECONDS: "30"
+      RELEASE_EVIDENCE_DATABASE_URL: postgresql+psycopg://release_evidence:release-evidence-password@127.0.0.1:55432/release_evidence
+      RELEASE_EVIDENCE_GRADER_URL: http://127.0.0.1:58010
+      RELEASE_EVIDENCE_LANGUAGETOOL_HEALTH_URL: http://127.0.0.1:58011/v2/languages
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: agent/verification-release-evidence-v1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install Python packages
+        run: make install-python
+
+      - name: Execute stages independently
+        id: diagnose
+        continue-on-error: true
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import os
+
+          from edu_grader_api.services import verification_release_evidence as evidence
+
+          context = evidence.ComposeContext(
+              compose_file=Path("infra/release-evidence/compose.yaml"),
+              project_name=f"pr123-runtime-diagnostic-{os.getpid()}",
+              database_url=os.environ["RELEASE_EVIDENCE_DATABASE_URL"],
+              grader_url=os.environ["RELEASE_EVIDENCE_GRADER_URL"],
+              languagetool_health_url=os.environ[
+                  "RELEASE_EVIDENCE_LANGUAGETOOL_HEALTH_URL"
+              ],
+          )
+          outcomes: list[str] = []
+          try:
+              evidence._compose(
+                  context,
+                  "up",
+                  "--detach",
+                  "--build",
+                  "--wait",
+                  "--wait-timeout",
+                  "240",
+                  "postgres",
+                  "languagetool",
+                  "grader",
+              )
+              outcomes.append("compose_start=success")
+              evidence._run_migrations(context.database_url)
+              outcomes.append("database_migration=success")
+              evidence._capture_service_environment(context)
+              outcomes.append("environment_capture=success")
+              with evidence._session(context.database_url) as session:
+                  try:
+                      result = evidence._capacity_gate_scenario(session)
+                      outcomes.append(
+                          "capacity_scenario="
+                          + ("success" if result.get("passed") is True else "failed_result")
+                      )
+                  except Exception as error:
+                      outcomes.append(
+                          f"capacity_scenario=raised:{type(error).__name__}"
+                      )
+                      session.rollback()
+                  try:
+                      result = evidence._language_recovery_scenario(session, context)
+                      outcomes.append(
+                          "language_recovery_scenario="
+                          + ("success" if result.get("passed") is True else "failed_result")
+                      )
+                  except Exception as error:
+                      outcomes.append(
+                          "language_recovery_scenario=raised:"
+                          + type(error).__name__
+                      )
+                      session.rollback()
+          except Exception as error:
+              outcomes.append(f"orchestration=raised:{type(error).__name__}")
+          finally:
+              cleanup = evidence._cleanup(context)
+              outcomes.append(f"cleanup={cleanup.get('status', 'unknown')}")
+
+          Path("/tmp/pr123-runtime-diagnostic.txt").write_text(
+              "\n".join(outcomes) + "\n",
+              encoding="utf-8",
+          )
+          if not any(line.endswith("=success") for line in outcomes if "scenario=" in line):
+              raise SystemExit(1)
+          PY
+
+      - name: Publish de-identified diagnostic
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo '### PR #123 runtime diagnostic'
+            echo
+            echo '```text'
+            cat /tmp/pr123-runtime-diagnostic.txt 2>/dev/null || echo 'diagnostic output unavailable'
+            echo '```'
+          } > /tmp/comment.md
+          gh pr comment 123 --repo "$GITHUB_REPOSITORY" --body-file /tmp/comment.md
