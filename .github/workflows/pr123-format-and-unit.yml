@@ -1,0 +1,51 @@
+name: PR 123 format and unit validation
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  format-and-test:
+    if: github.head_ref == 'agent/verification-release-evidence-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/verification-release-evidence-v1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install Python packages
+        run: make install-python
+
+      - name: Format, lint, and test release evidence contract
+        run: |
+          python -m ruff format \
+            apps/api/src/edu_grader_api/services/verification_release_evidence.py \
+            apps/api/tests/test_verification_release_evidence.py
+          python -m ruff check --config ruff.toml \
+            apps/api/src/edu_grader_api/services/verification_release_evidence.py \
+            apps/api/tests/test_verification_release_evidence.py
+          python -m pytest apps/api/tests/test_verification_release_evidence.py -q
+          docker compose --file infra/release-evidence/compose.yaml config --quiet
+          git diff --check
+
+      - name: Commit formatted implementation and remove workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm -f .github/workflows/pr123-format-and-unit.yml
+          git add -A
+          git commit -m 'chore: finalize release evidence contract'
+          git push origin HEAD:agent/verification-release-evidence-v1
