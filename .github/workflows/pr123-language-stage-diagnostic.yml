@@ -1,0 +1,266 @@
+name: PR 123 language recovery stage diagnostic
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr123-language-stage-diagnostic
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    if: github.head_ref == 'agent/verification-release-evidence-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      PROCESSOR_ALLOWED_HOSTS: grader,languagetool,localhost,127.0.0.1
+      GRADER_REQUEST_TIMEOUT_SECONDS: "5"
+      VERIFICATION_TOTAL_TIMEOUT_SECONDS: "30"
+      RELEASE_EVIDENCE_POSTGRES_PORT: "57432"
+      RELEASE_EVIDENCE_GRADER_PORT: "60010"
+      RELEASE_EVIDENCE_LANGUAGETOOL_PORT: "60011"
+      RELEASE_EVIDENCE_DATABASE_URL: postgresql+psycopg://release_evidence:release-evidence-password@127.0.0.1:57432/release_evidence
+      RELEASE_EVIDENCE_GRADER_URL: http://127.0.0.1:60010
+      RELEASE_EVIDENCE_LANGUAGETOOL_HEALTH_URL: http://127.0.0.1:60011/v2/languages
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/verification-release-evidence-v1
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Add stable language recovery stage codes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("apps/api/src/edu_grader_api/services/verification_release_evidence.py")
+          text = path.read_text(encoding="utf-8")
+
+          old_catch = (
+              "            try:\n"
+              "                scenarios.append(_language_recovery_scenario(session, context))\n"
+              "            except Exception:\n"
+              "                session.rollback()\n"
+              "                scenarios.append(\n"
+              "                    {\n"
+              "                        'scenario_id': 'language_dependency_recovery',\n"
+              "                        'failure_code': 'language_recovery_execution_failed',\n"
+              "                        'passed': False,\n"
+              "                    }\n"
+              "                )\n"
+          )
+          new_catch = (
+              "            try:\n"
+              "                scenarios.append(_language_recovery_scenario(session, context))\n"
+              "            except ProductRegression as error:\n"
+              "                session.rollback()\n"
+              "                scenarios.append(\n"
+              "                    {\n"
+              "                        'scenario_id': 'language_dependency_recovery',\n"
+              "                        'failure_code': error.code,\n"
+              "                        'passed': False,\n"
+              "                    }\n"
+              "                )\n"
+              "            except Exception:\n"
+              "                session.rollback()\n"
+              "                scenarios.append(\n"
+              "                    {\n"
+              "                        'scenario_id': 'language_dependency_recovery',\n"
+              "                        'failure_code': 'language_recovery_execution_failed',\n"
+              "                        'passed': False,\n"
+              "                    }\n"
+              "                )\n"
+          )
+          if old_catch not in text:
+              raise SystemExit("language scenario catch marker missing")
+          text = text.replace(old_catch, new_catch, 1)
+
+          start = text.index("def _language_recovery_scenario(")
+          end = text.index("\ndef _warm_language_tool(", start)
+          replacement = (
+              "def _language_recovery_scenario(\n"
+              "    session: Session,\n"
+              "    context: ComposeContext,\n"
+              ") -> dict[str, object]:\n"
+              "    stage = 'fixture'\n"
+              "    try:\n"
+              "        candidate = _base_candidate('E3')\n"
+              "        candidate['difficulty'] = 0.2\n"
+              "        capacity = evaluate_verification_capacity(candidate)\n"
+              "        _require(not capacity.blocked, 'language_fixture_blocked')\n"
+              "        case = BenchmarkCase(\n"
+              "            case_id='language-dependency-recovery',\n"
+              "            question_type='E3',\n"
+              "            load_bucket='small',\n"
+              "            policy_version='1',\n"
+              "            expected_status='passed',\n"
+              "            candidate_bytes=capacity.observations['candidate_bytes'],\n"
+              "            candidate=candidate,\n"
+              "        )\n"
+              "        stage = 'seed'\n"
+              "        draft = _create_synthetic_draft(session, case=case, ordinal=2)\n"
+              "        session.commit()\n"
+              "        revision = _revision(session, draft)\n"
+              "        versions_before = _question_version_count(session)\n"
+              "        grader = HttpGraderClient(context.grader_url)\n\n"
+              "        stage = 'outage_stop'\n"
+              "        _compose(context, 'stop', 'languagetool')\n"
+              "        stage = 'outage_verify'\n"
+              "        outage_run = run_budget_aware_candidate_verification(\n"
+              "            session,\n"
+              "            draft=draft,\n"
+              "            revision=revision,\n"
+              "            grader_client=grader,\n"
+              "        )\n"
+              "        session.commit()\n"
+              "        outage_snapshot = _run_snapshot(outage_run)\n\n"
+              "        stage = 'restore_stack'\n"
+              "        _compose(\n"
+              "            context,\n"
+              "            'up',\n"
+              "            '--detach',\n"
+              "            '--force-recreate',\n"
+              "            '--wait',\n"
+              "            '--wait-timeout',\n"
+              "            '240',\n"
+              "            'languagetool',\n"
+              "            'grader',\n"
+              "        )\n"
+              "        stage = 'languagetool_warmup'\n"
+              "        _warm_language_tool(\n"
+              "            context.languagetool_health_url, timeout_seconds=120\n"
+              "        )\n"
+              "        stage = 'grader_health'\n"
+              "        _wait_for_http(f'{context.grader_url}/health', timeout_seconds=90)\n"
+              "        stage = 'language_readiness'\n"
+              "        _wait_for_language_dependency(grader, timeout_seconds=120)\n"
+              "        stage = 'recovery_verify'\n"
+              "        recovery_run = run_budget_aware_candidate_verification(\n"
+              "            session,\n"
+              "            draft=draft,\n"
+              "            revision=revision,\n"
+              "            grader_client=grader,\n"
+              "        )\n"
+              "        session.commit()\n"
+              "        versions_after = _question_version_count(session)\n\n"
+              "        stage = 'immutability'\n"
+              "        session.expire_all()\n"
+              "        persisted_outage = session.get(GenerationValidationRun, outage_run.id)\n"
+              "        _require(persisted_outage is not None, 'outage_run_missing')\n"
+              "        outage_immutable = _run_snapshot(persisted_outage) == outage_snapshot\n"
+              "        recovery_budget = recovery_run.feature_summary_json.get(\n"
+              "            'verification_budget_signal'\n"
+              "        )\n"
+              "        passed = (\n"
+              "            outage_run.status.value == 'blocked'\n"
+              "            and recovery_run.status.value == 'passed'\n"
+              "            and outage_run.id != recovery_run.id\n"
+              "            and outage_immutable\n"
+              "            and versions_after == versions_before\n"
+              "            and isinstance(recovery_budget, dict)\n"
+              "            and recovery_budget.get('status') == 'completed'\n"
+              "        )\n"
+              "        return {\n"
+              "            'scenario_id': 'language_dependency_recovery',\n"
+              "            'outage_status': outage_run.status.value,\n"
+              "            'outage_finding_codes': _finding_codes(outage_run),\n"
+              "            'recovery_status': recovery_run.status.value,\n"
+              "            'recovery_finding_codes': _finding_codes(recovery_run),\n"
+              "            'old_run_immutable': outage_immutable,\n"
+              "            'fresh_budget_completed': (\n"
+              "                recovery_budget.get('status') == 'completed'\n"
+              "                if isinstance(recovery_budget, dict)\n"
+              "                else False\n"
+              "            ),\n"
+              "            'question_version_delta': versions_after - versions_before,\n"
+              "            'passed': passed,\n"
+              "        }\n"
+              "    except ProductRegression:\n"
+              "        raise\n"
+              "    except Exception as error:\n"
+              "        raise ProductRegression(f'language_{stage}_failed') from error\n\n"
+          )
+          path.write_text(text[:start] + replacement + text[end + 1 :], encoding="utf-8")
+          PY
+
+      - name: Install, format, lint, and test
+        run: |
+          set -euo pipefail
+          make install-python >/dev/null
+          python -m ruff format \
+            apps/api/src/edu_grader_api/services/verification_release_evidence.py \
+            apps/api/tests/test_verification_release_evidence.py
+          python -m ruff check --fix --config ruff.toml \
+            apps/api/src/edu_grader_api/services/verification_release_evidence.py \
+            apps/api/tests/test_verification_release_evidence.py
+          python -m ruff check --config ruff.toml \
+            apps/api/src/edu_grader_api/services/verification_release_evidence.py \
+            apps/api/tests/test_verification_release_evidence.py
+          python -m pytest \
+            apps/api/tests/test_verification_release_evidence.py \
+            apps/api/tests/test_budget_aware_verification.py \
+            apps/api/tests/test_capacity_aware_verification.py -q
+          git diff --check
+
+      - name: Run one isolated repetition
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from edu_grader_api.services import verification_release_evidence as evidence
+
+          context = evidence.ComposeContext(
+              compose_file=Path('infra/release-evidence/compose.yaml'),
+              project_name=f'pr123-language-stage-{os.getpid()}',
+              database_url=os.environ['RELEASE_EVIDENCE_DATABASE_URL'],
+              grader_url=os.environ['RELEASE_EVIDENCE_GRADER_URL'],
+              languagetool_health_url=os.environ[
+                  'RELEASE_EVIDENCE_LANGUAGETOOL_HEALTH_URL'
+              ],
+          )
+          repetition, environment = evidence._run_repetition(context, 1)
+          diagnostic = {'repetition': repetition, 'environment': environment}
+          evidence.assert_deidentified_evidence(diagnostic)
+          output = Path('artifacts/pr123-language-stage')
+          output.mkdir(parents=True, exist_ok=True)
+          (output / 'diagnostic.json').write_text(
+              json.dumps(diagnostic, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          PY
+
+      - name: Upload stage diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr123-language-stage-${{ github.event.pull_request.head.sha }}
+          path: artifacts/pr123-language-stage
+          retention-days: 2
+
+      - name: Push stage codes and remove workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm -f .github/workflows/pr123-language-stage-diagnostic.yml
+          git add \
+            apps/api/src/edu_grader_api/services/verification_release_evidence.py \
+            .github/workflows/pr123-language-stage-diagnostic.yml
+          git commit -m 'fix: record stable release evidence scenario stages'
+          git fetch origin agent/verification-release-evidence-v1
+          git rebase origin/agent/verification-release-evidence-v1
+          git push origin HEAD:agent/verification-release-evidence-v1
