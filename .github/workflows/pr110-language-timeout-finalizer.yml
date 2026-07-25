@@ -1,0 +1,113 @@
+name: PR 110 LanguageTool timeout finalizer
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  finalize:
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.issue.number == 118 &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.body == '/finalize-language-timeout-v1'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/languagetool-timeout-v1
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Apply implementation and synchronize v12 assertions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          workflow = Path('.github/workflows/pr110-language-timeout-integrator.yml').read_text(
+              encoding='utf-8'
+          )
+          start_marker = "          python - <<'PY'\n"
+          end_marker = "          PY\n\n      - name: Format, lint, and run cross-service regression"
+          start = workflow.index(start_marker) + len(start_marker)
+          end = workflow.index(end_marker, start)
+          script = '\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in workflow[start:end].splitlines()
+          )
+          Path('/tmp/pr110-language-patch.py').write_text(script + '\n', encoding='utf-8')
+          subprocess.run(['python', '/tmp/pr110-language-patch.py'], check=True)
+
+          tests_path = Path('apps/api/tests/test_budget_aware_verification.py')
+          tests = tests_path.read_text(encoding='utf-8')
+          tests = tests.replace(
+              'test_completed_run_gets_v11_budget_signal',
+              'test_completed_run_gets_v12_budget_signal',
+          )
+          tests = tests.replace('"verification-v11"', '"verification-v12"')
+          tests = tests.replace('"rules-v11"', '"rules-v12"')
+          tests_path.write_text(tests, encoding='utf-8')
+          PY
+
+      - name: Format, lint, and run cross-service regression
+        run: |
+          set -euo pipefail
+          make install-python >/dev/null
+          python -m ruff format \
+            services/grader/src/edu_grader/english_dependencies.py \
+            services/grader/src/edu_grader/english_orchestrator.py \
+            services/grader/tests/test_english_dependencies.py \
+            services/grader/tests/test_english_orchestrator.py \
+            apps/api/src/edu_grader_api/services/grader.py \
+            apps/api/src/edu_grader_api/services/budget_aware_verification.py \
+            apps/api/tests/test_budget_aware_verification.py \
+            apps/api/tests/test_grader_language_timeout.py
+          python -m ruff check --config ruff.toml \
+            services/grader/src/edu_grader/english_dependencies.py \
+            services/grader/src/edu_grader/english_orchestrator.py \
+            services/grader/tests/test_english_dependencies.py \
+            services/grader/tests/test_english_orchestrator.py \
+            apps/api/src/edu_grader_api/services/grader.py \
+            apps/api/src/edu_grader_api/services/budget_aware_verification.py \
+            apps/api/tests/test_budget_aware_verification.py \
+            apps/api/tests/test_grader_language_timeout.py
+          python -m pytest \
+            services/grader/tests/test_english_dependencies.py \
+            services/grader/tests/test_english_orchestrator.py \
+            apps/api/tests/test_grader_language_timeout.py \
+            apps/api/tests/test_budget_aware_verification.py \
+            apps/api/tests/test_verification_budget.py -q
+          git diff --check
+
+      - name: Remove temporary workflows and push implementation
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/pr110-language-timeout-integrator.yml \
+            .github/workflows/pr110-language-timeout-diagnostics.yml \
+            .github/workflows/pr110-language-timeout-finalizer.yml
+          git add -A
+          git commit -m 'feat: propagate stable LanguageTool timeouts'
+          git push origin HEAD:agent/languagetool-timeout-v1
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          gh pr comment 118 --repo "$GITHUB_REPOSITORY"
+          --body "LanguageTool timeout finalization failed. Inspect the latest 'PR 110 LanguageTool timeout finalizer' Actions run."
