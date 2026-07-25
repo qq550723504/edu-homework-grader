@@ -223,8 +223,7 @@ def run_release_evidence(
         item.get("status") == "succeeded" for item in repetition_reports
     )
     all_cleanup_succeeded = all(
-        isinstance(item.get("cleanup"), Mapping)
-        and item["cleanup"].get("status") == "succeeded"  # type: ignore[index]
+        isinstance(item.get("cleanup"), Mapping) and item["cleanup"].get("status") == "succeeded"  # type: ignore[index]
         for item in repetition_reports
     )
     report: dict[str, object] = {
@@ -329,13 +328,13 @@ def _run_repetition(
                         session,
                         scenarios,
                         scenario_id,
-                        lambda dependency=dependency, ordinal=(
-                            repetition * 100 + index
-                        ): _dependency_timeout_recovery_scenario(
-                            session,
-                            proxy=proxy,
-                            dependency=dependency,
-                            ordinal=ordinal,
+                        lambda dependency=dependency, ordinal=(repetition * 100 + index): (
+                            _dependency_timeout_recovery_scenario(
+                                session,
+                                proxy=proxy,
+                                dependency=dependency,
+                                ordinal=ordinal,
+                            )
                         ),
                     )
             report["scenarios"] = scenarios
@@ -378,9 +377,7 @@ def _append_scenario(
 
 def _warm_timeout_dependencies(grader_url: str) -> None:
     grader = HttpGraderClient(grader_url)
-    grader.normalize_math_answer(
-        {"mathjson": ["Add", "x", 1], "variables": ["x"]}
-    )
+    grader.normalize_math_answer({"mathjson": ["Add", "x", 1], "variables": ["x"]})
     grader.grade(
         "M1",
         {"expected": 4, "tolerance": 0},
@@ -389,12 +386,7 @@ def _warm_timeout_dependencies(grader_url: str) -> None:
     )
     grader.semantic_similarity(
         "Compute the exact numeric sum of two and two.",
-        [
-            (
-                "Catalogue basalt columns beneath an aurora while observing "
-                "distant seabird plumage."
-            )
-        ],
+        [("Catalogue basalt columns beneath an aurora while observing distant seabird plumage.")],
     )
 
 
@@ -441,9 +433,7 @@ def _dependency_timeout_recovery_scenario(
         raise base.ProductRegression("dependency_timeout_run_missing")
     outage_immutable = base._run_snapshot(persisted_outage) == outage_snapshot
     outage_budget = outage_run.feature_summary_json.get("verification_budget_signal")
-    recovery_budget = recovery_run.feature_summary_json.get(
-        "verification_budget_signal"
-    )
+    recovery_budget = recovery_run.feature_summary_json.get("verification_budget_signal")
     outage_findings = base._finding_codes(outage_run)
     recovery_findings = base._finding_codes(recovery_run)
     expected_finding = _EXPECTED_TIMEOUT_FINDING[dependency]
@@ -524,12 +514,9 @@ def _create_similarity_peer(
 ) -> None:
     candidate = deepcopy(draft.candidate_json)
     candidate["prompt"] = (
-        "Catalogue basalt columns beneath an aurora while observing distant "
-        "seabird plumage."
+        "Catalogue basalt columns beneath an aurora while observing distant seabird plumage."
     )
-    candidate["explanation"] = (
-        "This synthetic peer exists only for duplicate comparison."
-    )
+    candidate["explanation"] = "This synthetic peer exists only for duplicate comparison."
     content_hash = f"{ordinal + 100_000:064x}"[-64:]
     peer = GeneratedQuestionDraft(
         job_id=draft.job_id,
