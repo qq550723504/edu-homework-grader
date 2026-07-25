@@ -1,39 +1,49 @@
-<script setup lang="ts">
-const config = useRuntimeConfig()
-</script>
-
 <template>
-  <main class="shell">
+  <main class="shell homepage">
     <section class="hero">
-      <p class="eyebrow">MVP · 第一阶段</p>
-      <h1>英语与数学作业批改平台</h1>
+      <p class="eyebrow">作业学习平台</p>
+      <h1>开始你的作业与教学工作</h1>
       <p class="lede">
-        围绕做作业、自动批改、教师复核与学生订正构建最小可用闭环。
+        学生专注完成作业与订正，教师专注创建任务、查看结果与及时复核。
       </p>
-      <div class="actions">
-        <NuxtLink class="button primary" to="/student">进入学生端</NuxtLink>
-        <NuxtLink class="button secondary" to="/teacher">进入教师端</NuxtLink>
+    </section>
+
+    <section class="role-grid" aria-label="选择工作区">
+      <article class="role-card">
+        <span class="tag">学生</span>
+        <h2>完成今天的学习任务</h2>
+        <p>查看待完成作业，提交答案，并根据反馈完成订正。</p>
+        <NuxtLink class="button primary" to="/student">查看我的作业</NuxtLink>
+      </article>
+      <article class="role-card">
+        <span class="tag">教师</span>
+        <h2>安排与跟进学习</h2>
+        <p>创建作业，查看批改结果，并处理需要你复核的任务。</p>
+        <NuxtLink class="button secondary" to="/teacher">进入教学工作台</NuxtLink>
+      </article>
+    </section>
+
+    <section class="trust-section" aria-labelledby="trust-heading">
+      <div>
+        <p class="eyebrow">学习过程更清楚</p>
+        <h2 id="trust-heading">为什么值得信赖</h2>
+      </div>
+      <div class="trust-grid">
+        <article class="card">
+          <h3>一致的批改规则</h3>
+          <p>基础题按明确规则评分，让每次作答都有稳定的判断依据。</p>
+        </article>
+        <article class="card">
+          <h3>教师及时复核</h3>
+          <p>需要理解语境的答案会进入教师复核，保留专业判断的空间。</p>
+        </article>
+        <article class="card">
+          <h3>反馈可追溯</h3>
+          <p>学生能据反馈完成订正，教师也能回看评分依据与处理记录。</p>
+        </article>
       </div>
     </section>
 
-    <section class="grid" aria-label="平台能力">
-      <article class="card">
-        <span class="tag">英语</span>
-        <h2>规则优先，语义辅助</h2>
-        <p>先覆盖客观题、填空与限定句子；阅读简答进入教师复核。</p>
-      </article>
-      <article class="card">
-        <span class="tag">数学</span>
-        <h2>安全 AST 与符号等价</h2>
-        <p>不执行学生字符串，使用白名单结构判断数值和表达式。</p>
-      </article>
-      <article class="card">
-        <span class="tag">教师</span>
-        <h2>证据、复核与追溯</h2>
-        <p>评分结果保留规则、版本和证据，支持改分理由与申诉。</p>
-      </article>
-    </section>
-
-    <footer class="footer">Core API: {{ config.public.apiBase }}</footer>
+    <footer class="footer">面向英语与数学作业的学习与教学协作平台</footer>
   </main>
 </template>
