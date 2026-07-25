@@ -1,8 +1,10 @@
 name: PR 110 LanguageTool timeout finalizer
 
 on:
-  issue_comment:
-    types: [created]
+  pull_request:
+    types: [reopened]
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -11,11 +13,7 @@ permissions:
 
 jobs:
   finalize:
-    if: >-
-      github.event.issue.pull_request &&
-      github.event.issue.number == 118 &&
-      github.event.comment.user.login == github.repository_owner &&
-      github.event.comment.body == '/finalize-language-timeout-v1'
+    if: github.head_ref == 'agent/languagetool-timeout-v1'
     runs-on: ubuntu-latest
     steps:
       - name: Check out branch
