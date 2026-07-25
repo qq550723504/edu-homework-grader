@@ -82,16 +82,12 @@ jobs:
           text = text.replace(old_scenarios, new_scenarios, 1)
 
           old_restore = (
-              "    _compose(context, 'start', 'languagetool')\n"
+              '    _compose(context, "start", "languagetool")\n'
+              '    _wait_for_http(context.languagetool_health_url, timeout_seconds=90)\n'
+              '    _compose(context, "restart", "grader")\n'
+              '    _wait_for_http(f"{context.grader_url}/health", timeout_seconds=90)\n'
+              '    _wait_for_language_dependency(grader, timeout_seconds=90)\n'
           )
-          if old_restore not in text:
-              old_restore = (
-                  '    _compose(context, "start", "languagetool")\n'
-                  '    _wait_for_http(context.languagetool_health_url, timeout_seconds=90)\n'
-                  '    _compose(context, "restart", "grader")\n'
-                  '    _wait_for_http(f"{context.grader_url}/health", timeout_seconds=90)\n'
-                  '    _wait_for_language_dependency(grader, timeout_seconds=90)\n'
-              )
           new_restore = (
               '    _compose(\n'
               '        context,\n'
@@ -190,9 +186,11 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm -f .github/workflows/pr123-robust-language-recovery.yml
           git add \
             apps/api/src/edu_grader_api/services/verification_release_evidence.py \
-            apps/api/tests/test_verification_release_evidence.py
+            apps/api/tests/test_verification_release_evidence.py \
+            .github/workflows/pr123-robust-language-recovery.yml
           git commit -m 'fix: warm LanguageTool before recovery verification'
           git fetch origin agent/verification-release-evidence-v1
           git rebase origin/agent/verification-release-evidence-v1
