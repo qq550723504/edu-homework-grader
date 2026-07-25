@@ -122,6 +122,7 @@
             <div><span class="subject">{{ version.question_type }} · {{ version.policy_version }} · {{ version.max_score }} 分</span><h4>{{ version.title }}</h4><p>{{ version.prompt }}</p></div>
             <button class="button secondary" :aria-label="`添加题目 ${version.question_type}`" :disabled="saving || selectedAssignmentQuestions.some((item) => item.id === version.id)" type="button" @click="addAssignmentQuestion(version)">添加</button>
           </article>
+          <button v-if="student.account_state === 'unbound'" class="button secondary" :disabled="saving" type="button" @click="issueRosterActivation(student)">生成激活码</button>
           <p v-if="availableAssignmentQuestions.length === 0" class="notice">当前学科没有可添加的已发布题目。</p>
         </section>
         <section class="stack" aria-labelledby="assignment-composition-heading">
@@ -170,7 +171,7 @@
         <template v-for="student in rosterStudents" :key="student.id">
           <article class="assignment">
             <div><span class="subject">{{ student.school_id }}</span><h4>{{ student.display_name }}</h4></div>
-            <div class="actions"><button class="button secondary" :disabled="saving" type="button" @click="beginRosterStudentEdit(student)">编辑姓名</button><button class="button secondary" :disabled="saving" type="button" @click="removeRosterStudent(student)">移出班级</button></div>
+            <div class="actions"><span class="tag">{{ student.account_state === 'bound' ? '已绑定' : student.account_state === 'activation_issued' ? '待激活' : '未激活' }}</span><button class="button secondary" :disabled="saving" type="button" @click="beginRosterStudentEdit(student)">编辑姓名</button><button class="button secondary" :disabled="saving" type="button" @click="removeRosterStudent(student)">移出班级</button></div>
           </article>
           <form v-if="editingRosterStudentId === student.id" class="stack" @submit.prevent="saveRosterStudentName(student.id)">
             <label>学生姓名<input v-model.trim="editingRosterStudentName" required maxlength="200"></label>
@@ -204,7 +205,7 @@
 
 <script setup lang="ts">
 import { fetchCurrentPrincipal } from '../../lib/student-api'
-import { createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, fetchQuestionPolicyCatalog, fetchQuestionTestCaseTemplates, fetchTeacherRosterClasses, fetchTeacherRosterStudents, fetchTeacherWorkspace, importTeacherRoster, previewQuestionTestCase, publishAssignment, publishQuestionVersion, removeTeacherRosterStudent, runQuestionTests, updateAssignment, updateTeacherRosterStudent, type CreateQuestionInput, type QuestionPolicyCatalogEntry, type QuestionTestCaseTemplate, type QuestionTestRun, type TeacherAssignment, type TeacherQuestionVersion, type TeacherRosterClass, type TeacherRosterStudent } from '../../lib/teacher-api'
+import { createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, downloadTeacherActivationCodes, fetchQuestionPolicyCatalog, fetchQuestionTestCaseTemplates, fetchTeacherRosterClasses, fetchTeacherRosterStudents, fetchTeacherWorkspace, importTeacherRoster, previewQuestionTestCase, publishAssignment, publishQuestionVersion, removeTeacherRosterStudent, runQuestionTests, updateAssignment, updateTeacherRosterStudent, type CreateQuestionInput, type QuestionPolicyCatalogEntry, type QuestionTestCaseTemplate, type QuestionTestRun, type TeacherAssignment, type TeacherQuestionVersion, type TeacherRosterClass, type TeacherRosterStudent } from '../../lib/teacher-api'
 import { addQuestionToComposition, availableQuestionsForSubject, compositionSummary, moveQuestion, removeQuestion, type AssignmentSubject } from '../../lib/assignment-composition'
 import { buildEnglishQuestionRule, defaultEnglishDraft, fieldForPolicyError, type EnglishQuestionType } from '../../lib/english-question-authoring'
 import { teacherModules, type TeacherModule } from '../../lib/teacher-workbench'
@@ -460,6 +461,20 @@ async function removeRosterStudent(student: TeacherRosterStudent) {
     cancelRosterStudentEdit()
     message.value = '学生已移出当前班级。'
     await loadWorkspace()
+  } catch (error: unknown) { message.value = teacherErrorMessage(error) }
+  finally { saving.value = false }
+}
+
+async function issueRosterActivation(student: TeacherRosterStudent) {
+  if (!selectedRosterClassId.value || !window.confirm('激活码仅可下载一次；下载后无法再次查看。是否继续？')) return
+  saving.value = true
+  try {
+    const result = await downloadTeacherActivationCodes(fetch, await csrfToken(), selectedRosterClassId.value, [student.id])
+    const url = URL.createObjectURL(result.blob)
+    Object.assign(document.createElement('a'), { href: url, download: result.filename }).click()
+    URL.revokeObjectURL(url)
+    message.value = '激活码已下载，请安全交付给学生。'
+    await loadRosterStudents()
   } catch (error: unknown) { message.value = teacherErrorMessage(error) }
   finally { saving.value = false }
 }
