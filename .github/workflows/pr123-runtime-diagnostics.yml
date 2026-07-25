@@ -11,6 +11,10 @@ permissions:
   pull-requests: write
   issues: write
 
+concurrency:
+  group: pr123-release-evidence-runtime-diagnostic
+  cancel-in-progress: true
+
 jobs:
   diagnose:
     if: github.head_ref == 'agent/verification-release-evidence-v1'
@@ -20,9 +24,12 @@ jobs:
       PROCESSOR_ALLOWED_HOSTS: grader,languagetool,localhost,127.0.0.1
       GRADER_REQUEST_TIMEOUT_SECONDS: "5"
       VERIFICATION_TOTAL_TIMEOUT_SECONDS: "30"
-      RELEASE_EVIDENCE_DATABASE_URL: postgresql+psycopg://release_evidence:release-evidence-password@127.0.0.1:55432/release_evidence
-      RELEASE_EVIDENCE_GRADER_URL: http://127.0.0.1:58010
-      RELEASE_EVIDENCE_LANGUAGETOOL_HEALTH_URL: http://127.0.0.1:58011/v2/languages
+      RELEASE_EVIDENCE_POSTGRES_PORT: "56432"
+      RELEASE_EVIDENCE_GRADER_PORT: "59010"
+      RELEASE_EVIDENCE_LANGUAGETOOL_PORT: "59011"
+      RELEASE_EVIDENCE_DATABASE_URL: postgresql+psycopg://release_evidence:release-evidence-password@127.0.0.1:56432/release_evidence
+      RELEASE_EVIDENCE_GRADER_URL: http://127.0.0.1:59010
+      RELEASE_EVIDENCE_LANGUAGETOOL_HEALTH_URL: http://127.0.0.1:59011/v2/languages
     steps:
       - name: Check out source
         uses: actions/checkout@v4
