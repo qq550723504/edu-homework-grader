@@ -1,8 +1,19 @@
 <template>
-  <main class="shell narrow">
-    <NuxtLink class="back" to="/teacher">← 返回教师工作台</NuxtLink><LogoutButton />
-    <p class="eyebrow">教师端 · 复核</p>
-    <h1>复核队列</h1>
+  <main class="teacher-workbench">
+    <aside class="teacher-workbench__sidebar">
+      <NuxtLink class="teacher-brand" to="/teacher">作业批改</NuxtLink>
+      <p class="teacher-brand__role">教师工作区</p>
+      <TeacherWorkbenchNav active-module="reviews" />
+    </aside>
+
+    <section class="teacher-workbench__content">
+      <div class="shell teacher-page">
+        <header class="teacher-topbar">
+          <NuxtLink class="teacher-topbar__back" to="/teacher">← 返回教师工作台</NuxtLink>
+          <LogoutButton />
+        </header>
+        <p class="eyebrow">教师端 · 复核</p>
+        <h1>复核队列</h1>
     <p v-if="message" class="notice" role="status">{{ message }}</p>
 
     <section class="card wide">
@@ -27,7 +38,7 @@
       <button v-if="batchTaskIds.length" class="button primary" :disabled="saving" type="button" @click="confirmBatch">批量确认 {{ batchTaskIds.length }} 个确定性答案</button>
     </section>
 
-    <section v-if="activeTask && detail" class="card wide" aria-labelledby="review-detail-heading">
+        <section v-if="activeTask && detail" class="card wide" aria-labelledby="review-detail-heading">
       <span class="tag">{{ detail.reason }}</span>
       <h2 id="review-detail-heading">复核详情</h2>
       <p>任务状态：{{ detail.status }} · 批改版本：{{ detail.version }}</p>
@@ -43,6 +54,8 @@
         <button class="button primary" :disabled="saving" type="submit">保存复核决策</button>
       </form>
       <button v-if="detail.status === 'resolved'" class="button primary" :disabled="saving" type="button" @click="publishResult">发布此学生成绩</button>
+        </section>
+      </div>
     </section>
   </main>
 </template>
@@ -50,6 +63,7 @@
 <script setup lang="ts">
 import { fetchCurrentPrincipal } from '../../lib/student-api'
 import { batchConfirmReviewTasks, decideReviewTask, fetchTeacherReviewTask, fetchTeacherReviewTasks, fetchTeacherWorkspace, publishAttemptResults, type TeacherReviewTask, type TeacherReviewTaskDetail } from '../../lib/teacher-api'
+import TeacherWorkbenchNav from '../../components/teacher/TeacherWorkbenchNav.vue'
 
 const workspace = ref<{ classes: Array<{ id: string; code: string; name: string }>; assignments: Array<{ id: string; title: string }> }>({ classes: [], assignments: [] })
 const tasks = ref<TeacherReviewTask[]>([])

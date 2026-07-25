@@ -18,6 +18,15 @@ describe('teacher workbench UI contract', () => {
     expect(teacherPage).toContain('<TeacherWorkbenchNav :active-module="activeModule" />')
   })
 
+  it('keeps the review queue inside the teacher workbench shell', () => {
+    const reviewPage = readFileSync(new URL('../app/pages/teacher/reviews.vue', import.meta.url), 'utf8')
+
+    expect(reviewPage).toContain('<main class="teacher-workbench">')
+    expect(reviewPage).toContain('<aside class="teacher-workbench__sidebar">')
+    expect(reviewPage).toContain('<section class="teacher-workbench__content">')
+    expect(reviewPage).toContain('<TeacherWorkbenchNav active-module="reviews" />')
+  })
+
   it('renders the selected class roster with an empty state', () => {
     const teacherPage = readFileSync(new URL('../app/pages/teacher/index.vue', import.meta.url), 'utf8')
 
