@@ -21,7 +21,7 @@ Every repetition uses a unique Compose project and a fresh PostgreSQL volume. Th
 
 The Compose project uses an isolated private `/24` bridge. The runner accepts only a private IPv4 `/24` for this network, and before each repetition verifies that four distinct unassigned addresses terminate as `ConnectTimeout` without using environment proxies. These targets are reserved for the Normalizer, Grader, LanguageTool and Similarity connection-timeout scenarios. The CIDR may be overridden through `RELEASE_EVIDENCE_CONNECT_TIMEOUT_NETWORK`; the runner derives and injects the matching LanguageTool target for the second Grader automatically. Network addresses are never written to the evidence reports.
 
-## Scenario catalog v5
+## Scenario catalog v6
 
 ### Capacity candidate bytes
 
@@ -95,6 +95,26 @@ The scenario succeeds only when:
 
 The proxy control plane exposes only mode and aggregate call counts. It does not persist request bodies, candidate content, upstream locations or exception text.
 
+### Total verification-budget stage boundaries
+
+The runner uses a scenario-local deterministic monotonic clock with the production
+budget-aware wrapper. PostgreSQL and the Grader/LanguageTool services remain real;
+only the clock reaches the configured total budget at the selected production check.
+
+It proves the four remaining stable stages:
+
+- `capacity_preflight`, before capacity evaluation;
+- `duplicate_check`, before duplicate work;
+- `grader`, before the first Grader request;
+- `persist`, after validation and before immutable Run persistence.
+
+Each scenario succeeds only when the outage Run is `blocked` with exactly
+`verification_total_timeout`, reports the matching terminal stage, preserves zero
+`QuestionVersion` delta, and remains immutable after a fresh recovery Run. The first
+three scenarios record no outage Grader request; the `persist` scenario allows the
+completed validation requests that precede persistence. Every recovery Run must pass
+with a separate completed budget.
+
 ## Evidence outputs
 
 The command is:
@@ -142,7 +162,6 @@ Artifacts use the source SHA in their name and are retained for 14 days.
 
 Version 1 does not yet provide:
 
-- every total-budget stage boundary in the real-service environment;
 - a reusable RC workflow callable from the milestone signing pipeline;
 - full OIDC browser acceptance.
 

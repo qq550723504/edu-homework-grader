@@ -195,6 +195,48 @@ def test_total_timeout_is_persisted_in_one_final_plan(
     assert signal["terminal_stage"] == "grader"
 
 
+def test_duplicate_check_timeout_prevents_grader_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    draft, revision = draft_and_revision()
+    clock = FakeClock()
+    persisted = validation_run()
+    grader = PassingGrader()
+
+    def fake_capacity(*args: object, **kwargs: object) -> object:
+        budget = kwargs["budget"]
+        clock.advance(30)
+        budget.check("duplicate_check")
+        kwargs["grader_client"].grade("M1", {"expected": 4}, {"text": "4"})
+        raise AssertionError("timeout must prevent a grader call")
+
+    def fake_persist(*args: object, **kwargs: object) -> object:
+        finalizer = kwargs["persistence_finalizer"]
+        assert callable(finalizer)
+        apply_plan(persisted, finalizer, findings=tuple(kwargs["findings"]))
+        return persisted
+
+    monkeypatch.setattr(budgeted, "run_capacity_aware_candidate_verification", fake_capacity)
+    monkeypatch.setattr(budgeted.core, "_persist_run", fake_persist)
+    monkeypatch.setattr(budgeted.settings, "verification_total_timeout_seconds", 30.0)
+
+    result = budgeted.run_budget_aware_candidate_verification(
+        session,  # type: ignore[arg-type]
+        draft=draft,  # type: ignore[arg-type]
+        revision=revision,  # type: ignore[arg-type]
+        grader_client=grader,  # type: ignore[arg-type]
+        clock=clock,
+    )
+
+    assert result is persisted
+    assert [finding.code for finding in persisted.findings] == ["verification_total_timeout"]
+    assert persisted.feature_summary_json["verification_budget_signal"]["terminal_stage"] == (
+        "duplicate_check"
+    )
+    assert persisted.status is ValidationRunStatus.BLOCKED
+
+
 def test_swallowed_dependency_timeout_is_in_final_plan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

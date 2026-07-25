@@ -28,7 +28,7 @@ from .budget_aware_verification import (
     run_budget_aware_candidate_verification,
 )
 from .grader import HttpGraderClient
-from .verification_budget import VERIFICATION_BUDGET_RULESET_VERSION
+from .verification_budget import BudgetStage, VERIFICATION_BUDGET_RULESET_VERSION
 from .verification_capacity import (
     VERIFICATION_CAPACITY_RULESET_VERSION,
     evaluate_verification_capacity,
@@ -40,7 +40,7 @@ from .verification_performance import (
 )
 
 REPORT_VERSION = base.REPORT_VERSION
-SCENARIO_CATALOG_VERSION = 5
+SCENARIO_CATALOG_VERSION = 6
 DEFAULT_REPETITIONS = base.DEFAULT_REPETITIONS
 DEFAULT_DATABASE_URL = base.DEFAULT_DATABASE_URL
 DEFAULT_GRADER_URL = base.DEFAULT_GRADER_URL
@@ -52,6 +52,24 @@ CONNECT_TIMEOUT_SECONDS = 0.25
 
 DependencyKind = Literal["normalizer", "grader", "language", "similarity"]
 ProxyMode = Literal["stall", "forward"]
+
+
+@dataclass(slots=True)
+class BudgetBoundaryClock:
+    """Deterministically expire a release-evidence budget check."""
+
+    expire_on_call: int
+    total_seconds: float
+    call_count: int = 0
+
+    def __post_init__(self) -> None:
+        if self.expire_on_call <= 0 or self.total_seconds <= 0:
+            raise ValueError("budget boundary clock requires positive values")
+
+    def __call__(self) -> float:
+        self.call_count += 1
+        return self.total_seconds if self.call_count >= self.expire_on_call else 0.0
+
 
 _EXPECTED_TIMEOUT_FINDING: Mapping[DependencyKind, str] = {
     "normalizer": "normalizer_timeout",
@@ -71,6 +89,18 @@ _CONNECT_SCENARIO_ID: Mapping[Literal["normalizer", "grader", "similarity"], str
     "similarity": "similarity_connect_timeout_recovery",
 }
 _LANGUAGE_CONNECT_SCENARIO_ID = "language_connect_timeout_recovery"
+_TOTAL_BUDGET_SCENARIO_IDS: Mapping[BudgetStage, str] = {
+    "capacity_preflight": "total_budget_capacity_preflight",
+    "duplicate_check": "total_budget_duplicate_check",
+    "grader": "total_budget_dependency_boundary",
+    "persist": "total_budget_persist",
+}
+_BUDGET_STAGE_EXPIRE_ON_CALL: Mapping[BudgetStage, int] = {
+    "capacity_preflight": 2,
+    "duplicate_check": 5,
+    "grader": 7,
+    "persist": 19,
+}
 
 
 def _connect_timeout_hosts(
@@ -490,6 +520,20 @@ def _run_repetition(
                 "capacity_candidate_bytes",
                 lambda: base._capacity_gate_scenario(session),
             )
+            for offset, stage in enumerate(_TOTAL_BUDGET_SCENARIO_IDS, start=80):
+                _append_scenario(
+                    session,
+                    scenarios,
+                    _TOTAL_BUDGET_SCENARIO_IDS[stage],
+                    lambda stage=stage, ordinal=repetition * 100 + offset: (
+                        _total_budget_stage_scenario(
+                            session,
+                            stage=stage,
+                            ordinal=ordinal,
+                            grader_url=context.grader_url,
+                        )
+                    ),
+                )
             language_proxy.set_mode("forward")
             language_proxy.reset_counts()
             _append_scenario(
@@ -779,6 +823,97 @@ def _dependency_timeout_recovery_scenario(
         "outage_finding_codes": outage_findings,
         "outage_call_bucket": _call_bucket(outage_counts["stall"]),
         "new_calls_after_timeout": new_calls_after_timeout,
+        "recovery_status": recovery_run.status.value,
+        "recovery_finding_codes": recovery_findings,
+        "recovery_call_bucket": _call_bucket(recovery_counts["forward"]),
+        "old_run_immutable": outage_immutable,
+        "fresh_budget_completed": (
+            recovery_budget.get("status") == "completed"
+            if isinstance(recovery_budget, dict)
+            else False
+        ),
+        "question_version_delta": versions_after - versions_before,
+        "passed": passed,
+    }
+
+
+def _total_budget_stage_scenario(
+    session: Session,
+    *,
+    stage: BudgetStage,
+    ordinal: int,
+    grader_url: str,
+) -> dict[str, object]:
+    draft = _create_timeout_draft(session, dependency="grader", ordinal=ordinal)
+    session.commit()
+    revision = base._revision(session, draft)
+    versions_before = base._question_version_count(session)
+    clock = BudgetBoundaryClock(
+        expire_on_call=_BUDGET_STAGE_EXPIRE_ON_CALL[stage],
+        total_seconds=float(settings.verification_total_timeout_seconds),
+    )
+
+    with FaultInjectingGraderProxy(grader_url, stall_seconds=1.0) as proxy:
+        proxy.set_mode("forward")
+        proxy.reset_counts()
+        outage_run = run_budget_aware_candidate_verification(
+            session,
+            draft=draft,
+            revision=revision,
+            grader_client=HttpGraderClient(proxy.base_url),
+            clock=clock,
+        )
+        session.commit()
+        outage_counts = proxy.call_counts()
+        outage_snapshot = base._run_snapshot(outage_run)
+
+        proxy.reset_counts()
+        recovery_run = run_budget_aware_candidate_verification(
+            session,
+            draft=draft,
+            revision=revision,
+            grader_client=HttpGraderClient(proxy.base_url),
+        )
+        session.commit()
+        recovery_counts = proxy.call_counts()
+
+    versions_after = base._question_version_count(session)
+    session.expire_all()
+    persisted_outage = session.get(base.GenerationValidationRun, outage_run.id)
+    if persisted_outage is None:
+        raise base.ProductRegression("total_budget_run_missing")
+    outage_immutable = base._run_snapshot(persisted_outage) == outage_snapshot
+    outage_budget = outage_run.feature_summary_json.get("verification_budget_signal")
+    recovery_budget = recovery_run.feature_summary_json.get("verification_budget_signal")
+    outage_findings = base._finding_codes(outage_run)
+    recovery_findings = base._finding_codes(recovery_run)
+    no_outage_grader_calls = stage in {
+        "capacity_preflight",
+        "duplicate_check",
+        "grader",
+    }
+    passed = (
+        outage_run.status.value == "blocked"
+        and outage_findings == ["verification_total_timeout"]
+        and isinstance(outage_budget, dict)
+        and outage_budget.get("status") == "total_timeout"
+        and outage_budget.get("terminal_stage") == stage
+        and (not no_outage_grader_calls or outage_counts == {"stall": 0, "forward": 0})
+        and recovery_run.status.value == "passed"
+        and "verification_total_timeout" not in recovery_findings
+        and isinstance(recovery_budget, dict)
+        and recovery_budget.get("status") == "completed"
+        and recovery_counts["forward"] > 0
+        and outage_run.id != recovery_run.id
+        and outage_immutable
+        and versions_after == versions_before
+    )
+    return {
+        "scenario_id": _TOTAL_BUDGET_SCENARIO_IDS[stage],
+        "terminal_stage": stage,
+        "outage_status": outage_run.status.value,
+        "outage_finding_codes": outage_findings,
+        "outage_call_bucket": _call_bucket(outage_counts["forward"]),
         "recovery_status": recovery_run.status.value,
         "recovery_finding_codes": recovery_findings,
         "recovery_call_bucket": _call_bucket(recovery_counts["forward"]),
