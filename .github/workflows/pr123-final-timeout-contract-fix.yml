@@ -40,76 +40,56 @@ jobs:
           from pathlib import Path
 
 
-          def replace_once(path: str, old: str, new: str) -> None:
-              target = Path(path)
-              text = target.read_text(encoding="utf-8")
-              if old not in text:
-                  if new in text:
-                      return
-                  raise SystemExit(f"marker missing in {path}: {old[:120]!r}")
-              target.write_text(text.replace(old, new, 1), encoding="utf-8")
-
-
-          module = "apps/api/src/edu_grader_api/services/verification_release_evidence.py"
-          replace_once(
-              module,
-              "import time\nfrom typing import Mapping\n",
-              "import time\nfrom typing import Mapping\n\nimport httpx\n",
+          module_path = Path(
+              "apps/api/src/edu_grader_api/services/verification_release_evidence.py"
           )
-          replace_once(
-              module,
+          module = module_path.read_text(encoding="utf-8")
+          if "import httpx\n" not in module:
+              marker = "from urllib.request import Request, urlopen\n\n"
+              if marker not in module:
+                  raise SystemExit("httpx import marker missing")
+              module = module.replace(marker, marker + "import httpx\n", 1)
+          module = module.replace(
               "from .grader import HttpGraderClient\n",
               "from .grader import GraderRequestTimeoutError, HttpGraderClient\n",
+              1,
           )
-          replace_once(
-              module,
-              '''                {"text": "I travelled by train."},
-                  policy_version="1",
-              )
-              return
-          except Exception:
-              time.sleep(1)
-          ''',
-              '''                {"format": "text-v1", "text": "I travelled by train."},
-                  policy_version="1",
-              )
-              return
-          except (GraderRequestTimeoutError, httpx.HTTPError):
-              time.sleep(1)
-          ''',
+          helper_start = module.index("def _wait_for_language_dependency(")
+          helper_end = module.index("\ndef _capture_service_environment(", helper_start)
+          helper = module[helper_start:helper_end]
+          old_answer = '{"text": "I travelled by train."}'
+          new_answer = '{"format": "text-v1", "text": "I travelled by train."}'
+          if old_answer in helper:
+              helper = helper.replace(old_answer, new_answer, 1)
+          elif new_answer not in helper:
+              raise SystemExit("readiness answer marker missing")
+          old_except = "        except Exception:\n            time.sleep(1)"
+          new_except = (
+              "        except (GraderRequestTimeoutError, httpx.HTTPError):\n"
+              "            time.sleep(1)"
           )
+          if old_except in helper:
+              helper = helper.replace(old_except, new_except, 1)
+          elif new_except not in helper:
+              raise SystemExit("readiness retry marker missing")
+          module = module[:helper_start] + helper + module[helper_end:]
+          module_path.write_text(module, encoding="utf-8")
 
-          tests = "apps/api/tests/test_verification_release_evidence.py"
-          replace_once(
-              tests,
-              '''class _RecoveringLanguageGrader:
+          test_path = Path("apps/api/tests/test_verification_release_evidence.py")
+          tests = test_path.read_text(encoding="utf-8")
+          tests = tests.replace(
+              'raise RuntimeError("synthetic warmup")',
+              'raise evidence.GraderRequestTimeoutError("language")',
+              1,
+          )
+          contract_test_marker = "test_language_dependency_readiness_uses_text_v1_envelope"
+          if contract_test_marker not in tests:
+              tests += '''
+
+
+          class _CapturingLanguageGrader:
               def __init__(self) -> None:
-                  self.calls = 0
-
-              def grade(self, *args: object, **kwargs: object) -> object:
-                  self.calls += 1
-                  if self.calls == 1:
-                      raise RuntimeError("synthetic warmup")
-                  return object()
-
-
-          def test_language_dependency_readiness_retries_without_persisting(
-              monkeypatch: pytest.MonkeyPatch,
-          ) -> None:
-              grader = _RecoveringLanguageGrader()
-              monkeypatch.setattr(evidence.time, "monotonic", lambda: 0.0)
-              monkeypatch.setattr(evidence.time, "sleep", lambda seconds: None)
-
-              evidence._wait_for_language_dependency(  # type: ignore[arg-type]
-                  grader,
-                  timeout_seconds=1,
-              )
-
-              assert grader.calls == 2
-          ''',
-              '''class _RecoveringLanguageGrader:
-              def __init__(self) -> None:
-                  self.calls: list[tuple[str, dict[str, object], dict[str, object], str | None]] = []
+                  self.answer_json: dict[str, object] | None = None
 
               def grade(
                   self,
@@ -119,45 +99,67 @@ jobs:
                   *,
                   policy_version: str | None = None,
               ) -> object:
-                  self.calls.append((question_type, rule_json, answer_json, policy_version))
-                  if len(self.calls) == 1:
-                      raise evidence.GraderRequestTimeoutError("language")
+                  self.answer_json = answer_json
                   return object()
 
 
-          def test_language_dependency_readiness_retries_with_valid_text_envelope(
-              monkeypatch: pytest.MonkeyPatch,
-          ) -> None:
-              grader = _RecoveringLanguageGrader()
-              monkeypatch.setattr(evidence.time, "monotonic", lambda: 0.0)
-              monkeypatch.setattr(evidence.time, "sleep", lambda seconds: None)
+          def test_language_dependency_readiness_uses_text_v1_envelope() -> None:
+              grader = _CapturingLanguageGrader()
 
               evidence._wait_for_language_dependency(  # type: ignore[arg-type]
                   grader,
                   timeout_seconds=1,
               )
 
-              assert len(grader.calls) == 2
-              question_type, _, answer_json, policy_version = grader.calls[-1]
-              assert question_type == "E3"
-              assert answer_json == {
+              assert grader.answer_json == {
                   "format": "text-v1",
                   "text": "I travelled by train.",
               }
-              assert policy_version == "1"
-          ''',
-          )
 
-          replace_once(
-              ".github/workflows/verification-release-evidence.yml",
+
+          class _InvalidContractGrader:
+              def __init__(self) -> None:
+                  self.calls = 0
+
+              def grade(self, *args: object, **kwargs: object) -> object:
+                  self.calls += 1
+                  raise ValueError("invalid local adapter contract")
+
+
+          def test_language_dependency_readiness_does_not_mask_contract_errors() -> None:
+              grader = _InvalidContractGrader()
+
+              with pytest.raises(ValueError, match="invalid local adapter contract"):
+                  evidence._wait_for_language_dependency(  # type: ignore[arg-type]
+                      grader,
+                      timeout_seconds=1,
+                  )
+
+              assert grader.calls == 1
+          '''
+          test_path.write_text(tests, encoding="utf-8")
+
+          workflow_path = Path(".github/workflows/verification-release-evidence.yml")
+          workflow = workflow_path.read_text(encoding="utf-8")
+          workflow = workflow.replace(
               '      GRADER_REQUEST_TIMEOUT_SECONDS: "5"\n',
               '      GRADER_REQUEST_TIMEOUT_SECONDS: "15"\n',
+              1,
           )
-          replace_once(
-              "infra/release-evidence/compose.yaml",
+          if '      GRADER_REQUEST_TIMEOUT_SECONDS: "15"\n' not in workflow:
+              raise SystemExit("Core Grader timeout hierarchy was not applied")
+          workflow_path.write_text(workflow, encoding="utf-8")
+
+          compose_path = Path("infra/release-evidence/compose.yaml")
+          compose = compose_path.read_text(encoding="utf-8")
+          compose = compose.replace(
               "      LANGUAGETOOL_TIMEOUT_SECONDS: 10\n",
               "      LANGUAGETOOL_TIMEOUT_SECONDS: 5\n",
+              1,
           )
+          if "      LANGUAGETOOL_TIMEOUT_SECONDS: 5\n" not in compose:
+              raise SystemExit("LanguageTool timeout hierarchy was not applied")
+          compose_path.write_text(compose, encoding="utf-8")
           PY
 
       - name: Format, lint, and run focused regression
