@@ -11,6 +11,7 @@ on:
       - "apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py"
       - "apps/api/tests/test_verification_release_evidence.py"
       - "apps/api/tests/test_verification_release_timeout_evidence.py"
+      - "apps/api/tests/test_budget_aware_verification.py"
       - "apps/api/tests/test_languagetool_fault_proxy.py"
       - "infra/release-evidence/**"
       - "infra/languagetool/**"

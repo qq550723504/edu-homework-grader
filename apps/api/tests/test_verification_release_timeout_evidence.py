@@ -118,8 +118,35 @@ def test_call_buckets_are_stable() -> None:
     assert evidence._call_bucket(2) == "multiple"
 
 
+def test_budget_boundary_clock_expires_at_selected_invocation() -> None:
+    clock = evidence.BudgetBoundaryClock(expire_on_call=4, total_seconds=30.0)
+
+    assert [clock(), clock(), clock(), clock(), clock()] == [0.0, 0.0, 0.0, 30.0, 30.0]
+    assert clock.call_count == 5
+
+
+@pytest.mark.parametrize("expire_on_call", [0, -1])
+def test_budget_boundary_clock_rejects_invalid_call(expire_on_call: int) -> None:
+    with pytest.raises(ValueError, match="positive"):
+        evidence.BudgetBoundaryClock(expire_on_call=expire_on_call, total_seconds=30.0)
+
+
+def test_total_budget_stage_catalog_is_explicit() -> None:
+    assert evidence._TOTAL_BUDGET_SCENARIO_IDS == {
+        "capacity_preflight": "total_budget_capacity_preflight",
+        "duplicate_check": "total_budget_duplicate_check",
+        "grader": "total_budget_dependency_boundary",
+        "persist": "total_budget_persist",
+    }
+
+
+def test_total_budget_catalog_version_is_explicit() -> None:
+    assert evidence.SCENARIO_CATALOG_VERSION == 6
+    assert len(evidence._TOTAL_BUDGET_SCENARIO_IDS) == 4
+
+
 def test_language_timeout_catalog_is_explicit() -> None:
-    assert evidence.SCENARIO_CATALOG_VERSION == 5
+    assert evidence.SCENARIO_CATALOG_VERSION == 6
     assert evidence._EXPECTED_TIMEOUT_FINDING["language"] == "language_timeout"
     assert evidence._SCENARIO_ID["language"] == "language_read_timeout_recovery"
 
