@@ -176,3 +176,34 @@ def test_language_dependency_readiness_retries_without_persisting(
     )
 
     assert grader.calls == 2
+
+
+class _WarmupResponse:
+    status = 200
+
+    def __enter__(self) -> "_WarmupResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
+def test_language_tool_warmup_uses_check_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(request: object, *, timeout: float) -> _WarmupResponse:
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return _WarmupResponse()
+
+    monkeypatch.setattr(evidence, "urlopen", fake_urlopen)
+    evidence._warm_language_tool(
+        "http://127.0.0.1:58011/v2/languages",
+        timeout_seconds=120,
+    )
+
+    request = captured["request"]
+    assert getattr(request, "full_url").endswith("/v2/check")
+    assert captured["timeout"] == 120

@@ -14,7 +14,8 @@ import subprocess
 import sys
 import time
 from typing import Mapping
-from urllib.request import urlopen
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import Session
@@ -211,10 +212,29 @@ def _run_repetition(
         environment = _capture_service_environment(context)
         stage = "scenario_execution"
         with _session(context.database_url) as session:
-            scenarios = [
-                _capacity_gate_scenario(session),
-                _language_recovery_scenario(session, context),
-            ]
+            scenarios: list[dict[str, object]] = []
+            try:
+                scenarios.append(_capacity_gate_scenario(session))
+            except Exception:
+                session.rollback()
+                scenarios.append(
+                    {
+                        "scenario_id": "capacity_candidate_bytes",
+                        "failure_code": "capacity_scenario_execution_failed",
+                        "passed": False,
+                    }
+                )
+            try:
+                scenarios.append(_language_recovery_scenario(session, context))
+            except Exception:
+                session.rollback()
+                scenarios.append(
+                    {
+                        "scenario_id": "language_dependency_recovery",
+                        "failure_code": "language_recovery_execution_failed",
+                        "passed": False,
+                    }
+                )
             report["scenarios"] = scenarios
             if not all(item.get("passed") is True for item in scenarios):
                 raise ProductRegression("representative_scenario_failed")
@@ -317,11 +337,20 @@ def _language_recovery_scenario(
     session.commit()
     outage_snapshot = _run_snapshot(outage_run)
 
-    _compose(context, "start", "languagetool")
-    _wait_for_http(context.languagetool_health_url, timeout_seconds=90)
-    _compose(context, "restart", "grader")
+    _compose(
+        context,
+        "up",
+        "--detach",
+        "--force-recreate",
+        "--wait",
+        "--wait-timeout",
+        "240",
+        "languagetool",
+        "grader",
+    )
+    _warm_language_tool(context.languagetool_health_url, timeout_seconds=120)
     _wait_for_http(f"{context.grader_url}/health", timeout_seconds=90)
-    _wait_for_language_dependency(grader, timeout_seconds=90)
+    _wait_for_language_dependency(grader, timeout_seconds=120)
     recovery_run = run_budget_aware_candidate_verification(
         session,
         draft=draft,
@@ -360,6 +389,23 @@ def _language_recovery_scenario(
         "question_version_delta": versions_after - versions_before,
         "passed": passed,
     }
+
+
+def _warm_language_tool(
+    health_url: str,
+    *,
+    timeout_seconds: float,
+) -> None:
+    check_url = f"{health_url.rsplit('/', 1)[0]}/check"
+    request = Request(
+        check_url,
+        data=urlencode({"text": "I travelled by train.", "language": "en-US"}).encode("utf-8"),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    with urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
+        if not 200 <= response.status < 300:
+            raise RuntimeError("language dependency warmup failed")
 
 
 def _wait_for_language_dependency(
