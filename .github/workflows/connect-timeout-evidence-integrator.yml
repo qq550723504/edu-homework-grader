@@ -1,0 +1,918 @@
+name: Dependency connect-timeout evidence integrator
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: dependency-connect-timeout-evidence-integrator
+  cancel-in-progress: true
+
+jobs:
+  integrate:
+    if: >-
+      github.head_ref == 'agent/dependency-connect-timeout-evidence-v1' &&
+      github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/dependency-connect-timeout-evidence-v1
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Apply connect-timeout evidence implementation
+        id: patch
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              if old not in text:
+                  if new in text:
+                      return
+                  raise SystemExit(f"marker missing in {path}: {old[:160]!r}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+          grader = "apps/api/src/edu_grader_api/services/grader.py"
+          replace_once(
+              grader,
+              '''    def __init__(self, base_url: str) -> None:
+              self.base_url = base_url.rstrip("/")
+          ''',
+              '''    def __init__(
+              self,
+              base_url: str,
+              *,
+              request_timeout_seconds: float | None = None,
+          ) -> None:
+              self.base_url = base_url.rstrip("/")
+              timeout = (
+                  settings.grader_request_timeout_seconds
+                  if request_timeout_seconds is None
+                  else request_timeout_seconds
+              )
+              if (
+                  isinstance(timeout, bool)
+                  or not isinstance(timeout, int | float)
+                  or not math.isfinite(timeout)
+                  or timeout <= 0
+                  or timeout > 60
+              ):
+                  raise ValueError("grader request timeout must be finite and between 0 and 60 seconds")
+              self.request_timeout_seconds = float(timeout)
+          ''',
+          )
+          replace_once(
+              grader,
+              "                timeout=settings.grader_request_timeout_seconds,\n",
+              "                timeout=self.request_timeout_seconds,\n",
+          )
+
+          grader_tests = dedent('''
+              from __future__ import annotations
+
+              import math
+
+              import pytest
+
+              from edu_grader_api.services import grader as adapter
+              from edu_grader_api.services.grader import HttpGraderClient
+
+
+              class FakeResponse:
+                  def raise_for_status(self) -> None:
+                      return None
+
+                  def json(self) -> dict[str, object]:
+                      return {
+                          "decision": "auto_accepted",
+                          "score": 1,
+                          "grader_version": "test-v1",
+                      }
+
+
+              def test_http_grader_client_uses_explicit_request_timeout(
+                  monkeypatch: pytest.MonkeyPatch,
+              ) -> None:
+                  captured: dict[str, object] = {}
+
+                  def fake_post(
+                      target: str,
+                      *,
+                      json: dict[str, object],
+                      timeout: float,
+                  ) -> FakeResponse:
+                      captured["timeout"] = timeout
+                      return FakeResponse()
+
+                  monkeypatch.setattr(adapter.httpx, "post", fake_post)
+                  client = HttpGraderClient(
+                      "http://localhost:8010",
+                      request_timeout_seconds=0.25,
+                  )
+
+                  result = client.grade(
+                      "M1",
+                      {"expected": 4, "tolerance": 0},
+                      {"format": "text-v1", "text": "4"},
+                      policy_version="1",
+                  )
+
+                  assert result.decision == "auto_accepted"
+                  assert client.request_timeout_seconds == 0.25
+                  assert captured == {"timeout": 0.25}
+
+
+              @pytest.mark.parametrize(
+                  "value",
+                  [True, 0, -1, math.inf, -math.inf, math.nan, 61],
+              )
+              def test_http_grader_client_rejects_invalid_request_timeout(value: object) -> None:
+                  with pytest.raises(ValueError, match="grader request timeout"):
+                      HttpGraderClient(
+                          "http://localhost:8010",
+                          request_timeout_seconds=value,  # type: ignore[arg-type]
+                      )
+          ''').lstrip()
+          Path("apps/api/tests/test_grader_request_timeout_override.py").write_text(
+              grader_tests,
+              encoding="utf-8",
+          )
+
+          module = "apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py"
+          replace_once(
+              module,
+              "from datetime import UTC, datetime\nfrom http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n",
+              "from datetime import UTC, datetime\n"
+              "from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n"
+              "from ipaddress import IPv4Network, ip_network\n",
+          )
+          replace_once(
+              module,
+              'SCENARIO_CATALOG_VERSION = 3\n',
+              'SCENARIO_CATALOG_VERSION = 4\n',
+          )
+          replace_once(
+              module,
+              'DEFAULT_LANGUAGE_FAULT_PROXY_URL = "http://127.0.0.1:58012"\n',
+              'DEFAULT_LANGUAGE_FAULT_PROXY_URL = "http://127.0.0.1:58012"\n'
+              'DEFAULT_LANGUAGE_CONNECT_GRADER_URL = "http://127.0.0.1:58013"\n'
+              'DEFAULT_CONNECT_TIMEOUT_NETWORK = "172.30.254.0/24"\n'
+              'CONNECT_TIMEOUT_SECONDS = 0.25\n',
+          )
+          replace_once(
+              module,
+              '''_SCENARIO_ID: Mapping[DependencyKind, str] = {
+              "normalizer": "normalizer_read_timeout_recovery",
+              "grader": "grader_read_timeout_recovery",
+              "language": "language_read_timeout_recovery",
+              "similarity": "similarity_read_timeout_recovery",
+          }
+          ''',
+              '''_SCENARIO_ID: Mapping[DependencyKind, str] = {
+              "normalizer": "normalizer_read_timeout_recovery",
+              "grader": "grader_read_timeout_recovery",
+              "language": "language_read_timeout_recovery",
+              "similarity": "similarity_read_timeout_recovery",
+          }
+          _CONNECT_SCENARIO_ID: Mapping[DependencyKind, str] = {
+              "normalizer": "normalizer_connect_timeout_recovery",
+              "grader": "grader_connect_timeout_recovery",
+              "language": "language_connect_timeout_recovery",
+              "similarity": "similarity_connect_timeout_recovery",
+          }
+          ''',
+          )
+
+          connect_hosts_helper = dedent('''
+
+
+              def _connect_timeout_hosts(
+                  network_cidr: str,
+              ) -> tuple[dict[DependencyKind, str], dict[DependencyKind, str]]:
+                  network = ip_network(network_cidr, strict=True)
+                  if (
+                      not isinstance(network, IPv4Network)
+                      or network.prefixlen != 24
+                      or not network.is_private
+                  ):
+                      raise ValueError("connect-timeout network must be a private IPv4 /24")
+                  scenario_offsets: Mapping[DependencyKind, int] = {
+                      "normalizer": 5,
+                      "grader": 6,
+                      "similarity": 7,
+                      "language": 8,
+                  }
+                  probe_offsets: Mapping[DependencyKind, int] = {
+                      "normalizer": 15,
+                      "grader": 16,
+                      "similarity": 17,
+                      "language": 18,
+                  }
+                  scenarios = {
+                      dependency: str(network.broadcast_address - offset)
+                      for dependency, offset in scenario_offsets.items()
+                  }
+                  probes = {
+                      dependency: str(network.broadcast_address - offset)
+                      for dependency, offset in probe_offsets.items()
+                  }
+                  return scenarios, probes
+          ''')
+          replace_once(
+              module,
+              "\n\nclass _FaultProxyHTTPServer(ThreadingHTTPServer):\n",
+              connect_hosts_helper + "\n\nclass _FaultProxyHTTPServer(ThreadingHTTPServer):\n",
+          )
+          replace_once(
+              module,
+              '''    languagetool_health_url: str = DEFAULT_LANGUAGETOOL_HEALTH_URL,
+              language_fault_proxy_url: str = DEFAULT_LANGUAGE_FAULT_PROXY_URL,
+          ) -> tuple[dict[str, object], base.ReportPaths]:
+          ''',
+              '''    languagetool_health_url: str = DEFAULT_LANGUAGETOOL_HEALTH_URL,
+              language_fault_proxy_url: str = DEFAULT_LANGUAGE_FAULT_PROXY_URL,
+              language_connect_grader_url: str = DEFAULT_LANGUAGE_CONNECT_GRADER_URL,
+              connect_timeout_network: str = DEFAULT_CONNECT_TIMEOUT_NETWORK,
+          ) -> tuple[dict[str, object], base.ReportPaths]:
+          ''',
+          )
+          replace_once(
+              module,
+              '''    if not compose_file.is_file():
+              raise ValueError("release evidence compose file does not exist")
+
+              repetition_reports: list[dict[str, object]] = []
+          ''',
+              '''    if not compose_file.is_file():
+              raise ValueError("release evidence compose file does not exist")
+              connect_hosts, connect_probe_hosts = _connect_timeout_hosts(
+                  connect_timeout_network
+              )
+
+              repetition_reports: list[dict[str, object]] = []
+          ''',
+          )
+          replace_once(
+              module,
+              '''        repetition_report, discovered_environment = _run_repetition(
+                  context,
+                  repetition,
+                  language_fault_proxy_url=language_fault_proxy_url,
+              )
+          ''',
+              '''        repetition_report, discovered_environment = _run_repetition(
+                  context,
+                  repetition,
+                  language_fault_proxy_url=language_fault_proxy_url,
+                  language_connect_grader_url=language_connect_grader_url,
+                  connect_hosts=connect_hosts,
+                  connect_probe_hosts=connect_probe_hosts,
+              )
+          ''',
+          )
+          replace_once(
+              module,
+              '            "timeout_fault_version": "verification-dependency-read-timeout-v2",\n',
+              '            "timeout_fault_version": "verification-dependency-timeout-v3",\n',
+          )
+          replace_once(
+              module,
+              '''            "timeout_dependencies": [
+                  "normalizer",
+                  "grader",
+                  "language",
+                  "similarity",
+              ],
+          ''',
+              '''            "timeout_dependencies": [
+                  "normalizer",
+                  "grader",
+                  "language",
+                  "similarity",
+              ],
+              "connect_timeout_dependencies": [
+                  "normalizer",
+                  "grader",
+                  "language",
+                  "similarity",
+              ],
+          ''',
+          )
+          replace_once(
+              module,
+              '''def _run_repetition(
+              context: base.ComposeContext,
+              repetition: int,
+              *,
+              language_fault_proxy_url: str,
+          ) -> tuple[dict[str, object], dict[str, object]]:
+          ''',
+              '''def _run_repetition(
+              context: base.ComposeContext,
+              repetition: int,
+              *,
+              language_fault_proxy_url: str,
+              language_connect_grader_url: str,
+              connect_hosts: Mapping[DependencyKind, str],
+              connect_probe_hosts: Mapping[DependencyKind, str],
+          ) -> tuple[dict[str, object], dict[str, object]]:
+          ''',
+          )
+          replace_once(
+              module,
+              '''            "postgres",
+                  "languagetool",
+                  "grader",
+              )
+          ''',
+              '''            "postgres",
+                  "languagetool",
+                  "grader",
+                  "language-connect-grader",
+              )
+          ''',
+          )
+          replace_once(
+              module,
+              '''        stage = "environment_capture"
+              environment = base._capture_service_environment(context)
+              stage = "language_fault_proxy_readiness"
+          ''',
+              '''        stage = "environment_capture"
+              environment = base._capture_service_environment(context)
+              environment["language_connect_grader_image_id"] = base._service_image_id(
+                  context,
+                  "language-connect-grader",
+              )
+              stage = "language_fault_proxy_readiness"
+          ''',
+          )
+          replace_once(
+              module,
+              '''        language_proxy.wait_ready(timeout_seconds=90)
+              language_proxy.set_mode("forward")
+              language_proxy.reset_counts()
+              stage = "scenario_execution"
+          ''',
+              '''        language_proxy.wait_ready(timeout_seconds=90)
+              language_proxy.set_mode("forward")
+              language_proxy.reset_counts()
+              stage = "connect_timeout_preflight"
+              for dependency in ("normalizer", "grader", "similarity"):
+                  _assert_host_connect_timeout(connect_probe_hosts[dependency])
+              _assert_container_connect_timeout(
+                  context,
+                  service="language-connect-grader",
+                  host=connect_probe_hosts["language"],
+              )
+              stage = "scenario_execution"
+          ''',
+          )
+
+          old_read_block = '''            with FaultInjectingGraderProxy(
+                  context.grader_url,
+                  stall_seconds=stall_seconds,
+                  forward_timeout_seconds=max(stall_seconds * 2, 30.0),
+              ) as proxy:
+                  for index, dependency in enumerate(
+                      ("normalizer", "grader", "similarity"),
+                      start=1,
+                  ):
+                      scenario_id = _SCENARIO_ID[dependency]
+                      _append_scenario(
+                          session,
+                          scenarios,
+                          scenario_id,
+                          lambda dependency=dependency, ordinal=(repetition * 100 + index): (
+                              _dependency_timeout_recovery_scenario(
+                                  session,
+                                  proxy=proxy,
+                                  dependency=dependency,
+                                  ordinal=ordinal,
+                              )
+                          ),
+                      )
+              report["scenarios"] = scenarios
+          '''
+          new_read_block = '''            with FaultInjectingGraderProxy(
+                  context.grader_url,
+                  stall_seconds=stall_seconds,
+                  forward_timeout_seconds=max(stall_seconds * 2, 30.0),
+              ) as proxy:
+                  for index, dependency in enumerate(
+                      ("normalizer", "grader", "similarity"),
+                      start=1,
+                  ):
+                      scenario_id = _SCENARIO_ID[dependency]
+                      _append_scenario(
+                          session,
+                          scenarios,
+                          scenario_id,
+                          lambda dependency=dependency, ordinal=(repetition * 100 + index): (
+                              _dependency_timeout_recovery_scenario(
+                                  session,
+                                  proxy=proxy,
+                                  dependency=dependency,
+                                  ordinal=ordinal,
+                              )
+                          ),
+                      )
+
+              language_proxy.set_mode("forward")
+              language_proxy.reset_counts()
+              with FaultInjectingGraderProxy(
+                  context.grader_url,
+                  stall_seconds=stall_seconds,
+                  forward_timeout_seconds=max(stall_seconds * 2, 30.0),
+              ) as recovery_proxy:
+                  recovery_proxy.set_mode("forward")
+                  for index, dependency in enumerate(
+                      ("normalizer", "grader", "language", "similarity"),
+                      start=1,
+                  ):
+                      scenario_id = _CONNECT_SCENARIO_ID[dependency]
+                      _append_scenario(
+                          session,
+                          scenarios,
+                          scenario_id,
+                          lambda dependency=dependency, ordinal=(
+                              repetition * 100 + 20 + index
+                          ): _connect_timeout_recovery_scenario(
+                              session,
+                              recovery_proxy=recovery_proxy,
+                              dependency=dependency,
+                              connect_host=connect_hosts[dependency],
+                              language_connect_grader_url=language_connect_grader_url,
+                              ordinal=ordinal,
+                          ),
+                      )
+              report["scenarios"] = scenarios
+          '''
+          replace_once(module, old_read_block, new_read_block)
+
+          connect_functions = dedent('''
+
+
+              def _assert_host_connect_timeout(host: str) -> None:
+                  timeout = httpx.Timeout(
+                      connect=CONNECT_TIMEOUT_SECONDS,
+                      read=1.0,
+                      write=1.0,
+                      pool=1.0,
+                  )
+                  try:
+                      with httpx.Client(timeout=timeout, trust_env=False) as client:
+                          client.post(f"http://{host}:8010/connect-timeout-probe")
+                  except httpx.ConnectTimeout:
+                      return
+                  except httpx.HTTPError as error:
+                      raise base.ProductRegression("connect_timeout_host_probe_failed") from error
+                  raise base.ProductRegression("connect_timeout_host_probe_connected")
+
+
+              def _assert_container_connect_timeout(
+                  context: base.ComposeContext,
+                  *,
+                  service: str,
+                  host: str,
+              ) -> None:
+                  script = (
+                      "import os\n"
+                      "import httpx\n"
+                      "timeout = httpx.Timeout(connect=0.25, read=1, write=1, pool=1)\n"
+                      "try:\n"
+                      "    with httpx.Client(timeout=timeout, trust_env=False) as client:\n"
+                      "        client.post(f\"http://{os.environ['CONNECT_TIMEOUT_HOST']}:8010/probe\")\n"
+                      "except httpx.ConnectTimeout:\n"
+                      "    raise SystemExit(0)\n"
+                      "except Exception:\n"
+                      "    raise SystemExit(2)\n"
+                      "raise SystemExit(3)\n"
+                  )
+                  base._compose(
+                      context,
+                      "exec",
+                      "-T",
+                      "-e",
+                      f"CONNECT_TIMEOUT_HOST={host}",
+                      service,
+                      "python",
+                      "-c",
+                      script,
+                  )
+
+
+              def _connect_timeout_recovery_scenario(
+                  session: Session,
+                  *,
+                  recovery_proxy: FaultInjectingGraderProxy,
+                  dependency: DependencyKind,
+                  connect_host: str,
+                  language_connect_grader_url: str,
+                  ordinal: int,
+              ) -> dict[str, object]:
+                  draft = _create_timeout_draft(
+                      session,
+                      dependency=dependency,
+                      ordinal=ordinal,
+                  )
+                  session.commit()
+                  revision = base._revision(session, draft)
+                  versions_before = base._question_version_count(session)
+                  if dependency == "language":
+                      outage_client = HttpGraderClient(language_connect_grader_url)
+                  else:
+                      outage_client = HttpGraderClient(
+                          f"http://{connect_host}:8010",
+                          request_timeout_seconds=CONNECT_TIMEOUT_SECONDS,
+                      )
+
+                  outage_run = run_budget_aware_candidate_verification(
+                      session,
+                      draft=draft,
+                      revision=revision,
+                      grader_client=outage_client,
+                  )
+                  session.commit()
+                  outage_snapshot = base._run_snapshot(outage_run)
+
+                  recovery_proxy.reset_counts()
+                  recovery_proxy.set_mode("forward")
+                  recovery_run = run_budget_aware_candidate_verification(
+                      session,
+                      draft=draft,
+                      revision=revision,
+                      grader_client=HttpGraderClient(recovery_proxy.base_url),
+                  )
+                  session.commit()
+                  recovery_counts = recovery_proxy.call_counts()
+                  versions_after = base._question_version_count(session)
+
+                  session.expire_all()
+                  persisted_outage = session.get(
+                      base.GenerationValidationRun,
+                      outage_run.id,
+                  )
+                  if persisted_outage is None:
+                      raise base.ProductRegression("connect_timeout_run_missing")
+                  outage_immutable = base._run_snapshot(persisted_outage) == outage_snapshot
+                  outage_budget = outage_run.feature_summary_json.get(
+                      "verification_budget_signal"
+                  )
+                  recovery_budget = recovery_run.feature_summary_json.get(
+                      "verification_budget_signal"
+                  )
+                  outage_findings = base._finding_codes(outage_run)
+                  recovery_findings = base._finding_codes(recovery_run)
+                  expected_finding = _EXPECTED_TIMEOUT_FINDING[dependency]
+                  passed = (
+                      outage_run.status.value == "blocked"
+                      and expected_finding in outage_findings
+                      and isinstance(outage_budget, dict)
+                      and outage_budget.get("status") == "dependency_timeout"
+                      and outage_budget.get("terminal_dependency") == dependency
+                      and recovery_run.status.value == "passed"
+                      and expected_finding not in recovery_findings
+                      and isinstance(recovery_budget, dict)
+                      and recovery_budget.get("status") == "completed"
+                      and recovery_counts["forward"] > 0
+                      and outage_run.id != recovery_run.id
+                      and outage_immutable
+                      and versions_after == versions_before
+                  )
+                  return {
+                      "scenario_id": _CONNECT_SCENARIO_ID[dependency],
+                      "dependency": dependency,
+                      "fault_mode": "connect_timeout",
+                      "fault_probe": "ConnectTimeout",
+                      "outage_status": outage_run.status.value,
+                      "outage_finding_codes": outage_findings,
+                      "outage_call_bucket": "none",
+                      "network_attempt_bucket": "single",
+                      "new_calls_after_timeout": 0,
+                      "recovery_status": recovery_run.status.value,
+                      "recovery_finding_codes": recovery_findings,
+                      "recovery_call_bucket": _call_bucket(
+                          recovery_counts["forward"]
+                      ),
+                      "old_run_immutable": outage_immutable,
+                      "fresh_budget_completed": (
+                          recovery_budget.get("status") == "completed"
+                          if isinstance(recovery_budget, dict)
+                          else False
+                      ),
+                      "question_version_delta": versions_after - versions_before,
+                      "passed": passed,
+                  }
+          ''')
+          replace_once(
+              module,
+              "\n\ndef _warm_timeout_dependencies(grader_url: str) -> None:\n",
+              connect_functions + "\n\ndef _warm_timeout_dependencies(grader_url: str) -> None:\n",
+          )
+          replace_once(
+              module,
+              '''    parser.add_argument(
+              "--language-fault-proxy-url",
+              default=os.environ.get(
+                  "RELEASE_EVIDENCE_LANGUAGE_FAULT_PROXY_URL",
+                  DEFAULT_LANGUAGE_FAULT_PROXY_URL,
+              ),
+          )
+              return parser
+          ''',
+              '''    parser.add_argument(
+              "--language-fault-proxy-url",
+              default=os.environ.get(
+                  "RELEASE_EVIDENCE_LANGUAGE_FAULT_PROXY_URL",
+                  DEFAULT_LANGUAGE_FAULT_PROXY_URL,
+              ),
+          )
+              parser.add_argument(
+              "--language-connect-grader-url",
+              default=os.environ.get(
+                  "RELEASE_EVIDENCE_LANGUAGE_CONNECT_GRADER_URL",
+                  DEFAULT_LANGUAGE_CONNECT_GRADER_URL,
+              ),
+          )
+              parser.add_argument(
+              "--connect-timeout-network",
+              default=os.environ.get(
+                  "RELEASE_EVIDENCE_CONNECT_TIMEOUT_NETWORK",
+                  DEFAULT_CONNECT_TIMEOUT_NETWORK,
+              ),
+          )
+              return parser
+          ''',
+          )
+          replace_once(
+              module,
+              '''        languagetool_health_url=arguments.languagetool_health_url,
+              language_fault_proxy_url=arguments.language_fault_proxy_url,
+          )
+          ''',
+              '''        languagetool_health_url=arguments.languagetool_health_url,
+              language_fault_proxy_url=arguments.language_fault_proxy_url,
+              language_connect_grader_url=arguments.language_connect_grader_url,
+              connect_timeout_network=arguments.connect_timeout_network,
+          )
+          ''',
+          )
+
+          timeout_tests = Path(
+              "apps/api/tests/test_verification_release_timeout_evidence.py"
+          )
+          test_text = timeout_tests.read_text(encoding="utf-8")
+          test_text = test_text.replace(
+              "assert evidence.SCENARIO_CATALOG_VERSION == 3",
+              "assert evidence.SCENARIO_CATALOG_VERSION == 4",
+          )
+          test_text += dedent('''
+
+
+              def test_connect_timeout_catalog_and_private_network_are_explicit() -> None:
+                  scenarios, probes = evidence._connect_timeout_hosts(
+                      "172.30.254.0/24"
+                  )
+                  assert evidence.SCENARIO_CATALOG_VERSION == 4
+                  assert evidence._CONNECT_SCENARIO_ID == {
+                      "normalizer": "normalizer_connect_timeout_recovery",
+                      "grader": "grader_connect_timeout_recovery",
+                      "language": "language_connect_timeout_recovery",
+                      "similarity": "similarity_connect_timeout_recovery",
+                  }
+                  assert len(set(scenarios.values())) == 4
+                  assert len(set(probes.values())) == 4
+                  assert set(scenarios.values()).isdisjoint(probes.values())
+
+
+              @pytest.mark.parametrize(
+                  "network",
+                  ["192.0.2.0/24", "172.30.0.0/16", "2001:db8::/64"],
+              )
+              def test_connect_timeout_network_rejects_invalid_ranges(network: str) -> None:
+                  with pytest.raises(ValueError, match="private IPv4 /24"):
+                      evidence._connect_timeout_hosts(network)
+          ''')
+          timeout_tests.write_text(test_text, encoding="utf-8")
+
+          compose = "infra/release-evidence/compose.yaml"
+          language_connect_service = dedent('''
+
+              language-connect-grader:
+                image: edu-homework-grader/grader:release-evidence
+                build:
+                  context: ../..
+                  dockerfile: services/grader/Dockerfile
+                environment:
+                  APP_ENV: test
+                  GRADER_MATH_CPU_SECONDS: 2
+                  GRADER_MATH_MEMORY_BYTES: 536870912
+                  GRADER_MATH_TIMEOUT_SECONDS: 5
+                  LANGUAGETOOL_BASE_URL: "http://${RELEASE_EVIDENCE_LANGUAGE_CONNECT_TIMEOUT_HOST:-172.30.254.247}:8010/v2"
+                  LANGUAGETOOL_TIMEOUT_SECONDS: 0.25
+                  ENGLISH_EMBEDDING_MODEL_DIRECTORY: /opt/english-model
+                  ENGLISH_EMBEDDING_MODEL_ID: sentence-transformers/all-MiniLM-L6-v2
+                  ENGLISH_EMBEDDING_MODEL_REVISION: 1110a243fdf4706b3f48f1d95db1a4f5529b4d41
+                  ENGLISH_EMBEDDING_MODEL_DIGEST: sha256:84714cdabb16d132cbe6e1a4cbd21167abd09eccbdaf69dd053136ae68cc7c17
+                  PROCESSOR_ALLOWED_HOSTS: "grader,languagetool,language-fault-proxy,localhost,127.0.0.1,${RELEASE_EVIDENCE_LANGUAGE_CONNECT_TIMEOUT_HOST:-172.30.254.247}"
+                  GENERATION_PROVIDER: fake
+                ports:
+                  - "${RELEASE_EVIDENCE_LANGUAGE_CONNECT_GRADER_PORT:-58013}:8010"
+                healthcheck:
+                  test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8010/health')"]
+                  interval: 2s
+                  timeout: 3s
+                  retries: 30
+
+              networks:
+                default:
+                  ipam:
+                    config:
+                      - subnet: "${RELEASE_EVIDENCE_CONNECT_TIMEOUT_NETWORK:-172.30.254.0/24}"
+          ''')
+          target = Path(compose)
+          compose_text = target.read_text(encoding="utf-8")
+          if "language-connect-grader:" not in compose_text:
+              compose_text = compose_text.rstrip() + language_connect_service + "\n"
+          target.write_text(compose_text, encoding="utf-8")
+
+          docs = "docs/verification-release-evidence.md"
+          replace_once(docs, "## Scenario catalog v3\n", "## Scenario catalog v4\n")
+          replace_once(
+              docs,
+              '- the repository Grader image configured to call LanguageTool through that proxy.\n',
+              '- the repository Grader image configured to call LanguageTool through that proxy;\n'
+              '- a second real Grader image whose LanguageTool endpoint is an unassigned address on the isolated evidence bridge.\n',
+          )
+          connect_docs = dedent('''
+
+              ### Normalizer, Grader, LanguageTool and Similarity connect timeouts
+
+              The evidence Compose project uses a private `/24` bridge. Each dependency category receives a distinct unassigned scenario address, while separate unassigned addresses are reserved for host/container preflight probes. A 250 ms connect deadline is shorter than neighbor resolution, so the probe and production request terminate as `httpx.ConnectTimeout` instead of connection refusal or a routed external request.
+
+              Production-path scenarios use:
+
+              - a real `HttpGraderClient` with an explicit per-client timeout for Normalizer, Grader and Similarity;
+              - a second real Grader service whose LanguageTool endpoint is a distinct unassigned bridge address for the LanguageTool category;
+              - the normal Grader stack for every fresh recovery run.
+
+              Each scenario succeeds only when:
+
+              - the outage run is `blocked` with the category-specific stable timeout Finding;
+              - the shared budget records `dependency_timeout` and the correct terminal dependency;
+              - the network preflight is exactly `ConnectTimeout`, no application endpoint accepts the outage request and no later dependency call begins;
+              - a fresh run reaches the real service stack and completes with `passed` and a `completed` budget;
+              - the prior blocked run remains immutable;
+              - no `QuestionVersion` is created.
+
+              The private bridge CIDR can be overridden with `RELEASE_EVIDENCE_CONNECT_TIMEOUT_NETWORK` when a local Docker installation already uses the default subnet. Evidence outputs contain only the stable fault class and call-count buckets, never network addresses or exception messages.
+          ''')
+          replace_once(
+              docs,
+              "\n## Evidence outputs\n",
+              connect_docs + "\n## Evidence outputs\n",
+          )
+          replace_once(
+              docs,
+              '- controlled connect-timeout injection for all four dependency categories;\n',
+              '',
+          )
+          PY
+          } 2>&1 | tee /tmp/connect-evidence-patch.log
+
+      - name: Publish patch diagnostic
+        if: steps.patch.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo '### Connect-timeout evidence patch diagnostic'
+            echo
+            echo '```text'
+            tail -n 220 /tmp/connect-evidence-patch.log
+            echo '```'
+          } > /tmp/comment.md
+          gh pr comment 127 --repo "$GITHUB_REPOSITORY" --body-file /tmp/comment.md
+
+      - name: Format, lint, and run focused regression
+        id: regression
+        if: steps.patch.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          PROCESSOR_ALLOWED_HOSTS: grader,languagetool,localhost,127.0.0.1,172.30.254.250,172.30.254.249,172.30.254.248
+          RELEASE_EVIDENCE_CONNECT_TIMEOUT_NETWORK: 172.30.254.0/24
+          RELEASE_EVIDENCE_LANGUAGE_CONNECT_TIMEOUT_HOST: 172.30.254.247
+        run: |
+          set -o pipefail
+          {
+            make install-python >/dev/null
+            python -m ruff format \
+              apps/api/src/edu_grader_api/services/grader.py \
+              apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py \
+              apps/api/tests/test_grader_request_timeout_override.py \
+              apps/api/tests/test_verification_release_timeout_evidence.py
+            python -m ruff check --fix --config ruff.toml \
+              apps/api/src/edu_grader_api/services/grader.py \
+              apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py \
+              apps/api/tests/test_grader_request_timeout_override.py \
+              apps/api/tests/test_verification_release_timeout_evidence.py
+            python -m ruff check --config ruff.toml \
+              apps/api/src/edu_grader_api/services/grader.py \
+              apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py \
+              apps/api/tests/test_grader_request_timeout_override.py \
+              apps/api/tests/test_verification_release_timeout_evidence.py
+            python -m pytest \
+              apps/api/tests/test_grader_request_timeout_override.py \
+              apps/api/tests/test_verification_release_timeout_evidence.py \
+              apps/api/tests/test_languagetool_fault_proxy.py \
+              apps/api/tests/test_verification_release_evidence.py \
+              apps/api/tests/test_budget_aware_verification.py \
+              apps/api/tests/test_verification_budget.py -q
+            docker compose --file infra/release-evidence/compose.yaml config --quiet
+            git diff --check
+          } 2>&1 | tee /tmp/connect-evidence-regression.log
+
+      - name: Publish regression diagnostic
+        if: steps.patch.outcome == 'success' && steps.regression.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo '### Connect-timeout evidence regression diagnostic'
+            echo
+            echo '```text'
+            tail -n 240 /tmp/connect-evidence-regression.log
+            echo '```'
+          } > /tmp/comment.md
+          gh pr comment 127 --repo "$GITHUB_REPOSITORY" --body-file /tmp/comment.md
+
+      - name: Push verified non-workflow implementation
+        id: publish
+        if: steps.patch.outcome == 'success' && steps.regression.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add \
+              apps/api/src/edu_grader_api/services/grader.py \
+              apps/api/src/edu_grader_api/services/verification_release_timeout_evidence.py \
+              apps/api/tests/test_grader_request_timeout_override.py \
+              apps/api/tests/test_verification_release_timeout_evidence.py \
+              docs/verification-release-evidence.md \
+              infra/release-evidence/compose.yaml
+            git status --short
+            git commit -m 'feat: add dependency connect-timeout evidence'
+            git push origin HEAD:agent/dependency-connect-timeout-evidence-v1
+          } 2>&1 | tee /tmp/connect-evidence-publish.log
+
+      - name: Publish branch-write diagnostic
+        if: steps.publish.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo '### Connect-timeout evidence branch-write diagnostic'
+            echo
+            echo '```text'
+            tail -n 200 /tmp/connect-evidence-publish.log
+            echo '```'
+          } > /tmp/comment.md
+          gh pr comment 127 --repo "$GITHUB_REPOSITORY" --body-file /tmp/comment.md
+
+      - name: Fail when integration failed
+        if: >-
+          steps.patch.outcome != 'success' ||
+          steps.regression.outcome != 'success' ||
+          steps.publish.outcome == 'failure'
+        run: exit 1
