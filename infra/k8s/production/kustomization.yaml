@@ -11,6 +11,7 @@ resources:
   - datastore.yaml
   - application.yaml
   - ingress.yaml
+  - student-activation-expiry.yaml
 configMapGenerator:
   - name: edu-grader-production-realm
     files:

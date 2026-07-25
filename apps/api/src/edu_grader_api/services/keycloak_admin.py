@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 from urllib.parse import quote
 
 import httpx
@@ -60,3 +61,11 @@ class KeycloakAdminClient:
         )
         response.raise_for_status()
         return str(response.json()["access_token"])
+
+    def disable_temporary_password(self, keycloak_user_id: str) -> None:
+        headers = {"Authorization": f"Bearer {self._access_token()}"}
+        self.client.put(
+            f"{self.base_url}/admin/realms/{self.realm}/users/{keycloak_user_id}/reset-password",
+            json={"type": "password", "value": secrets.token_urlsafe(32), "temporary": True},
+            headers=headers,
+        ).raise_for_status()

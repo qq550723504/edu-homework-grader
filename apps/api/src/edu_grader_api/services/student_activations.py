@@ -26,6 +26,7 @@ def generate_activation_code() -> str:
 
 class StudentProvisioner(Protocol):
     def ensure_student(self, *, school_id: str, display_name: str, activation_code: str) -> str: ...
+    def disable_temporary_password(self, keycloak_user_id: str) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -86,3 +87,17 @@ def consume_pending_activation(session: Session, *, student: User, now: datetime
     activation.consumed_at = now
     session.commit()
     return True
+
+
+def expire_activations(session: Session, *, keycloak: StudentProvisioner, now: datetime) -> int:
+    expired = list(session.scalars(select(StudentActivation).where(
+        StudentActivation.status == StudentActivationStatus.ISSUED,
+        StudentActivation.expires_at <= now,
+    )))
+    for activation in expired:
+        if activation.keycloak_user_id:
+            keycloak.disable_temporary_password(activation.keycloak_user_id)
+        activation.status = StudentActivationStatus.EXPIRED
+        activation.expired_at = now
+    session.commit()
+    return len(expired)
