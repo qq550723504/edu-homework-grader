@@ -8,8 +8,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
-  issues: write
 
 concurrency:
   group: pr123-release-evidence-recovery-fix
@@ -134,26 +132,24 @@ jobs:
             git diff --check
           } 2>&1 | tee /tmp/pr123-recovery-regression.log
 
-      - name: Publish failure diagnostic
+      - name: Persist failure diagnostic
         if: steps.regression.outcome != 'success'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          {
-            echo '### PR #123 recovery regression'
-            echo
-            echo '```text'
-            tail -n 180 /tmp/pr123-recovery-regression.log 2>/dev/null || echo 'regression log unavailable'
-            echo '```'
-          } > /tmp/comment.md
-          gh pr comment 123 --repo "$GITHUB_REPOSITORY" --body-file /tmp/comment.md
+          tail -n 180 /tmp/pr123-recovery-regression.log > .github/pr123-recovery-diagnostic.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/pr123-recovery-diagnostic.txt
+          git commit -m 'chore: capture recovery regression diagnostic' || true
+          git push origin HEAD:agent/verification-release-evidence-v1
 
       - name: Remove one-shot workflow and push fix
         if: steps.regression.outcome == 'success'
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          rm -f .github/workflows/pr123-release-evidence-recovery-fix.yml
+          rm -f \
+            .github/workflows/pr123-release-evidence-recovery-fix.yml \
+            .github/pr123-recovery-diagnostic.txt
           git add -A
           git commit -m 'fix: stabilize release evidence recovery'
           git push origin HEAD:agent/verification-release-evidence-v1
