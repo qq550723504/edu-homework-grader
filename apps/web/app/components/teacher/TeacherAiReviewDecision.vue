@@ -19,7 +19,7 @@ const state = computed(() => {
     heading: '暂不能接受', nextStep: '请修改题目、重新生成或拒绝；阻断问题解决前不能创建草稿。',
   }
   if (props.validation.status === 'warning') return {
-    heading: '可接受，但请先确认提醒', nextStep: '阅读每条提醒后，勾选“我已阅读提醒”才能接受。',
+    heading: '需要教师确认', nextStep: '阅读每条提醒后，勾选“我已阅读提醒”才能接受。',
   }
   return { heading: '可以接受', nextStep: '接受后会创建题库草稿，仍需测试和发布。' }
 })

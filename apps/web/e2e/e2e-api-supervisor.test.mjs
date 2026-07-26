@@ -185,6 +185,12 @@ test('polluted parent identity environment cannot change the real E2E identity',
     }
   }, 'fixed E2E student identity did not survive polluted parent OIDC settings')
 
+  const openApi = await (await fetch('http://127.0.0.1:18000/openapi.json')).json()
+  assert.equal(
+    Object.hasOwn(openApi.components.schemas.GeneratedCandidate.properties, 'verification_assertions'),
+    true,
+  )
+
   launcher.kill('SIGKILL')
 
   await waitUntil(

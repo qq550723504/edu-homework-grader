@@ -90,6 +90,13 @@ const blockedValidation: TeacherAiValidationRun = {
   }],
 }
 
+const passedValidation: TeacherAiValidationRun = {
+  ...warningValidation,
+  id: 'validation-passed',
+  status: 'passed',
+  findings: [],
+}
+
 let route: { query: Record<string, string> }
 let navigateTo: ReturnType<typeof vi.fn>
 
@@ -184,19 +191,34 @@ describe('teacher AI review rendering', () => {
     expect(wrapper.get('[data-testid="ai-review-candidate-list"]')).toBeTruthy()
     expect(wrapper.get('[data-testid="ai-review-preview"]')).toBeTruthy()
     expect(wrapper.get('[data-testid="ai-review-decision"]')).toBeTruthy()
-    expect(wrapper.get('[data-testid="review-decision-heading"]').text()).toBe('可接受，但请先确认提醒')
+    expect(wrapper.get('[data-testid="review-decision-heading"]').text()).toBe('需要教师确认')
     expect(wrapper.get('[data-testid="review-decision-next-step"]').text()).toContain('勾选“我已阅读提醒”')
     expect(wrapper.get('[data-testid="advanced-review-information"]').attributes('open')).toBeUndefined()
   })
 
-  it('explains blocked candidates without offering acceptance', () => {
+  it('shows the student preview, blocked reason, and corrective action before editable internals', () => {
     const wrapper = mount(TeacherAiCandidateReview, {
       props: { draft: warningE4Draft, validation: blockedValidation },
     })
 
-    expect(wrapper.get('[data-testid="review-decision-heading"]').text()).toBe('暂不能接受')
+    expect(wrapper.get('[data-testid="review-student-preview"]').text()).toContain('Why was the bridge closed?')
+    expect(wrapper.get('[data-testid="review-decision"]').text()).toContain('暂不能接受')
+    expect(wrapper.get('[data-testid="review-decision"]').text()).toContain('Resolve this validation finding')
     expect(wrapper.get('[data-testid="review-decision-next-step"]').text()).toContain('修改题目、重新生成或拒绝')
-    expect(wrapper.get('[data-testid="accept-candidate"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="blocked-primary-action"]').text()).toContain('修改并重新校验')
+    expect(wrapper.get('[data-testid="edit-candidate-details"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="edit-candidate-details"]').text()).toContain('保存后会重新校验')
+    expect(wrapper.get('[data-testid="save-revision"]').text()).toContain('保存并重新校验')
+    expect(wrapper.get('[data-testid="technical-review-details"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="accept-candidate"]').exists()).toBe(false)
+  })
+
+  it('explains that acceptance creates a draft rather than publishing to students', () => {
+    const wrapper = mount(TeacherAiCandidateReview, { props: { draft: warningE4Draft, validation: passedValidation } })
+
+    expect(wrapper.get('[data-testid="review-decision"]').text()).toContain('创建题库草稿')
+    expect(wrapper.get('[data-testid="review-decision"]').text()).toContain('发布')
+    expect(wrapper.get('[data-testid="accept-candidate"]').text()).toBe('接受为题库草稿')
   })
 
   it('keeps blocked candidates from being accepted and emits a trimmed other rejection detail', async () => {
@@ -204,7 +226,7 @@ describe('teacher AI review rendering', () => {
       props: { draft: warningE4Draft, validation: { ...warningValidation, status: 'blocked' }, busy: false },
     })
 
-    expect(wrapper.get('[data-testid="accept-candidate"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="accept-candidate"]').exists()).toBe(false)
     expect(wrapper.find('textarea[aria-label="拒绝详情"]').exists()).toBe(false)
     await wrapper.get('select[aria-label="拒绝原因"]').setValue('other')
     await wrapper.get('textarea[aria-label="拒绝详情"]').setValue('  Question wording is ambiguous.  ')
@@ -212,7 +234,7 @@ describe('teacher AI review rendering', () => {
     expect(wrapper.emitted('reject')).toEqual([['other', 'Question wording is ambiguous.']])
   })
 
-  it.each(['accepted', 'rejected'])('makes %s candidates read-only and prevents every write event', async (teacherState) => {
+  it.each(['accepted', 'rejected'])('makes %s candidates read-only and hides write controls', async (teacherState) => {
     const wrapper = mount(TeacherAiCandidateReview, {
       props: {
         draft: { ...warningE4Draft, teacher_state: teacherState },
@@ -222,20 +244,20 @@ describe('teacher AI review rendering', () => {
       },
     })
 
-    expect(wrapper.get(`input[aria-label="知识点"]`).attributes('disabled')).toBeDefined()
-    expect(wrapper.get('textarea[aria-label="题目提示"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('select[aria-label="拒绝原因"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-testid="save-revision"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-testid="reject-candidate"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-testid="accept-candidate"]').attributes('disabled')).toBeDefined()
-
-    await wrapper.get('[data-testid="save-revision"]').trigger('click')
-    await wrapper.get('[data-testid="reject-candidate"]').trigger('click')
-    await wrapper.get('[data-testid="accept-candidate"]').trigger('click')
+    expect(wrapper.find('[data-testid="edit-candidate-details"]').exists()).toBe(false)
+    expect(wrapper.find('input[aria-label="知识点"]').exists()).toBe(false)
+    expect(wrapper.find('textarea[aria-label="题目提示"]').exists()).toBe(false)
+    expect(wrapper.find('select[aria-label="拒绝原因"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="save-revision"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="reject-candidate"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="accept-candidate"]').exists()).toBe(false)
 
     expect(wrapper.emitted('save-revision')).toBeUndefined()
     expect(wrapper.emitted('reject')).toBeUndefined()
     expect(wrapper.emitted('accept')).toBeUndefined()
+    expect(wrapper.get('[data-testid="technical-review-details"]').text()).toContain('题型：E4')
+    expect(wrapper.get('[data-testid="technical-review-details"]').text()).toContain('目标修订：objective-1')
+    expect(wrapper.get('[data-testid="technical-review-details"]').text()).toContain('策略版本：policy-1')
 
     if (teacherState === 'accepted') {
       expect(wrapper.get('[data-testid="accepted-notice"]').text()).toContain('已创建题库草稿')
@@ -244,6 +266,24 @@ describe('teacher AI review rendering', () => {
     } else {
       expect(wrapper.get('[data-testid="rejected-notice"]').text()).toContain('已拒绝')
     }
+  })
+
+  it('treats an accepted QuestionVersion id as terminal when the draft state is stale', () => {
+    const wrapper = mount(TeacherAiCandidateReview, {
+      props: {
+        draft: warningE4Draft,
+        validation: warningValidation,
+        acceptedQuestionVersionId: 'version-1',
+      },
+    })
+
+    expect(wrapper.get('[data-testid="review-decision-heading"]').text()).toBe('已创建题库草稿')
+    expect(wrapper.get('[data-testid="accepted-notice"]').text()).toContain('已创建题库草稿')
+    expect(wrapper.find('[data-testid="edit-candidate-details"]').exists()).toBe(false)
+    expect(wrapper.find('input[aria-label="确认 warning 后接受"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="accept-candidate"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="reject-candidate"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="regenerate-candidate"]').exists()).toBe(false)
   })
 
   it.each([
@@ -304,6 +344,111 @@ describe('teacher AI review rendering', () => {
     expect(navigateTo).toHaveBeenCalledWith({ query: { job: 'job-1', draft: 'draft-2' } })
   })
 
+  it('shows the lifecycle and a teacher-facing status for every draft in the selected batch', async () => {
+    const secondDraft = { ...warningE4Draft, id: 'draft-2', ordinal: 2, teacher_state: 'accepted' as const }
+    mocks.fetchAiGenerationDrafts.mockResolvedValue([warningE4Draft, secondDraft])
+    mocks.fetchAiValidationRuns.mockImplementation((_request, draftId) => Promise.resolve([
+      draftId === 'draft-1' ? warningValidation : { ...warningValidation, draft_id: draftId, status: 'passed' },
+    ]))
+
+    const wrapper = await mountWorkspace()
+
+    expect(wrapper.get('[data-testid="ai-review-lifecycle"]').text()).toContain('教师审核')
+    expect(wrapper.get('[data-testid="draft-status-draft-1"]').text()).toContain('需确认')
+    expect(wrapper.get('[data-testid="draft-status-draft-2"]').text()).toContain('已接受')
+  })
+
+  it('uses the count in the bulk acceptance action without selecting blocked drafts', async () => {
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="batch-select-draft-1"]').setValue(true)
+    await wrapper.get('[data-testid="batch-warning-draft-1"]').setValue(true)
+
+    expect(wrapper.get('[data-testid="bulk-accept-candidates"]').text()).toContain('接受已选 1 题为题库草稿')
+  })
+
+  it('removes a non-current selected draft when its refreshed validation becomes blocked', async () => {
+    let secondValidation: TeacherAiValidationRun = { ...passedValidation, draft_id: 'draft-2' }
+    const secondDraft = { ...warningE4Draft, id: 'draft-2', ordinal: 2 }
+    mocks.fetchAiGenerationDrafts.mockResolvedValue([warningE4Draft, secondDraft])
+    mocks.fetchAiValidationRuns.mockImplementation((_request, draftId) => Promise.resolve([
+      draftId === 'draft-2' ? secondValidation : passedValidation,
+    ]))
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="batch-select-draft-1"]').setValue(true)
+    await wrapper.get('[data-testid="generation-draft-draft-2"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="batch-select-draft-2"]').setValue(true)
+    expect(wrapper.get('[data-testid="bulk-accept-candidates"]').attributes('disabled')).toBeUndefined()
+
+    secondValidation = { ...blockedValidation, draft_id: 'draft-2', revision_number: 1 }
+    await wrapper.get('[data-testid="generation-draft-draft-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已选择 1 道候选题。')
+    expect(wrapper.get('[data-testid="bulk-accept-candidates"]').text()).toContain('接受已选 1 题为题库草稿')
+    await wrapper.get('[data-testid="bulk-accept-candidates"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.bulkAcceptAiCandidates).toHaveBeenCalledWith(
+      expect.any(Function), 'csrf-token', 'job-1', 'operation-key', [{
+        draft_id: 'draft-1', expected_revision_number: 1, confirm_warnings: false,
+      }],
+    )
+  })
+
+  it('requires acknowledgement when a non-current selected draft becomes a warning', async () => {
+    let secondValidation: TeacherAiValidationRun = { ...passedValidation, draft_id: 'draft-2' }
+    const secondDraft = { ...warningE4Draft, id: 'draft-2', ordinal: 2 }
+    mocks.fetchAiGenerationDrafts.mockResolvedValue([warningE4Draft, secondDraft])
+    mocks.fetchAiValidationRuns.mockImplementation((_request, draftId) => Promise.resolve([
+      draftId === 'draft-2' ? secondValidation : passedValidation,
+    ]))
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="batch-select-draft-1"]').setValue(true)
+    await wrapper.get('[data-testid="generation-draft-draft-2"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="batch-select-draft-2"]').setValue(true)
+    expect(wrapper.get('[data-testid="bulk-accept-candidates"]').attributes('disabled')).toBeUndefined()
+
+    secondValidation = { ...warningValidation, draft_id: 'draft-2' }
+    await wrapper.get('[data-testid="generation-draft-draft-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="bulk-accept-candidates"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="generation-draft-draft-2"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="batch-warning-draft-2"]').setValue(true)
+
+    expect(wrapper.get('[data-testid="bulk-accept-candidates"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('requires a new acknowledgement when a warning has a newer validation run at the same revision', async () => {
+    let secondValidation: TeacherAiValidationRun = {
+      ...warningValidation, draft_id: 'draft-2', id: 'warning-run-a', revision_number: 1, run_number: 1,
+    }
+    const secondDraft = { ...warningE4Draft, id: 'draft-2', ordinal: 2 }
+    mocks.fetchAiGenerationDrafts.mockResolvedValue([warningE4Draft, secondDraft])
+    mocks.fetchAiValidationRuns.mockImplementation((_request, draftId) => Promise.resolve([
+      draftId === 'draft-2' ? secondValidation : passedValidation,
+    ]))
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="generation-draft-draft-2"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="batch-select-draft-2"]').setValue(true)
+    await wrapper.get('[data-testid="batch-warning-draft-2"]').setValue(true)
+    expect(wrapper.get('[data-testid="bulk-accept-candidates"]').attributes('disabled')).toBeUndefined()
+
+    secondValidation = { ...secondValidation, id: 'warning-run-b', run_number: 2 }
+    await wrapper.get('[data-testid="generation-draft-draft-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="bulk-accept-candidates"]').attributes('disabled')).toBeDefined()
+  })
+
   it('loads an initial warning validation before enabling acceptance', async () => {
     const wrapper = await mountWorkspace()
 
@@ -321,7 +466,7 @@ describe('teacher AI review rendering', () => {
     const wrapper = await mountWorkspace()
 
     expect(wrapper.get('[data-testid="validation-finding"]').text()).toContain('UNSAFE_CONTENT')
-    expect(wrapper.get('[data-testid="accept-candidate"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="accept-candidate"]').exists()).toBe(false)
   })
 
   it('never allows a blocked draft to enter the batch selection', async () => {

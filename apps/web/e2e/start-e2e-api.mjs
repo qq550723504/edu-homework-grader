@@ -17,6 +17,7 @@ const pythonPath = [
   resolve(repositoryRoot, 'apps/api/src'),
   resolve(repositoryRoot, 'services/generator/src'),
   resolve(repositoryRoot, 'services/grader/src'),
+  resolve(repositoryRoot, 'services/generator/src'),
   resolve(repositoryRoot, 'packages/processor-policy/src'),
 ].join(delimiter)
 

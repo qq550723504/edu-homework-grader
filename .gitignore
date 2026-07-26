@@ -35,3 +35,4 @@ coverage/
 
 # Local linked worktrees
 .worktrees/
+.superpowers/
