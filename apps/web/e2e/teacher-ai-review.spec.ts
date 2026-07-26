@@ -337,6 +337,8 @@ test('teacher continues after rejecting a candidate without mutating its audit r
   await expect(page.getByLabel('题型')).toHaveValue('E4')
 
   await page.getByTestId(`generation-draft-${sourceE1!.id}`).click()
+  await expect.poll(() => new URL(page.url()).searchParams.get('draft')).toBe(sourceE1!.id)
+  await expect(page.getByTestId('rejected-notice')).toContainText('已拒绝')
   const regenerateResponsePromise = page.waitForResponse(response => (
     response.request().method() === 'POST'
       && response.url().endsWith(`/api/core/v1/ai-generated-questions/${sourceE1!.id}/regenerate`)
