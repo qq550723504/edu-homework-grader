@@ -74,11 +74,10 @@ test('teacher fixes a blocked G7 M1 and atomically accepts passed M1 plus confir
   const warningM2 = seededDrafts[1]!
 
   await expect(page.getByLabel('题型')).toHaveValue('M1')
-  await expect(page.getByText('校验状态：blocked')).toBeVisible()
   await expect(page.getByTestId('ai-review-lifecycle')).toContainText('教师审核')
   await expect(page.getByTestId('review-decision')).toContainText('暂不能接受')
-  await expect(page.getByTestId('review-decision')).toContainText('修改并重新校验')
-  await expect(page.getByTestId('accept-candidate')).toBeDisabled()
+  await expect(page.getByTestId('edit-candidate-details').getByText('修改题目')).toBeVisible()
+  await expect(page.getByTestId('accept-candidate')).not.toBeAttached()
   await expect(page.getByTestId(`batch-select-${blockedM1.id}`)).toBeDisabled()
   const blockedResponse = await page.request.post(
     `${webBaseUrl}/api/core/v1/ai-generated-questions/${blockedM1.id}/accept`,
@@ -113,6 +112,7 @@ test('teacher fixes a blocked G7 M1 and atomically accepts passed M1 plus confir
     response.request().method() === 'POST'
       && response.url().endsWith(`/api/core/v1/ai-generated-questions/${blockedM1.id}/revisions`),
   )
+  await page.getByTestId('edit-candidate-details').getByText('修改题目').click()
   await page.getByLabel('评分规则 JSON').fill('{"expected":6,"tolerance":0}')
   await page.getByTestId('save-revision').click()
   const savedRevision = await responseJson<{
@@ -125,12 +125,13 @@ test('teacher fixes a blocked G7 M1 and atomically accepts passed M1 plus confir
     validation_run: { status: 'passed' },
   })
   await expect(page.getByText('候选修订已保存。')).toBeVisible()
-  await expect(page.getByText('校验状态：passed')).toBeVisible()
+  await expect(page.getByTestId('review-decision')).toContainText('可以接受')
   await page.getByTestId(`batch-select-${blockedM1.id}`).check()
 
   await page.getByTestId(`generation-draft-${warningM2.id}`).click()
   await expect(page.getByLabel('题型')).toHaveValue('M2')
-  await expect(page.getByText('校验状态：warning')).toBeVisible()
+  await expect(page.getByTestId('review-decision')).toContainText('需要教师确认')
+  await expect(page.getByLabel('确认 warning 后接受')).toBeVisible()
   await page.getByTestId(`batch-select-${warningM2.id}`).check()
   await expect(page.getByTestId('bulk-accept-candidates')).toBeDisabled()
   await page.getByTestId(`batch-warning-${warningM2.id}`).check()
