@@ -37,10 +37,14 @@ The release workflow must only deploy the exact SHA that completed the successfu
 `main` CI run. It checks out that SHA explicitly; it must not use the runner's
 default checkout or a mutable image tag.
 
-For consecutive merges, production deployments are serialized. Before applying,
-the workflow checks whether the target SHA is still the current `main` tip. A
-superseded queued release exits without modifying the cluster, so an older
-approval cannot deploy stale code after a newer merge.
+For consecutive merges, production deployments are serialized. The workflow
+allows the release SHA to remain deployable when the current `origin/main` is
+only a descendant containing `docs/**` or Markdown changes. It rejects the
+release when the SHA is no longer an ancestor of `origin/main`, or when a later
+descendant changes any non-documentation source or configuration. This guard
+runs once before loading the kubeconfig and again immediately before deployment,
+so a superseded approval cannot deploy stale code after a newer application or
+configuration merge.
 
 ## Components
 
@@ -55,37 +59,42 @@ infra, application, workflow and manifest changes remain release candidates.
 ### Production approval and credentials
 
 The deploy job uses a GitHub Environment named `production`. That environment has
-required reviewers and stores the Kubernetes credential as an environment secret,
-not a repository secret. Approval is therefore the only routine human release
-action.
+required reviewers, restricts deployment branches server-side to protected
+`main`, and stores the Kubernetes credential as an environment secret, not a
+repository secret. Approval is therefore the only routine human release action.
 
 The credential belongs to a `github-production-deployer` Kubernetes ServiceAccount
 bound to a namespace-scoped Role in `edu-homework-grader`. Its permissions are
-limited to the release resources it reads or applies (Deployments, StatefulSets,
-CronJobs, ConfigMaps, Services, Ingresses and API Service endpoints) and exclude
-Secrets, Pods, Pod exec/attach/port-forward, cluster-scoped resources and other
-namespaces. A one-time bootstrap command can write the credential only to the
-fixed repository `qq550723504/edu-homework-grader` and pipes its kubeconfig
-directly into that repository's GitHub Environment secret without writing the
-credential to disk or console output. Before upload it validates that the
-TokenRequest lifetime meets the documented minimum; a shorter cluster-issued token
-fails closed instead of creating a deployment credential that will unexpectedly
-expire.
+limited to `get`, `watch` and `patch` on the four named Deployments (`api`,
+`grader`, `web` and `languagetool`), `get` and `patch` on the named
+`student-activation-expiry` CronJob, and `get` on the named `api` Endpoints
+object. It has no access to StatefulSets, ConfigMaps, Services, Ingresses,
+Secrets, Pods, Pod exec/attach/port-forward, cluster-scoped resources or other
+namespaces. A one-time bootstrap command can write the credential only to the fixed repository
+`qq550723504/edu-homework-grader` and pipes its kubeconfig directly into that
+repository's GitHub Environment secret without writing the credential to disk
+or console output. Before upload it validates that the TokenRequest lifetime
+meets the documented minimum; a shorter cluster-issued token fails closed
+instead of creating a deployment credential that will unexpectedly expire.
 
 ### Declarative deployment and verification
 
 `scripts/k8s/deploy-production.ps1` accepts a validated, 40-character Git SHA.
 On the ephemeral GitHub runner it creates a temporary Kustomize release overlay
-that excludes the cluster-scoped namespace bootstrap and pins the API, Grader, Web,
-LanguageTool and API CronJob images to the corresponding GHCR SHA tags. It then
-server-side applies the rendered namespace-scoped production manifests. The
+containing only the four named Deployments and the
+`student-activation-expiry` CronJob. It excludes Keycloak and all datastore,
+Service, ConfigMap, Ingress and namespace resources, and pins the API, Grader,
+Web, LanguageTool and API CronJob images to the corresponding GHCR SHA tags. It
+then server-side applies only those five rendered workload resources. The
 repository checkout is never committed with a deployment-specific image tag.
 
-Before applying, the script captures the currently running images for every
-release-managed workload. It waits for each Deployment rollout, verifies that the
-API Service has ready endpoints (whose Deployment readiness probe calls `/ready`),
-and checks `https://edu.getkr.com/` from the runner. It writes a redacted GitHub step summary containing the target SHA,
-previous images, timestamps and only pass/fail health results.
+Before applying, the script captures six currently configured image references:
+the API init and main containers, Grader, Web, LanguageTool and the expiry
+CronJob. It waits for each of the four Deployment rollouts, verifies that the API
+Service has ready endpoints (whose Deployment readiness probe calls `/ready`),
+and checks `https://edu.getkr.com/` from the runner. It writes a redacted GitHub
+step summary containing the target SHA, previous images, timestamps and only
+pass/fail health results.
 
 If apply, rollout or either health check fails, the script reapplies a temporary
 overlay built from the captured images and verifies the rollback rollouts. A
@@ -95,10 +104,15 @@ never hidden by the original deployment failure.
 ### Manual rollback
 
 `rollback-production.yml` is a `workflow_dispatch` workflow with one required
-`image_sha` input. It validates the SHA, uses the same `production` Environment
-approval and calls the same deployment script. It first verifies that all four
-GHCR images for that SHA exist. This makes rollback a reviewed, auditable action
-instead of a manual cluster edit.
+`image_sha` input and runs only when `main` is selected. The entire job uses the
+same `production` Environment, so approval occurs before any step. After
+approval it checks out trusted `main` tooling, validates the SHA and verifies
+that all four GHCR images for that SHA exist before decoding kubeconfig or
+accessing the cluster. It then calls the same deployment script, including its
+health checks and exact-image automatic recovery behavior. Manual rollback
+intentionally has no latest-main image guard because its purpose is to deploy a
+reviewed prior SHA. This makes rollback a reviewed, auditable action instead of
+a manual cluster edit.
 
 ## Failure handling and safety
 

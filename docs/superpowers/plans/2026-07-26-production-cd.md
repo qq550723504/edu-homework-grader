@@ -11,14 +11,23 @@
 ## Global Constraints
 
 - Namespace is edu-homework-grader; public URL is https://edu.getkr.com.
-- The protected GitHub Environment is named production and owns KUBECONFIG_B64.
+- The protected GitHub Environment is named production, owns KUBECONFIG_B64,
+  has required reviewers and restricts deployment branches server-side to
+  protected main.
 - Only lower-case 40-character Git SHAs are valid image versions.
 - The deploy identity cannot read or mutate Kubernetes Secrets, Pods, pod subresources or cluster-scoped resources.
+- The deploy Role grants `get`, `watch` and `patch` only on Deployments api,
+  grader, web and languagetool; `get` and `patch` only on CronJob
+  student-activation-expiry; and `get` only on the Endpoints object api.
 - The bootstrap command accepts no repository destination: it writes only to `qq550723504/edu-homework-grader` production after validating the TokenRequest lifetime is at least 30 days.
-- Every release checks out github.event.workflow_run.head_sha, never a mutable branch checkout.
+- Automatic release checks out github.event.workflow_run.head_sha; manual
+  rollback checks out trusted main deployment tooling.
 - Pin api, grader, web, languagetool and the API expiry CronJob to the same GHCR SHA.
 - Release and rollback share concurrency group production-release with cancel-in-progress false.
-- A SHA that is no longer origin/main must exit before Kubernetes mutation.
+- Automatic release allows docs/** and Markdown-only descendants of its SHA,
+  but rejects a non-ancestor or any later non-documentation source/config
+  change. It checks once before loading kubeconfig and again immediately before
+  deployment.
 - Do not add Argo CD, Flux, canary delivery, secret rotation or database recovery work.
 
 ---
@@ -159,7 +168,13 @@ Expected: FAIL because both files are absent.
 
 - [ ] **Step 3: Implement RBAC and confirmed bootstrap**
 
-Define one ServiceAccount, Role and RoleBinding in edu-homework-grader. The Role grants get, list, watch, patch and update only for Deployments, StatefulSets, CronJobs, ConfigMaps, Services, Ingresses and Endpoints; add create only for ConfigMaps when Kustomize's generated ConfigMap needs a new name. Do not grant any Pod or pod-subresource permission. Do not add it to the normal production kustomization.
+Define one ServiceAccount, Role and RoleBinding in edu-homework-grader. The
+final Role grants `get`, `watch` and `patch` on the four named Deployments
+(`api`, `grader`, `web`, `languagetool`), `get` and `patch` on the named
+`student-activation-expiry` CronJob, and `get` on the named `api` Endpoints
+object. It grants nothing for StatefulSets, ConfigMaps, Services, Ingresses,
+Secrets, Pods or pod subresources. Do not add it to the normal production
+kustomization.
 
 Use this script boundary:
 
@@ -340,7 +355,15 @@ Expected: FAIL because deploy and rollback workflow are absent.
 
 - [ ] **Step 3: Add approved deploy**
 
-Append deploy after the publish matrix. It needs publish, uses Environment production with URL https://edu.getkr.com and only contents read plus packages read. It checks out the CI head SHA, installs kubectl and Kustomize, decodes KUBECONFIG_B64 to RUNNER_TEMP/production-kubeconfig, writes only its path to GITHUB_ENV, fetches origin/main, rejects a non-tip SHA, invokes deploy-production.ps1 with the head SHA, then deletes the temporary kubeconfig in an always cleanup step.
+Append deploy after the publish matrix. It needs publish, uses Environment
+production with URL https://edu.getkr.com and only `contents: read`. It checks
+out the CI head SHA with full history, installs kubectl and Kustomize, and
+rejects a target that is not an ancestor of `origin/main` or whose descendant
+range contains a change outside `docs/**` and Markdown files. It then decodes
+KUBECONFIG_B64 to RUNNER_TEMP/production-kubeconfig, writes only its path to
+GITHUB_ENV, repeats the same docs-aware supersession guard immediately before
+invoking deploy-production.ps1 with the head SHA, and deletes the temporary
+kubeconfig in an always cleanup step.
 
 - [ ] **Step 4: Add manual rollback**
 
@@ -360,7 +383,13 @@ concurrency:
   cancel-in-progress: false
 ~~~
 
-Its one production job rejects input not matching ^[0-9a-f]{40}$, verifies each of four GHCR images with docker manifest inspect, configures the temporary kubeconfig and invokes deploy-production.ps1 with the validated SHA.
+Its one main-only production job checks out trusted `main` tooling. The
+Environment approval protects the whole job and therefore occurs before any
+step. After approval, it rejects input not matching ^[0-9a-f]{40}$ and verifies
+each of four GHCR images with docker manifest inspect, retaining
+`packages: read` only for that registry preflight, before configuring the
+temporary kubeconfig or accessing the cluster. It invokes deploy-production.ps1
+with the validated SHA and intentionally has no latest-main image guard.
 
 - [ ] **Step 5: Verify GREEN and commit**
 
