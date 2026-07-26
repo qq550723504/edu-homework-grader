@@ -17,10 +17,12 @@ const props = withDefaults(defineProps<{
   validation?: TeacherAiValidationRun | null
   busy?: boolean
   acceptedQuestionVersionId?: string | null
+  hasNextReviewCandidate?: boolean
 }>(), {
   validation: null,
   busy: false,
   acceptedQuestionVersionId: null,
+  hasNextReviewCandidate: false,
 })
 
 const emit = defineEmits<{
@@ -28,6 +30,7 @@ const emit = defineEmits<{
   reject: [reason: TeacherAiRejectReason, detail: string]
   accept: [input: { confirmWarnings: boolean }]
   regenerate: []
+  'continue-review': []
 }>()
 
 const candidate = reactive(structuredClone(toRaw(props.draft.candidate)))
@@ -39,6 +42,8 @@ const saveError = ref('')
 const ruleJson = ref(formatRuleJson(candidate.rule_json))
 const accepted = computed(() => props.draft.teacher_state === 'accepted' || Boolean(props.acceptedQuestionVersionId))
 const pendingReview = computed(() => !accepted.value && props.draft.teacher_state === 'pending_review')
+const rejected = computed(() => !accepted.value && props.draft.teacher_state === 'rejected')
+const canRegenerate = computed(() => pendingReview.value || rejected.value)
 const reviewDraft = computed<TeacherAiDraft>(() => accepted.value
   ? { ...props.draft, teacher_state: 'accepted' }
   : props.draft)
@@ -117,7 +122,7 @@ function acceptCandidate() {
 }
 
 function regenerateCandidate() {
-  if (!writeDisabled.value) emit('regenerate')
+  if (!props.busy && canRegenerate.value) emit('regenerate')
 }
 </script>
 
@@ -197,7 +202,24 @@ function regenerateCandidate() {
       <label v-if="rejectReason === 'other'">拒绝详情<textarea v-model="rejectDetail" :disabled="writeDisabled" aria-label="拒绝详情" maxlength="500" /></label>
       <p v-if="rejectError" data-testid="reject-detail-error" role="alert">{{ rejectError }}</p>
       <button :disabled="writeDisabled" data-testid="reject-candidate" type="button" @click="rejectCandidate">拒绝候选题</button>
-      <button :disabled="writeDisabled" data-testid="regenerate-candidate" type="button" @click="regenerateCandidate">重新生成</button>
+    </template>
+
+    <template v-if="canRegenerate">
+      <button :disabled="busy" data-testid="regenerate-candidate" type="button" @click="regenerateCandidate">
+        {{ rejected ? '重新生成同题型候选题' : '重新生成' }}
+      </button>
+    </template>
+    <template v-if="rejected">
+      <button
+        v-if="hasNextReviewCandidate"
+        :disabled="busy"
+        data-testid="continue-review-next-candidate"
+        type="button"
+        @click="emit('continue-review')"
+      >
+        继续审核下一题
+      </button>
+      <NuxtLink v-else data-testid="generate-new-ai-batch" to="/teacher/ai-questions/new">生成新批次</NuxtLink>
     </template>
 
     <section data-testid="technical-review-details" class="ai-candidate-review__advanced">
