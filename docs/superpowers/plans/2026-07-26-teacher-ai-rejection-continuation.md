@@ -230,4 +230,3 @@ git diff origin/main...HEAD --check
 ```
 
 Expected: only approved rejection-continuation documentation, UI, tests, and browser coverage differ from `origin/main`.
-
