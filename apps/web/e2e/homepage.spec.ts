@@ -14,6 +14,12 @@ test('homepage presents both workspace entries and the trustworthy learning loop
   await expect(page.getByText('AI 辅助，不替代教师判断')).toBeVisible()
   const [student, teacher] = await Promise.all([page.locator('.homepage__student-entry').boundingBox(), page.locator('.homepage__teacher-entry').boundingBox()])
   expect(student).not.toBeNull(); expect(teacher).not.toBeNull(); expect(Math.abs(student!.y - teacher!.y)).toBeLessThan(8)
+  await page.addStyleTag({ content: 'html { scrollbar-gutter: stable; }' })
+  const [homepage, tinted] = await Promise.all([page.locator('.homepage').boundingBox(), page.locator('.homepage__section--tinted').boundingBox()])
+  expect(homepage).not.toBeNull(); expect(tinted).not.toBeNull()
+  expect(tinted!.x).toBeCloseTo(homepage!.x, 1)
+  expect(tinted!.width).toBeCloseTo(homepage!.width, 1)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
 })
 
 test('homepage remains single-column and without horizontal overflow at 320px', async ({ browser }) => {
