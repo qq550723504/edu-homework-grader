@@ -267,3 +267,91 @@ test('teacher regenerates one G8 E4 candidate without mutating the ordered E1/E4
 
   expect(await fetchDrafts(page, sourceJob.id)).toEqual(sourceDraftsBefore)
 })
+
+test('teacher continues after rejecting a candidate without mutating its audit record', async ({ page }) => {
+  await establishTeacherSession(page)
+  await page.goto(`${webBaseUrl}/teacher/ai-questions/new`)
+
+  await page.getByLabel('课程方案').selectOption({ label: 'E2E AI Generation English' })
+  await page.getByLabel('年级').selectOption({ label: 'G8' })
+  await page.getByLabel('学科').selectOption({ label: 'English' })
+  await page.getByLabel('课程目标').selectOption({
+    label: 'E2E-AI-G8-E1-E4 · Use Grade 8 English vocabulary and reading evidence.',
+  })
+  await page.getByTestId('question-type-E1-foundation-increment').click()
+  await page.getByTestId('question-type-E4-stretch-increment').click()
+
+  const createResponsePromise = page.waitForResponse(response => (
+    response.request().method() === 'POST'
+      && response.url().endsWith('/api/core/v1/ai-question-generation/jobs')
+  ))
+  await page.getByTestId('create-ai-generation-job').click()
+  const sourceJob = await responseJson<{ id: string }>(
+    await createResponsePromise,
+    'create a two-candidate source job for rejection continuation',
+  )
+  await expect.poll(() => new URL(page.url()).searchParams.get('job')).toBe(sourceJob.id)
+  const sourceDrafts = await fetchDrafts(page, sourceJob.id)
+  expect(sourceDrafts).toHaveLength(2)
+  const [sourceE1, sourceE4] = sourceDrafts
+  expect(sourceE1?.candidate.question_type).toBe('E1')
+  expect(sourceE4?.candidate.question_type).toBe('E4')
+  expect(sourceE1?.teacher_state).toBe('pending_review')
+  expect(sourceE4?.teacher_state).toBe('pending_review')
+
+  await page.getByTestId(`generation-draft-${sourceE1!.id}`).click()
+  await page.getByLabel('拒绝原因').selectOption('duplicate')
+  const rejectResponsePromise = page.waitForResponse(response => (
+    response.request().method() === 'POST'
+      && response.url().endsWith(`/api/core/v1/ai-generated-questions/${sourceE1!.id}/reject`)
+  ))
+  await page.getByTestId('reject-candidate').click()
+  await responseJson<TeacherAiDecision>(
+    await rejectResponsePromise,
+    'reject the first source candidate as a duplicate',
+  )
+
+  await expect(page.getByTestId('rejected-notice')).toContainText('已拒绝')
+  await expect(page.getByTestId('regenerate-candidate')).toHaveText('重新生成同题型候选题')
+  await expect(page.getByTestId('save-revision')).not.toBeAttached()
+  await expect(page.getByTestId('reject-candidate')).not.toBeAttached()
+  await expect(page.getByTestId('continue-review-next-candidate')).toBeVisible()
+
+  const writesDuringContinuation: string[] = []
+  const recordWrite = (request: { method(): string, url(): string }) => {
+    if (request.method() === 'POST' && request.url().includes('/api/core/v1/ai-')) {
+      writesDuringContinuation.push(request.url())
+    }
+  }
+  page.on('request', recordWrite)
+  try {
+    await page.getByTestId('continue-review-next-candidate').click()
+    await expect.poll(() => new URL(page.url()).searchParams.get('draft')).toBe(sourceE4!.id)
+  } finally {
+    page.off('request', recordWrite)
+  }
+  expect(writesDuringContinuation).toEqual([])
+  await expect(page.getByLabel('题型')).toHaveValue('E4')
+
+  await page.getByTestId(`generation-draft-${sourceE1!.id}`).click()
+  const regenerateResponsePromise = page.waitForResponse(response => (
+    response.request().method() === 'POST'
+      && response.url().endsWith(`/api/core/v1/ai-generated-questions/${sourceE1!.id}/regenerate`)
+  ))
+  await page.getByTestId('regenerate-candidate').click()
+  const regeneratedJob = await responseJson<{ id: string }>(
+    await regenerateResponsePromise,
+    'regenerate the rejected source candidate',
+  )
+  expect(regeneratedJob.id).not.toBe(sourceJob.id)
+  await expect.poll(() => new URL(page.url()).searchParams.get('job')).toBe(regeneratedJob.id)
+  await expect(page).toHaveURL(new RegExp(
+    `/teacher/ai-questions\\?job=${regeneratedJob.id}&draft=[^&]+`,
+  ))
+
+  const sourceDraftsAfterRegeneration = await fetchDrafts(page, sourceJob.id)
+  expect(sourceDraftsAfterRegeneration).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: sourceE1!.id, teacher_state: 'rejected' }),
+    expect.objectContaining({ id: sourceE4!.id, teacher_state: 'pending_review' }),
+  ]))
+})
