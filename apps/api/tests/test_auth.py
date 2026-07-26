@@ -9,7 +9,14 @@ from sqlalchemy.orm import Session
 from edu_grader_api.auth import VerifiedIdentity, get_token_verifier
 from edu_grader_api.db import Base, get_session
 from edu_grader_api.main import app
-from edu_grader_api.models import Role, Tenant, User
+from edu_grader_api.models import (
+    Classroom,
+    Role,
+    StudentActivation,
+    StudentActivationStatus,
+    Tenant,
+    User,
+)
 from edu_grader_api.settings import settings
 
 
@@ -106,3 +113,46 @@ def test_first_student_login_binds_rostered_identity_to_configured_tenant(
     session.refresh(other_student)
     assert pilot_student.oidc_subject == "subject-1"
     assert other_student.oidc_subject is None
+
+
+def test_expired_activation_does_not_bind_a_first_student_login(
+    client: TestClient, session: Session
+) -> None:
+    from edu_grader_api.services.student_activations import activation_code_hmac
+    from edu_grader_api.models import utc_now
+
+    tenant = Tenant(slug="pilot", name="Pilot")
+    teacher = User(
+        tenant=tenant,
+        role=Role.TEACHER,
+        display_name="Teacher",
+        work_email="teacher@example.invalid",
+    )
+    classroom = Classroom(tenant=tenant, code="7A", name="Year 7 A")
+    student = User(tenant=tenant, role=Role.STUDENT, school_id="S-002", display_name="Expired")
+    session.add_all([tenant, teacher, classroom, student])
+    session.flush()
+    session.add(
+        StudentActivation(
+            student_id=student.id,
+            class_id=classroom.id,
+            issued_by_user_id=teacher.id,
+            keycloak_user_id="kc-expired",
+            code_hmac=activation_code_hmac("expired-code"),
+            status=StudentActivationStatus.ISSUED,
+            issued_at=utc_now(),
+            disclosed_at=utc_now(),
+            expires_at=utc_now(),
+        )
+    )
+    session.commit()
+    set_identity(
+        client, VerifiedIdentity(issuer=ISSUER, subject="expired-subject", school_id="S-002")
+    )
+
+    response = client.get("/v1/me", headers={"Authorization": "Bearer test-token"})
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "activation code expired"}
+    session.refresh(student)
+    assert student.oidc_subject is None

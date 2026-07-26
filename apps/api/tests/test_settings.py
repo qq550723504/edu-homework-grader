@@ -105,6 +105,25 @@ def test_production_settings_reject_the_default_audit_key() -> None:
         Settings(app_env="production", processor_allowed_hosts="grader")
 
 
+@pytest.mark.parametrize(
+    ("student_activation_hmac_key", "keycloak_student_provisioner_client_secret"),
+    [("too-short", "provisioner-secret"), ("x" * 32, "")],
+)
+def test_production_settings_require_student_activation_secrets(
+    student_activation_hmac_key: str, keycloak_student_provisioner_client_secret: str
+) -> None:
+    with pytest.raises(ValueError):
+        Settings(
+            app_env="production",
+            audit_hmac_key="x" * 32,
+            database_url="postgresql://edu_grader:secure-password@db.example/edu_grader",
+            oidc_issuer="https://identity.example/realms/edu-grader",
+            processor_allowed_hosts="grader",
+            student_activation_hmac_key=student_activation_hmac_key,
+            keycloak_student_provisioner_client_secret=keycloak_student_provisioner_client_secret,
+        )
+
+
 @pytest.mark.parametrize("processor_allowed_hosts", ["grader,external.example", "localhost"])
 def test_production_settings_reject_unreviewed_processor_hosts(
     processor_allowed_hosts: str,
@@ -116,6 +135,8 @@ def test_production_settings_reject_unreviewed_processor_hosts(
             database_url="postgresql://edu_grader:secure-password@db.example/edu_grader",
             oidc_issuer="https://identity.example/realms/edu-grader",
             processor_allowed_hosts=processor_allowed_hosts,
+            student_activation_hmac_key="x" * 32,
+            keycloak_student_provisioner_client_secret="provisioner-secret",
         )
 
 
@@ -155,6 +176,8 @@ def test_production_openai_settings_accept_an_immutable_model_id(model: str) -> 
         openai_api_key="test-key",
         generator_openai_model=model,
         generator_provider_allowed_hosts="api.openai.com",
+        student_activation_hmac_key="x" * 32,
+        keycloak_student_provisioner_client_secret="provisioner-secret",
     )
 
     assert settings.generator_openai_model == model
@@ -172,6 +195,8 @@ def test_production_openai_settings_require_an_explicit_model() -> None:
             generation_provider="openai",
             openai_api_key="test-key",
             generator_provider_allowed_hosts="api.openai.com",
+            student_activation_hmac_key="x" * 32,
+            keycloak_student_provisioner_client_secret="provisioner-secret",
         )
 
 
@@ -204,6 +229,8 @@ def test_production_openai_settings_reject_unpinned_model_without_echoing_it(mod
             openai_api_key="secret-key-that-must-not-appear",
             generator_openai_model=model,
             generator_provider_allowed_hosts="api.openai.com",
+            student_activation_hmac_key="x" * 32,
+            keycloak_student_provisioner_client_secret="provisioner-secret",
         )
 
     assert model not in str(error.value)
@@ -235,6 +262,8 @@ def test_production_security_errors_do_not_wrap_settings_input(
         "openai_api_key": secret,
         "generator_openai_model": "gpt-5-2025-08-07",
         "generator_provider_allowed_hosts": "api.openai.com",
+        "student_activation_hmac_key": "x" * 32,
+        "keycloak_student_provisioner_client_secret": "provisioner-secret",
     }
     options[field] = value
 
@@ -278,6 +307,8 @@ def test_invalid_threshold_prevents_production_security_cross_field_validation(
         "openai_api_key": secret,
         "generator_openai_model": "gpt-5",
         "generator_provider_allowed_hosts": "api.openai.com",
+        "student_activation_hmac_key": "x" * 32,
+        "keycloak_student_provisioner_client_secret": "provisioner-secret",
         "ai_duplicate_similarity_threshold": "not-a-number",
     }
 
@@ -349,6 +380,8 @@ def test_production_settings_reject_insecure_dependency_configuration(
         "database_url": "postgresql://edu_grader:secure-password@db.example/edu_grader",
         "oidc_issuer": "https://identity.example/realms/edu-grader",
         "processor_allowed_hosts": "grader",
+        "student_activation_hmac_key": "x" * 32,
+        "keycloak_student_provisioner_client_secret": "provisioner-secret",
         field: value,
     }
 

@@ -1,0 +1,52 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-student-provisioner-sync
+data:
+  reconcile.sh: |
+    #!/bin/sh
+    set -eu
+    KCADM=/opt/keycloak/bin/kcadm.sh
+    $KCADM config credentials --server http://keycloak:8080 --realm master --user "$KEYCLOAK_ADMIN_USERNAME" --password "$KEYCLOAK_ADMIN_PASSWORD"
+    CLIENT_ID="$($KCADM get clients -r edu-grader -q clientId=student-provisioner --fields id --format csv --noquotes)"
+    if [ -z "$CLIENT_ID" ]; then
+      $KCADM create clients -r edu-grader -s clientId=student-provisioner -s enabled=true -s publicClient=false -s serviceAccountsEnabled=true -s standardFlowEnabled=false -s directAccessGrantsEnabled=false
+      CLIENT_ID="$($KCADM get clients -r edu-grader -q clientId=student-provisioner --fields id --format csv --noquotes)"
+    fi
+    $KCADM update "clients/$CLIENT_ID" -r edu-grader -s secret="$KEYCLOAK_STUDENT_PROVISIONER_CLIENT_SECRET" -s serviceAccountsEnabled=true -s standardFlowEnabled=false -s directAccessGrantsEnabled=false
+    for ROLE in manage-users query-users view-users view-realm; do
+      $KCADM add-roles -r edu-grader --uusername service-account-student-provisioner --cclientid realm-management --rolename "$ROLE"
+    done
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: keycloak-student-provisioner-sync
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: reconcile
+          image: quay.io/keycloak/keycloak:26.4.7
+          command: ["/bin/sh", "/scripts/reconcile.sh"]
+          env:
+            - name: KEYCLOAK_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: KEYCLOAK_ADMIN_USERNAME}
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: KEYCLOAK_ADMIN_PASSWORD}
+            - name: KEYCLOAK_STUDENT_PROVISIONER_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: KEYCLOAK_STUDENT_PROVISIONER_CLIENT_SECRET}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: scripts
+          configMap:
+            name: keycloak-student-provisioner-sync
+            defaultMode: 0555

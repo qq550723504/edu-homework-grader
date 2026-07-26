@@ -318,6 +318,7 @@ export interface TeacherRosterStudent {
   id: string
   school_id: string
   display_name: string
+  account_state: 'unbound' | 'activation_issued' | 'bound'
 }
 
 export interface CreateTeacherRosterClass {
@@ -344,6 +345,13 @@ export async function fetchTeacherRosterStudents(
   return (await request<{ items: TeacherRosterStudent[] }>(
     `/api/core/v1/teacher/classes/${classId}/students`,
   )).items
+}
+
+export async function downloadTeacherActivationCodes(fetchImpl: typeof fetch, csrfToken: string, classId: string, studentIds: string[]): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetchImpl(`/api/core/v1/teacher/classes/${classId}/activation-codes`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken }, body: JSON.stringify({ student_ids: studentIds }) })
+  if (!response.ok) throw new Error('生成激活码失败，请稍后重试。')
+  const filename = /filename="?([^";]+)"?/i.exec(response.headers.get('content-disposition') ?? '')?.[1] ?? 'student-activation-codes.csv'
+  return { blob: await response.blob(), filename }
 }
 
 export function updateTeacherRosterStudent(

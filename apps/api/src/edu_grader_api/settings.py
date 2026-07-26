@@ -28,6 +28,8 @@ def _require_production_security_controls(
     openai_api_key: str,
     generator_openai_model: str,
     generator_provider_allowed_hosts: str,
+    student_activation_hmac_key: str,
+    keycloak_student_provisioner_client_secret: str,
 ) -> None:
     if app_env != "production":
         return
@@ -36,6 +38,10 @@ def _require_production_security_controls(
         raise ValueError("AUDIT_HMAC_KEY must not use the development default in production")
     if len(audit_hmac_key.encode("utf-8")) < 32:
         raise ValueError("AUDIT_HMAC_KEY must be at least 32 bytes in production")
+    if len(student_activation_hmac_key.encode("utf-8")) < 32:
+        raise ValueError("STUDENT_ACTIVATION_HMAC_KEY must be at least 32 bytes in production")
+    if not keycloak_student_provisioner_client_secret:
+        raise ValueError("KEYCLOAK_STUDENT_PROVISIONER_CLIENT_SECRET is required in production")
     if "change-me" in database_url:
         raise ValueError("DATABASE_URL must not use a development password in production")
     issuer = urlparse(oidc_issuer)
@@ -95,6 +101,11 @@ class Settings(BaseSettings):
     generation_governance_admin_subjects: str = ""
     audit_hmac_key: str = DEFAULT_AUDIT_HMAC_KEY
     audit_hmac_key_version: str = "dev-1"
+    student_activation_hmac_key: str = "development-only-student-activation-hmac-key"
+    student_activation_expiry_days: int = 7
+    keycloak_admin_base_url: str = "http://keycloak:8080"
+    keycloak_student_provisioner_client_id: str = "student-provisioner"
+    keycloak_student_provisioner_client_secret: str = ""
     processor_allowed_hosts: str = "grader,languagetool,localhost"
     generation_provider: str = "fake"
     openai_api_key: str = ""
@@ -127,6 +138,8 @@ class Settings(BaseSettings):
             "openai_api_key",
             "generator_openai_model",
             "generator_provider_allowed_hosts",
+            "student_activation_hmac_key",
+            "keycloak_student_provisioner_client_secret",
         )
         if any(field not in info.data for field in required_fields):
             return ai_duplicate_similarity_threshold
@@ -142,6 +155,10 @@ class Settings(BaseSettings):
             openai_api_key=info.data["openai_api_key"],
             generator_openai_model=info.data["generator_openai_model"],
             generator_provider_allowed_hosts=info.data["generator_provider_allowed_hosts"],
+            student_activation_hmac_key=info.data["student_activation_hmac_key"],
+            keycloak_student_provisioner_client_secret=info.data[
+                "keycloak_student_provisioner_client_secret"
+            ],
         )
         return ai_duplicate_similarity_threshold
 

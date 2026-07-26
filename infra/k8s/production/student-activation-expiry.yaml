@@ -1,0 +1,39 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: student-activation-expiry
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: expire
+              image: ghcr.io/qq550723504/edu-homework-grader-api:sha-not-published
+              command: ["python", "-m", "edu_grader_api.cli.expire_student_activations"]
+              env:
+                - name: APP_ENV
+                  value: production
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef: {name: edu-grader-runtime, key: DATABASE_URL}
+                - name: GRADER_BASE_URL
+                  value: http://grader:8010
+                - name: OIDC_ISSUER
+                  valueFrom:
+                    secretKeyRef: {name: edu-grader-runtime, key: OIDC_ISSUER}
+                - name: AUDIT_HMAC_KEY
+                  valueFrom:
+                    secretKeyRef: {name: edu-grader-runtime, key: AUDIT_HMAC_KEY}
+                - name: PROCESSOR_ALLOWED_HOSTS
+                  valueFrom:
+                    secretKeyRef: {name: edu-grader-runtime, key: PROCESSOR_ALLOWED_HOSTS}
+                - name: STUDENT_ACTIVATION_HMAC_KEY
+                  valueFrom:
+                    secretKeyRef: {name: edu-grader-runtime, key: STUDENT_ACTIVATION_HMAC_KEY}
+                - name: KEYCLOAK_STUDENT_PROVISIONER_CLIENT_SECRET
+                  valueFrom:
+                    secretKeyRef: {name: edu-grader-runtime, key: KEYCLOAK_STUDENT_PROVISIONER_CLIENT_SECRET}

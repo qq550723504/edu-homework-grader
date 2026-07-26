@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { batchConfirmReviewTasks, createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, decideReviewTask, decideTeacherAppeal, fetchQuestionPolicyCatalog, fetchQuestionTestCaseTemplates, fetchTeacherRosterClasses, fetchTeacherRosterStudents, fetchTeacherWorkspace, importTeacherRoster, previewQuestionTestCase, publishAssignment, publishAttemptResults, publishQuestionVersion, removeTeacherRosterStudent, runQuestionTests, updateAssignment, updateTeacherRosterStudent } from '../app/lib/teacher-api'
+import { batchConfirmReviewTasks, createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, decideReviewTask, decideTeacherAppeal, downloadTeacherActivationCodes, fetchQuestionPolicyCatalog, fetchQuestionTestCaseTemplates, fetchTeacherRosterClasses, fetchTeacherRosterStudents, fetchTeacherWorkspace, importTeacherRoster, previewQuestionTestCase, publishAssignment, publishAttemptResults, publishQuestionVersion, removeTeacherRosterStudent, runQuestionTests, updateAssignment, updateTeacherRosterStudent } from '../app/lib/teacher-api'
 
 describe('teacher workspace API', () => {
   it('loads classes, question versions, assignments and review metrics through the BFF', async () => {
@@ -182,5 +182,19 @@ describe('teacher roster API', () => {
     const [, uploadOptions] = request.mock.calls[2]
     expect(uploadOptions.headers).toEqual({ 'X-CSRF-Token': 'csrf-token' })
     expect(uploadOptions.body).toBeInstanceOf(FormData)
+  })
+
+  it('downloads one-time activation codes through the BFF without parsing their contents', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response('school_id,code\nS-001,one-time\n', {
+      headers: { 'content-disposition': 'attachment; filename="activation-codes.csv"' },
+    }))
+
+    await expect(downloadTeacherActivationCodes(fetchImpl, 'csrf-token', 'class-1', ['student-1']))
+      .resolves.toMatchObject({ filename: 'activation-codes.csv' })
+    expect(fetchImpl).toHaveBeenCalledWith('/api/core/v1/teacher/classes/class-1/activation-codes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': 'csrf-token' },
+      body: JSON.stringify({ student_ids: ['student-1'] }),
+    })
   })
 })

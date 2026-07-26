@@ -1,5 +1,6 @@
+import csv
 from dataclasses import dataclass
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -109,6 +110,80 @@ def test_teacher_creates_class_and_is_assigned(
     assert session.scalar(select(func.count(AuditLog.id))) == 2
 
 
+def test_teacher_activation_codes_endpoint_is_not_available_before_implementation(
+    teacher_context: TeacherContext, session: Session
+) -> None:
+    classroom = create_owned_class(session, teacher_context.teacher_id)
+    student = User(
+        tenant=session.scalar(select(Tenant).where(Tenant.slug == "pilot")),
+        role=Role.STUDENT,
+        school_id="S-010",
+        display_name="Ada",
+    )
+    session.add(student)
+    session.flush()
+    session.add(Enrollment(class_id=classroom.id, student_id=student.id))
+    session.commit()
+
+    from edu_grader_api.routers.teacher import get_student_provisioner
+
+    class FakeProvisioner:
+        def ensure_student(self, **_: str) -> str:
+            return "kc-1"
+
+    teacher_context.client.app.dependency_overrides[get_student_provisioner] = FakeProvisioner
+    try:
+        response = teacher_context.client.post(
+            f"/v1/teacher/classes/{classroom.id}/activation-codes",
+            json={"student_ids": [str(student.id)]},
+            headers=auth_headers(),
+        )
+    finally:
+        teacher_context.client.app.dependency_overrides.pop(get_student_provisioner, None)
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["content-disposition"].startswith("attachment;")
+
+
+def test_teacher_activation_codes_preserve_successes_when_another_item_is_invalid(
+    teacher_context: TeacherContext, session: Session
+) -> None:
+    classroom = create_owned_class(session, teacher_context.teacher_id)
+    student = User(
+        tenant=session.scalar(select(Tenant).where(Tenant.slug == "pilot")),
+        role=Role.STUDENT,
+        school_id="S-011",
+        display_name="Grace",
+    )
+    session.add(student)
+    session.flush()
+    session.add(Enrollment(class_id=classroom.id, student_id=student.id))
+    session.commit()
+
+    from edu_grader_api.routers.teacher import get_student_provisioner
+
+    class FakeProvisioner:
+        def ensure_student(self, **_: str) -> str:
+            return "kc-1"
+
+    teacher_context.client.app.dependency_overrides[get_student_provisioner] = FakeProvisioner
+    try:
+        response = teacher_context.client.post(
+            f"/v1/teacher/classes/{classroom.id}/activation-codes",
+            json={"student_ids": [str(student.id), str(uuid4())]},
+            headers=auth_headers(),
+        )
+    finally:
+        teacher_context.client.app.dependency_overrides.pop(get_student_provisioner, None)
+
+    rows = list(csv.DictReader(response.text.splitlines()))
+    assert response.status_code == 200
+    assert rows[0]["school_id"] == "S-011"
+    assert rows[0]["activation_code"]
+    assert rows[1]["error"] == "student is not in this class"
+
+
 def test_teacher_gets_a_conflict_for_a_duplicate_class_code(
     teacher_context: TeacherContext,
 ) -> None:
@@ -186,6 +261,7 @@ def test_teacher_lists_students_in_owned_class(
                 "id": str(student.id),
                 "school_id": student.school_id,
                 "display_name": student.display_name,
+                "account_state": "unbound",
             }
             for student in students
         ]
