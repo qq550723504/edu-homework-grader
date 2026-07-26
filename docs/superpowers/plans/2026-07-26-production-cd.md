@@ -13,7 +13,8 @@
 - Namespace is edu-homework-grader; public URL is https://edu.getkr.com.
 - The protected GitHub Environment is named production and owns KUBECONFIG_B64.
 - Only lower-case 40-character Git SHAs are valid image versions.
-- The deploy identity cannot read or mutate Kubernetes Secrets or cluster-scoped resources.
+- The deploy identity cannot read or mutate Kubernetes Secrets, Pods, pod subresources or cluster-scoped resources.
+- The bootstrap command accepts no repository destination: it writes only to `qq550723504/edu-homework-grader` production after validating the TokenRequest lifetime is at least 30 days.
 - Every release checks out github.event.workflow_run.head_sha, never a mutable branch checkout.
 - Pin api, grader, web, languagetool and the API expiry CronJob to the same GHCR SHA.
 - Release and rollback share concurrency group production-release with cancel-in-progress false.
@@ -106,7 +107,7 @@ Expected: tests and whitespace check pass.
 - Create: scripts/k8s/bootstrap-production-deployer.tests.ps1
 
 **Interfaces:**
-- Consumes: an administrator kubectl context, authenticated gh, namespace edu-homework-grader and repository qq550723504/edu-homework-grader.
+- Consumes: an administrator kubectl context, authenticated gh and namespace edu-homework-grader.
 - Produces: ServiceAccount github-production-deployer, namespace Role and RoleBinding, and Environment secret KUBECONFIG_B64 without writing credential material to disk or output.
 
 - [ ] **Step 1: Add failing Pester tests**
@@ -119,7 +120,7 @@ $rbacPath = Join-Path $PSScriptRoot '..\..\infra\k8s\production\github-productio
 
 Describe 'bootstrap-production-deployer' {
     It 'requires confirmation before creating a deploy credential' {
-        { & $scriptPath -Repository 'qq550723504/edu-homework-grader' -WhatIf } |
+        { & $scriptPath -WhatIf } |
             Should Throw '*-ConfirmProductionCredential*'
     }
     It 'does not print credentials' {
@@ -136,6 +137,12 @@ Describe 'bootstrap-production-deployer' {
         $manifest | Should Match 'cronjobs'
         $manifest | Should Not Match 'secrets'
         $manifest | Should Not Match 'ClusterRole'
+        $manifest | Should Not Match 'pods/exec|pods/attach|pods/portforward'
+    }
+    It 'validates the issued token lifetime before uploading it' {
+        $source = Get-Content -Raw $scriptPath
+        $source | Should Match 'MinimumTokenLifetimeHours'
+        $source | Should Match 'TokenRequest lifetime'
     }
 }
 ~~~
@@ -152,7 +159,7 @@ Expected: FAIL because both files are absent.
 
 - [ ] **Step 3: Implement RBAC and confirmed bootstrap**
 
-Define one ServiceAccount, Role and RoleBinding in edu-homework-grader. The Role grants get, list, watch, create, patch and update only for Deployments, StatefulSets, CronJobs, ConfigMaps, Services, Ingresses and Pods; add create on the pods/exec subresource so the in-cluster readiness command can run. Do not add it to the normal production kustomization.
+Define one ServiceAccount, Role and RoleBinding in edu-homework-grader. The Role grants get, list, watch, patch and update only for Deployments, StatefulSets, CronJobs, ConfigMaps, Services, Ingresses and Endpoints; add create only for ConfigMaps when Kustomize's generated ConfigMap needs a new name. Do not grant any Pod or pod-subresource permission. Do not add it to the normal production kustomization.
 
 Use this script boundary:
 
@@ -160,22 +167,22 @@ Use this script boundary:
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [string]$Namespace = 'edu-homework-grader',
-    [Parameter(Mandatory = $true)][string]$Repository,
-    [switch]$ConfirmProductionCredential
+    [switch]$ConfirmProductionCredential,
+    [int]$MinimumTokenLifetimeHours = 720
 )
 
 if (-not $ConfirmProductionCredential) {
     throw 'Pass -ConfirmProductionCredential to create the GitHub production deploy credential.'
 }
-if (-not $PSCmdlet.ShouldProcess("$Repository production environment", 'replace KUBECONFIG_B64')) { return }
+if (-not $PSCmdlet.ShouldProcess('qq550723504/edu-homework-grader production environment', 'replace KUBECONFIG_B64')) { return }
 
 & kubectl apply --server-side --filename $rbacManifest
 $token = & kubectl create token github-production-deployer --namespace $Namespace --duration=8760h
 [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($deployKubeconfig)) |
-    & gh secret set KUBECONFIG_B64 --env production --repo $Repository
+    & gh secret set KUBECONFIG_B64 --env production --repo qq550723504/edu-homework-grader
 ~~~
 
-Build deployKubeconfig with only the cluster, context and deployer token. Use Write-Information for resource names only.
+Build deployKubeconfig with only the cluster, context and deployer token. Decode only the JWT payload in memory, require exp minus now to meet MinimumTokenLifetimeHours, and throw TokenRequest lifetime is shorter than the required minimum before calling gh when it does not. Use Write-Information for resource names only.
 
 - [ ] **Step 4: Verify GREEN and commit**
 
@@ -200,7 +207,7 @@ Expected: tests and client render pass without credential output.
 
 **Interfaces:**
 - Consumes: ImageSha or an exact managed-image map, KUBECONFIG, production manifests and https://edu.getkr.com.
-- Produces: redacted summary; zero only after four Deployment rollouts, in-cluster API readiness and public health. Failure restores captured images before throwing.
+- Produces: redacted summary; zero only after four Deployment rollouts, ready API Service endpoints and public health. Failure restores captured images before throwing.
 
 - [ ] **Step 1: Add failing Pester tests**
 
@@ -227,7 +234,7 @@ Describe 'deploy-production' {
     It 'does not query or print Secrets' {
         $source = Get-Content -Raw $scriptPath
         $source | Should Not Match 'get secret|create secret|Write-(Host|Output).*?(TOKEN|PASSWORD|SECRET|KUBECONFIG)'
-        $source | Should Match 'api:8000/ready'
+        $source | Should Match 'get endpoints api'
         $source | Should Match 'https://edu.getkr.com/'
     }
 }
@@ -270,7 +277,7 @@ function New-RenderedRelease([string]$Sha, [string]$Destination) {
 }
 ~~~
 
-Capture API, Grader, Web, LanguageTool and expiry CronJob images before applying rendered YAML with server-side kubectl. Wait for all four Deployments, check http://api:8000/ready in the namespace through pods/exec, then check https://edu.getkr.com/ from the runner. On any failure call New-RenderedRelease with the captured image map, apply that result, recheck rollouts, and throw Production release sha failed; rollback succeeded or failed. Remove the temporary directory in finally.
+Capture API, Grader, Web, LanguageTool and expiry CronJob images before applying rendered YAML with server-side kubectl. Wait for all four Deployments, poll `kubectl get endpoints api --output json` until it has a ready address (the API Deployment readiness probe already calls `/ready`), then check https://edu.getkr.com/ from the runner. On any failure call New-RenderedRelease with the captured image map, apply that result, recheck rollouts, and throw Production release sha failed; rollback succeeded or failed. Remove the temporary directory in finally.
 
 - [ ] **Step 4: Verify GREEN and commit**
 

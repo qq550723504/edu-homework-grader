@@ -62,10 +62,15 @@ action.
 The credential belongs to a `github-production-deployer` Kubernetes ServiceAccount
 bound to a namespace-scoped Role in `edu-homework-grader`. Its permissions are
 limited to the release resources it reads or applies (Deployments, StatefulSets,
-CronJobs, ConfigMaps, Services, Ingresses, Pods and their status) and exclude
-Secrets, cluster-scoped resources and other namespaces. A one-time bootstrap command creates
-that account and pipes its kubeconfig directly into the GitHub Environment secret
-without writing the credential to disk or console output.
+CronJobs, ConfigMaps, Services, Ingresses and API Service endpoints) and exclude
+Secrets, Pods, Pod exec/attach/port-forward, cluster-scoped resources and other
+namespaces. A one-time bootstrap command can write the credential only to the
+fixed repository `qq550723504/edu-homework-grader` and pipes its kubeconfig
+directly into that repository's GitHub Environment secret without writing the
+credential to disk or console output. Before upload it validates that the
+TokenRequest lifetime meets the documented minimum; a shorter cluster-issued token
+fails closed instead of creating a deployment credential that will unexpectedly
+expire.
 
 ### Declarative deployment and verification
 
@@ -77,9 +82,9 @@ server-side applies the rendered namespace-scoped production manifests. The
 repository checkout is never committed with a deployment-specific image tag.
 
 Before applying, the script captures the currently running images for every
-release-managed workload. It waits for each Deployment rollout, checks the API
-`/ready` endpoint from the cluster and checks `https://edu.getkr.com/` from the
-runner. It writes a redacted GitHub step summary containing the target SHA,
+release-managed workload. It waits for each Deployment rollout, verifies that the
+API Service has ready endpoints (whose Deployment readiness probe calls `/ready`),
+and checks `https://edu.getkr.com/` from the runner. It writes a redacted GitHub step summary containing the target SHA,
 previous images, timestamps and only pass/fail health results.
 
 If apply, rollout or either health check fails, the script reapplies a temporary
