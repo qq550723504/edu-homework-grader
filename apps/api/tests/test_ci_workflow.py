@@ -7,6 +7,9 @@ CI_WORKFLOW_PATH = Path(__file__).resolve().parents[3] / ".github" / "workflows"
 PUBLISH_WORKFLOW_PATH = (
     Path(__file__).resolve().parents[3] / ".github" / "workflows" / "publish-images.yml"
 )
+ROLLBACK_WORKFLOW_PATH = (
+    Path(__file__).resolve().parents[3] / ".github" / "workflows" / "rollback-production.yml"
+)
 HEAVY_JOB_NAMES = (
     "python",
     "migrations",
@@ -96,3 +99,104 @@ def test_publish_docs_only_gate_excludes_root_markdown() -> None:
     assert "README.md" not in remaining_paths
     assert "CONTRIBUTING.md" not in remaining_paths
     assert "git diff --quiet HEAD^ HEAD -- . ':(exclude)docs/**' ':(exclude)*.md'" in eligibility
+
+
+def test_release_deploy_is_approved_pinned_and_rejects_superseded_main() -> None:
+    workflow = PUBLISH_WORKFLOW_PATH.read_text(encoding="utf-8")
+    deploy = job_block(workflow, "deploy")
+
+    assert "needs: [eligibility, publish]" in deploy
+    assert "needs.eligibility.outputs.release_eligible == 'true'" in deploy
+    assert "needs.publish.result == 'success'" in deploy
+    assert re.search(
+        r"environment:\n\s+name: production\n\s+url: https://edu\.getkr\.com",
+        deploy,
+    )
+    assert re.search(
+        r"permissions:\n\s+contents: read\n\s+packages: read",
+        deploy,
+    )
+    assert "ref: ${{ github.event.workflow_run.head_sha }}" in deploy
+    assert "git fetch origin main:refs/remotes/origin/main --depth=1" in deploy
+    assert "git rev-parse origin/main" in deploy
+    assert 'release_sha="${{ github.event.workflow_run.head_sha }}"' in deploy
+    guard = deploy.split("- name: Reject a superseded production release", maxsplit=1)[1].split(
+        "- name: Install kubectl", maxsplit=1
+    )[0]
+    assert 'if [[ "$release_sha" != "$main_sha" ]]' in guard
+    assert "exit 1" in guard
+    assert "exit 0" not in guard
+    assert "azure/setup-kubectl@" in deploy
+    assert "imranismail/setup-kustomize@" in deploy
+    assert "deploy-production.ps1" in deploy
+    assert '-ImageSha "${{ github.event.workflow_run.head_sha }}"' in deploy
+    assert deploy.index("Reject a superseded production release") < deploy.index(
+        "Configure production kubeconfig"
+    )
+
+
+def test_release_deploy_keeps_kubeconfig_secret_out_of_logs_and_always_cleans_up() -> None:
+    deploy = job_block(
+        PUBLISH_WORKFLOW_PATH.read_text(encoding="utf-8"),
+        "deploy",
+    )
+
+    assert "KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}" in deploy
+    assert 'kubeconfig_path="$RUNNER_TEMP/production-kubeconfig"' in deploy
+    assert "printf '%s' \"$KUBECONFIG_B64\" | base64 --decode" in deploy
+    assert 'echo "KUBECONFIG=$kubeconfig_path" >> "$GITHUB_ENV"' in deploy
+    assert 'echo "$KUBECONFIG_B64"' not in deploy
+    assert 'KUBECONFIG_B64" >> "$GITHUB_ENV"' not in deploy
+    assert "if: ${{ always() }}" in deploy
+    assert 'rm -f -- "$RUNNER_TEMP/production-kubeconfig"' in deploy
+
+
+def test_manual_rollback_is_dispatch_only_approved_and_checks_all_sha_images() -> None:
+    workflow = ROLLBACK_WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    assert "workflow_dispatch:" in workflow
+    assert "image_sha:" in workflow
+    assert "required: true" in workflow
+    assert "type: string" in workflow
+    assert "workflow_run:" not in workflow
+    assert "pull_request:" not in workflow
+    assert re.search(r"(?m)^\s+push:\s*$", workflow) is None
+    assert "group: production-release" in workflow
+    assert "cancel-in-progress: false" in workflow
+    assert re.search(
+        r"environment:\n\s+name: production\n\s+url: https://edu\.getkr\.com",
+        workflow,
+    )
+    assert "^[0-9a-f]{40}$" in workflow
+    assert "for image in api grader web languagetool" in workflow
+    assert "docker manifest inspect" in workflow
+    assert "edu-homework-grader-${image}:${IMAGE_SHA}" in workflow
+    assert "azure/setup-kubectl@" in workflow
+    assert "imranismail/setup-kustomize@" in workflow
+    assert "deploy-production.ps1" in workflow
+    assert '-ImageSha "$IMAGE_SHA"' in workflow
+    assert "git fetch origin main" not in workflow
+    assert "git rev-parse origin/main" not in workflow
+    assert workflow.index("Validate rollback image SHA") < workflow.index(
+        "Configure production kubeconfig"
+    )
+    assert workflow.index("Verify rollback images exist") < workflow.index(
+        "Configure production kubeconfig"
+    )
+
+
+def test_manual_rollback_uses_safe_temporary_kubeconfig_and_always_cleans_up() -> None:
+    workflow = ROLLBACK_WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    assert re.search(
+        r"permissions:\n\s+contents: read\n\s+packages: read",
+        workflow,
+    )
+    assert "KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}" in workflow
+    assert 'kubeconfig_path="$RUNNER_TEMP/production-kubeconfig"' in workflow
+    assert "printf '%s' \"$KUBECONFIG_B64\" | base64 --decode" in workflow
+    assert 'echo "KUBECONFIG=$kubeconfig_path" >> "$GITHUB_ENV"' in workflow
+    assert 'echo "$KUBECONFIG_B64"' not in workflow
+    assert 'KUBECONFIG_B64" >> "$GITHUB_ENV"' not in workflow
+    assert "if: ${{ always() }}" in workflow
+    assert 'rm -f -- "$RUNNER_TEMP/production-kubeconfig"' in workflow
