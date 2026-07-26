@@ -23,6 +23,6 @@ function destination(module: TeacherModule) {
   if (module === 'reviews') return '/teacher/reviews'
   if (module === 'ai_questions') return '/teacher/ai-questions'
   if (module === 'requests') return '/teacher/appeals'
-  return { hash: `#${module}` }
+  return `/teacher#${module}`
 }
 </script>

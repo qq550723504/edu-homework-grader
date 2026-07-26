@@ -854,7 +854,7 @@ watch(selectedJobId, (jobId, previousJobId) => {
     </nav>
 
     <div class="ai-review-workspace__grid">
-      <aside class="card" aria-label="AI 出题审核选择器">
+      <aside data-testid="ai-review-candidate-list" class="card" aria-label="AI 出题审核选择器">
         <TeacherAiJobList
           :jobs="jobs"
           :selected-job-id="selectedJobId"
@@ -932,12 +932,9 @@ watch(selectedJobId, (jobId, previousJobId) => {
 </template>
 
 <style scoped>
-.ai-review-workspace__grid {
-  display: grid;
-  grid-template-columns: minmax(220px, 0.32fr) minmax(0, 1fr);
-  gap: 24px;
-  margin-top: 32px;
-}
+.ai-review-workspace__grid { display: grid; gap: 20px; margin-top: 32px; }
+.ai-review-workspace__grid > * { min-width: 0; }
+.ai-review-workspace__grid > aside { align-self: start; }
 
 [data-testid='ai-review-lifecycle'] {
   display: flex;
@@ -983,8 +980,11 @@ watch(selectedJobId, (jobId, previousJobId) => {
 }
 
 @media (max-width: 760px) {
-  .ai-review-workspace__grid {
-    grid-template-columns: 1fr;
-  }
+  .ai-review-workspace__grid button { min-height: 44px; }
+}
+
+@media (min-width: 980px) {
+  .ai-review-workspace__grid { grid-template-columns: minmax(220px, .3fr) minmax(0, 1fr); }
+  .ai-review-workspace__grid > aside { position: sticky; top: 20px; }
 }
 </style>

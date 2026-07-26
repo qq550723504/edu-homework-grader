@@ -15,22 +15,23 @@ describe('homepage task entry', () => {
     vi.unstubAllGlobals()
   })
 
-  it('guides students and teachers to their respective workspaces without exposing the API URL', () => {
+  it('presents the project website, trustworthy learning loop, and direct workspace entries', () => {
     const wrapper = mount(HomePage, {
-      global: {
-        stubs: {
-          NuxtLink: { props: ['to'], template: '<a :href="to"><slot /></a>' },
-        },
-      },
+      global: { stubs: { NuxtLink: { props: ['to'], template: '<a :href="to"><slot /></a>' } } },
     })
 
-    expect(wrapper.get('h1').text()).toBe('开始你的作业与教学工作')
-    expect(wrapper.get('a[href="/student"]').text()).toBe('查看我的作业')
-    expect(wrapper.get('a[href="/teacher"]').text()).toBe('进入教学工作台')
-    expect(wrapper.text()).toContain('待完成作业')
-    expect(wrapper.text()).toContain('创建作业')
-    expect(wrapper.text()).toContain('为什么值得信赖')
+    expect(wrapper.get('header').text()).toContain('Edu Homework Grader')
+    expect(wrapper.get('h1').text()).toBe('让作业、反馈与教学协作更清楚')
+    expect(wrapper.get('a[href="/student"]').text()).toContain('进入学生工作台')
+    expect(wrapper.get('a[href="/teacher"]').text()).toContain('进入教师工作台')
+    expect(wrapper.get('#platform-capabilities').text()).toContain('英语与数学作业')
+    expect(wrapper.get('#platform-capabilities').text()).toContain('订正')
+    expect(wrapper.get('#trust-principles').text()).toContain('AI 辅助，不替代教师判断')
+    expect(wrapper.text()).toContain('学生')
+    expect(wrapper.text()).toContain('教师与学校')
+    expect(wrapper.text()).toContain('家长')
     expect(wrapper.text()).not.toContain('Core API:')
+    expect(wrapper.text()).not.toContain('生产已上线')
 
     wrapper.unmount()
   })

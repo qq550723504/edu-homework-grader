@@ -185,6 +185,17 @@ describe('teacher AI review rendering', () => {
     expect(wrapper.emitted('accept')).toEqual([[{ confirmWarnings: true }]])
   })
 
+  it('renders a decision-focused workbench with a readable warning conclusion', async () => {
+    const wrapper = await mountWorkspace()
+
+    expect(wrapper.get('[data-testid="ai-review-candidate-list"]')).toBeTruthy()
+    expect(wrapper.get('[data-testid="ai-review-preview"]')).toBeTruthy()
+    expect(wrapper.get('[data-testid="ai-review-decision"]')).toBeTruthy()
+    expect(wrapper.get('[data-testid="review-decision-heading"]').text()).toBe('可接受，但请先确认提醒')
+    expect(wrapper.get('[data-testid="review-decision-next-step"]').text()).toContain('勾选“我已阅读提醒”')
+    expect(wrapper.get('[data-testid="advanced-review-information"]').attributes('open')).toBeUndefined()
+  })
+
   it('shows the student preview, blocked reason, and corrective action before editable internals', () => {
     const wrapper = mount(TeacherAiCandidateReview, {
       props: { draft: warningE4Draft, validation: blockedValidation },
@@ -193,17 +204,20 @@ describe('teacher AI review rendering', () => {
     expect(wrapper.get('[data-testid="review-student-preview"]').text()).toContain('Why was the bridge closed?')
     expect(wrapper.get('[data-testid="review-decision"]').text()).toContain('暂不能接受')
     expect(wrapper.get('[data-testid="review-decision"]').text()).toContain('Resolve this validation finding')
+    expect(wrapper.get('[data-testid="review-decision-next-step"]').text()).toContain('修改题目、重新生成或拒绝')
     expect(wrapper.get('[data-testid="blocked-primary-action"]').text()).toContain('修改并重新校验')
     expect(wrapper.get('[data-testid="edit-candidate-details"]').exists()).toBe(true)
     expect(wrapper.get('[data-testid="edit-candidate-details"]').text()).toContain('保存后会重新校验')
     expect(wrapper.get('[data-testid="save-revision"]').text()).toContain('保存并重新校验')
     expect(wrapper.get('[data-testid="technical-review-details"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="accept-candidate"]').exists()).toBe(false)
   })
 
   it('explains that acceptance creates a draft rather than publishing to students', () => {
     const wrapper = mount(TeacherAiCandidateReview, { props: { draft: warningE4Draft, validation: passedValidation } })
 
-    expect(wrapper.get('[data-testid="review-decision"]').text()).toContain('只会创建题库草稿')
+    expect(wrapper.get('[data-testid="review-decision"]').text()).toContain('创建题库草稿')
+    expect(wrapper.get('[data-testid="review-decision"]').text()).toContain('发布')
     expect(wrapper.get('[data-testid="accept-candidate"]').text()).toBe('接受为题库草稿')
   })
 
@@ -263,7 +277,7 @@ describe('teacher AI review rendering', () => {
       },
     })
 
-    expect(wrapper.get('[data-testid="review-decision"] h3').text()).toBe('已创建题库草稿')
+    expect(wrapper.get('[data-testid="review-decision-heading"]').text()).toBe('已创建题库草稿')
     expect(wrapper.get('[data-testid="accepted-notice"]').text()).toContain('已创建题库草稿')
     expect(wrapper.find('[data-testid="edit-candidate-details"]').exists()).toBe(false)
     expect(wrapper.find('input[aria-label="确认 warning 后接受"]').exists()).toBe(false)

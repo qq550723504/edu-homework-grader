@@ -96,7 +96,7 @@ test('student logout removes the protected session and no JavaScript-readable to
   await expect(page).toHaveURL(`${webBaseUrl}/`)
   await expect(page.evaluate(() => document.cookie)).resolves.not.toContain('edu_access_token')
   await expect(page.evaluate(() => document.cookie)).resolves.not.toContain('access_token')
-  await expect(page.getByRole('link', { name: '查看我的作业' })).toBeVisible()
+  await expect(page.locator('a[href="/student"]').first()).toBeVisible()
 })
 
 test('student submits, teacher reviews and publishes, then teacher approves the student appeal through browsers', async ({ browser }) => {

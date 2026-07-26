@@ -10,6 +10,7 @@ import {
   type TeacherAiValidationRun,
 } from '../../lib/teacher-ai-review'
 import { reviewPresentation } from '../../lib/teacher-ai-review-presentation'
+import TeacherAiReviewDecision from './TeacherAiReviewDecision.vue'
 
 const props = withDefaults(defineProps<{
   draft: TeacherAiDraft
@@ -121,30 +122,34 @@ function regenerateCandidate() {
 </script>
 
 <template>
-  <section aria-label="AI 候选题审核">
+  <section class="ai-candidate-review" aria-label="AI 候选题审核">
+    <div v-if="accepted" data-testid="accepted-notice" role="status">
+      <p>该候选题已接受，已创建题库草稿。</p>
+      <p v-if="acceptedQuestionVersionId">
+        QuestionVersion：<code data-testid="accepted-question-version-id">{{ acceptedQuestionVersionId }}</code>
+      </p>
+      <a data-testid="question-bank-link" href="/teacher#questions">前往题库工作台</a>
+    </div>
+    <p v-else-if="draft.teacher_state === 'rejected'" data-testid="rejected-notice" role="status">该候选题已拒绝。</p>
+
     <section data-testid="review-student-preview" aria-labelledby="student-preview-heading">
-      <p class="eyebrow">当前候选题 · 第 {{ draft.ordinal }} 题</p>
-      <h2 id="student-preview-heading">学生将看到的题目</h2>
-      <p>{{ candidate.prompt }}</p>
-      <p v-if="candidate.question_type === 'E4'" data-testid="reading-material">{{ candidate.reading_material }}</p>
-      <p>知识点：{{ candidate.knowledge_point }} · 目标难度：{{ candidate.difficulty }}</p>
+      <section data-testid="ai-review-preview" class="ai-candidate-review__preview">
+        <p class="eyebrow">当前候选题 · 第 {{ draft.ordinal }} 题</p>
+        <h2 id="student-preview-heading">学生将看到的题目</h2>
+        <p>{{ candidate.prompt }}</p>
+        <section v-if="candidate.question_type === 'E4'" data-testid="reading-material" aria-label="阅读材料预览">
+          <h3>阅读材料</h3>
+          <p>{{ candidate.reading_material }}</p>
+        </section>
+        <p>知识点：{{ candidate.knowledge_point }} · 目标难度：{{ candidate.difficulty }}</p>
+      </section>
     </section>
 
     <section data-testid="review-decision" aria-live="polite">
-      <h2>系统审核结果</h2>
-      <h3>{{ presentation.title }}</h3>
-      <p>{{ presentation.description }}</p>
+      <TeacherAiReviewDecision :draft="reviewDraft" :validation="validation" />
       <p v-if="presentation.kind === 'needs_fix'" data-testid="blocked-primary-action">
         下一步：{{ presentation.primaryAction }}。在下方修改题目后保存，系统会重新校验。
       </p>
-      <div v-if="accepted" data-testid="accepted-notice" role="status">
-        <p>该候选题已接受，已创建题库草稿。</p>
-        <p v-if="acceptedQuestionVersionId">
-          QuestionVersion：<code data-testid="accepted-question-version-id">{{ acceptedQuestionVersionId }}</code>
-        </p>
-        <a data-testid="question-bank-link" href="/teacher#questions">前往题库工作台</a>
-      </div>
-      <p v-else-if="draft.teacher_state === 'rejected'" data-testid="rejected-notice" role="status">该候选题已拒绝。</p>
       <label v-if="presentation.kind === 'needs_confirmation'">
         <input v-model="warningConfirmed" :disabled="writeDisabled" aria-label="确认 warning 后接受" type="checkbox"> 我已阅读此提醒
       </label>
@@ -157,33 +162,11 @@ function regenerateCandidate() {
       >
         接受为题库草稿
       </button>
-      <template v-if="pendingReview">
-        <label>拒绝原因
-          <select v-model="rejectReason" :disabled="writeDisabled" aria-label="拒绝原因">
-            <option value="incorrect_answer">答案错误</option>
-            <option value="out_of_scope">超纲</option>
-            <option value="unclear_wording">表述不清</option>
-            <option value="duplicate">重复</option>
-            <option value="unsuitable_for_students">不适合学生</option>
-            <option value="other">其他</option>
-          </select>
-        </label>
-        <label v-if="rejectReason === 'other'">拒绝详情<textarea v-model="rejectDetail" :disabled="writeDisabled" aria-label="拒绝详情" maxlength="500" /></label>
-        <p v-if="rejectError" data-testid="reject-detail-error" role="alert">{{ rejectError }}</p>
-        <button :disabled="writeDisabled" data-testid="reject-candidate" type="button" @click="rejectCandidate">拒绝候选题</button>
-        <button :disabled="writeDisabled" data-testid="regenerate-candidate" type="button" @click="regenerateCandidate">重新生成</button>
-      </template>
     </section>
 
-    <details v-if="pendingReview" data-testid="edit-candidate-details">
+    <details v-if="pendingReview" data-testid="edit-candidate-details" class="ai-candidate-review__editor">
       <summary>修改题目并重新校验</summary>
       <p>保存后会重新校验此候选题；校验通过或完成 warning 确认后才能接受。</p>
-      <fieldset>
-        <legend>候选题信息</legend>
-        <label>题型<input :value="candidate.question_type" aria-label="题型" readonly></label>
-        <label>目标修订<input :value="candidate.objective_revision_id" aria-label="目标修订" readonly></label>
-        <label>策略版本<input :value="candidate.policy_version" aria-label="策略版本" readonly></label>
-      </fieldset>
       <label>题目提示<textarea v-model="candidate.prompt" :disabled="writeDisabled" aria-label="题目提示" /></label>
       <label>评分规则 JSON<textarea v-model="ruleJson" :disabled="writeDisabled" aria-label="评分规则 JSON" /></label>
       <label>解析<textarea v-model="candidate.explanation" :disabled="writeDisabled" aria-label="解析" /></label>
@@ -194,24 +177,58 @@ function regenerateCandidate() {
       <button :disabled="writeDisabled" data-testid="save-revision" type="button" @click="saveRevision">保存并重新校验</button>
     </details>
 
-    <details data-testid="technical-review-details">
-      <summary>高级信息：评分规则与技术记录</summary>
-      <section aria-label="候选题审计记录">
-        <p>题型：{{ candidate.question_type }}</p>
-        <p>目标修订：{{ candidate.objective_revision_id }}</p>
-        <p>策略版本：{{ candidate.policy_version }}</p>
-      </section>
-      <section v-if="validation" aria-label="校验结果">
-        <p>校验状态：{{ validation.status }}</p>
-        <ul>
-          <li v-for="finding in validation.findings" :key="finding.code" data-testid="validation-finding">
-            <strong>{{ finding.code }}</strong>
-            <span>{{ finding.remediation }}</span>
-            <pre>{{ JSON.stringify(finding.evidence, null, 2) }}</pre>
-          </li>
-        </ul>
-      </section>
-      <pre>{{ ruleJson }}</pre>
-    </details>
+    <template v-if="pendingReview">
+      <label>拒绝原因
+        <select v-model="rejectReason" :disabled="writeDisabled" aria-label="拒绝原因">
+          <option value="incorrect_answer">答案错误</option>
+          <option value="out_of_scope">超纲</option>
+          <option value="unclear_wording">表述不清</option>
+          <option value="duplicate">重复</option>
+          <option value="unsuitable_for_students">不适合学生</option>
+          <option value="other">其他</option>
+        </select>
+      </label>
+      <label v-if="rejectReason === 'other'">拒绝详情<textarea v-model="rejectDetail" :disabled="writeDisabled" aria-label="拒绝详情" maxlength="500" /></label>
+      <p v-if="rejectError" data-testid="reject-detail-error" role="alert">{{ rejectError }}</p>
+      <button :disabled="writeDisabled" data-testid="reject-candidate" type="button" @click="rejectCandidate">拒绝候选题</button>
+      <button :disabled="writeDisabled" data-testid="regenerate-candidate" type="button" @click="regenerateCandidate">重新生成</button>
+    </template>
+
+    <section data-testid="technical-review-details" class="ai-candidate-review__advanced">
+      <details data-testid="advanced-review-information">
+        <summary>高级信息：评分规则与技术记录</summary>
+        <section aria-label="候选题审计记录">
+          <p>题型：{{ candidate.question_type }}</p>
+          <p>目标修订：{{ candidate.objective_revision_id }}</p>
+          <p>策略版本：{{ candidate.policy_version }}</p>
+        </section>
+        <section v-if="validation" aria-label="校验结果">
+          <p>校验状态：{{ validation.status }}</p>
+          <ul>
+            <li v-for="finding in validation.findings" :key="finding.code" data-testid="validation-finding">
+              <strong>{{ finding.code }}</strong>
+              <span>{{ finding.remediation }}</span>
+              <pre>{{ JSON.stringify(finding.evidence, null, 2) }}</pre>
+            </li>
+          </ul>
+        </section>
+        <pre>{{ ruleJson }}</pre>
+      </details>
+    </section>
   </section>
 </template>
+
+<style scoped>
+.ai-candidate-review { display: grid; gap: 18px; }
+.ai-candidate-review__preview, .ai-candidate-review__advanced, .ai-candidate-review__editor { padding: 20px; border: 1px solid #e1e7f0; border-radius: 16px; background: #fff; }
+.ai-candidate-review h2 { margin: 0; font-size: 1.45rem; line-height: 1.4; }
+.ai-candidate-review h3 { margin: 18px 0 8px; font-size: 1rem; }
+.ai-candidate-review label { display: grid; gap: 6px; margin-top: 14px; color: #35435a; font-weight: 750; }
+.ai-candidate-review input, .ai-candidate-review select, .ai-candidate-review textarea { width: 100%; padding: 10px 12px; border: 1px solid #cbd6e6; border-radius: 10px; background: #fff; color: #152033; font: inherit; }
+.ai-candidate-review textarea { min-height: 92px; resize: vertical; }
+.ai-candidate-review summary { min-height: 44px; cursor: pointer; color: #2459c4; font-weight: 850; }
+.ai-candidate-review fieldset { display: grid; gap: 10px; margin-top: 16px; }
+.ai-candidate-review button { min-height: 44px; margin-top: 14px; padding: 0 16px; border: 1px solid #2459c4; border-radius: 10px; background: #fff; color: #2459c4; font: inherit; font-weight: 800; cursor: pointer; }
+.ai-candidate-review button:disabled { border-color: #d6deea; background: #f4f6fa; color: #9aa7ba; cursor: not-allowed; }
+.ai-candidate-review pre { overflow: auto; padding: 12px; border-radius: 10px; background: #f5f7fb; white-space: pre-wrap; }
+</style>
