@@ -191,7 +191,7 @@ describe('teacher AI review rendering', () => {
     expect(wrapper.get('[data-testid="ai-review-candidate-list"]')).toBeTruthy()
     expect(wrapper.get('[data-testid="ai-review-preview"]')).toBeTruthy()
     expect(wrapper.get('[data-testid="ai-review-decision"]')).toBeTruthy()
-    expect(wrapper.get('[data-testid="review-decision-heading"]').text()).toBe('可接受，但请先确认提醒')
+    expect(wrapper.get('[data-testid="review-decision-heading"]').text()).toBe('需要教师确认')
     expect(wrapper.get('[data-testid="review-decision-next-step"]').text()).toContain('勾选“我已阅读提醒”')
     expect(wrapper.get('[data-testid="advanced-review-information"]').attributes('open')).toBeUndefined()
   })

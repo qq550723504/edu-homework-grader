@@ -167,6 +167,12 @@ function regenerateCandidate() {
     <details v-if="pendingReview" data-testid="edit-candidate-details" class="ai-candidate-review__editor">
       <summary>修改题目并重新校验</summary>
       <p>保存后会重新校验此候选题；校验通过或完成 warning 确认后才能接受。</p>
+      <fieldset>
+        <legend>候选题信息</legend>
+        <label>题型<input :value="candidate.question_type" aria-label="题型" readonly></label>
+        <label>目标修订<input :value="candidate.objective_revision_id" aria-label="目标修订" readonly></label>
+        <label>策略版本<input :value="candidate.policy_version" aria-label="策略版本" readonly></label>
+      </fieldset>
       <label>题目提示<textarea v-model="candidate.prompt" :disabled="writeDisabled" aria-label="题目提示" /></label>
       <label>评分规则 JSON<textarea v-model="ruleJson" :disabled="writeDisabled" aria-label="评分规则 JSON" /></label>
       <label>解析<textarea v-model="candidate.explanation" :disabled="writeDisabled" aria-label="解析" /></label>
