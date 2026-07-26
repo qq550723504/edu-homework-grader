@@ -1,15 +1,44 @@
 name: Publish production images
 
 on:
-  push:
-    branches: [main]
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
 
 permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
 jobs:
+  eligibility:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    outputs:
+      release_eligible: ${{ steps.release.outputs.release_eligible }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 2
+      - id: release
+        shell: bash
+        run: |
+          if git diff --quiet HEAD^ HEAD -- . ':(exclude)docs/**' ':(exclude)**/*.md'; then
+            echo "release_eligible=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_eligible=true" >> "$GITHUB_OUTPUT"
+          fi
+
   publish:
+    needs: eligibility
+    if: needs.eligibility.outputs.release_eligible == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -29,6 +58,8 @@ jobs:
             file: infra/languagetool/Dockerfile
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -39,4 +70,4 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/edu-homework-grader-${{ matrix.name }}:${{ github.sha }}
+          tags: ghcr.io/${{ github.repository_owner }}/edu-homework-grader-${{ matrix.name }}:${{ github.event.workflow_run.head_sha }}
