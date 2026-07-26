@@ -75,6 +75,9 @@ test('teacher fixes a blocked G7 M1 and atomically accepts passed M1 plus confir
 
   await expect(page.getByLabel('题型')).toHaveValue('M1')
   await expect(page.getByText('校验状态：blocked')).toBeVisible()
+  await expect(page.getByTestId('ai-review-lifecycle')).toContainText('教师审核')
+  await expect(page.getByTestId('review-decision')).toContainText('暂不能接受')
+  await expect(page.getByTestId('review-decision')).toContainText('修改并重新校验')
   await expect(page.getByTestId('accept-candidate')).toBeDisabled()
   await expect(page.getByTestId(`batch-select-${blockedM1.id}`)).toBeDisabled()
   const blockedResponse = await page.request.post(
@@ -166,6 +169,8 @@ test('teacher fixes a blocked G7 M1 and atomically accepts passed M1 plus confir
   ))).toBe(true)
   await expect(page.getByText('已批量接受 2 道候选题并创建草稿。')).toBeVisible()
   await expect(page.getByTestId('accepted-notice')).toContainText('已接受')
+  await expect(page.getByTestId('accepted-notice')).toContainText('已创建题库草稿')
+  await expect(page.getByTestId('accepted-notice')).not.toContainText('学生已看到')
 
   const questionBank = await responseJson<{
     question_versions: Array<{ id: string, question_type: string, status: string }>
