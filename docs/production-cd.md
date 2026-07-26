@@ -97,24 +97,31 @@ Deployment rollout。
    选择一个已知良好的**完整、40 位、小写十六进制 commit SHA**。
 2. 在 GitHub Actions 打开 `Roll back production`，点击 `Run workflow`，分支
    必须选择 `main`，在 `image_sha` 填入该 SHA。
-3. workflow 会先确认 API、Grader、Web 和 LanguageTool 四个 GHCR manifest
-   全部存在，再进入 `production` Environment 审批。
-4. 审批者核对目标 SHA 和事故记录后批准。workflow 使用受信任的 `main` 部署
-   脚本执行相同 rollout、健康检查和失败时自动恢复逻辑。
+3. rollback job 先在 `production` Environment 等待 Required reviewer。审批者
+   核对请求的目标 SHA 和事故记录；此时 job 尚未执行镜像预检。
+4. 批准后，job 才验证 SHA，并确认 API、Grader、Web 和 LanguageTool 四个 GHCR
+   manifest 全部存在。两项预检都通过后才解码临时 kubeconfig、接触集群，并使用
+   受信任的 `main` 部署脚本执行 rollout、健康检查和失败时自动恢复逻辑。
 
 缺少任何一个镜像、SHA 不是严格 40 位小写格式、选择非 `main` ref 时，workflow
-都会在接触集群前停止。不要用手工推送同名标签补齐历史版本。
+都会停止；SHA 和镜像错误虽然在审批后报告，但仍发生在 kubeconfig 解码和集群
+访问前。不要用手工推送同名标签补齐历史版本。
 
 ## 健康检查与日志
 
 自动部署检查四个 Deployment rollout、API Service 是否有 ready endpoint，以及
-公网 `GET https://edu.getkr.com/`。集群内探针为：
+公网 `GET https://edu.getkr.com/`。可供授权内网排障使用的运行时健康端点包括：
 
 - API：`http://api:8000/health` 和依赖数据库的 `http://api:8000/ready`；
 - Grader：`http://grader:8010/health` 和模型就绪检查
   `http://grader:8010/ready`；
 - LanguageTool：`http://languagetool:8010/v2/languages`；
 - Web：`http://web:3000/`。
+
+Kubernetes 为 API 和 Grader 配置的 `readinessProbe` 是各自的 `/ready`，没有把
+`/health` 配为 Kubernetes probe。API Pod 的 `/ready` 成功后才会进入 API Service
+ready endpoints，这也是部署脚本使用的 API 集群内就绪信号；LanguageTool 和 Web
+的 readiness probe 分别使用上表的 `/v2/languages` 和 `/`。
 
 Ingress 只把公网 `/` 路径交给 Web；不要为了排障临时暴露内部 health endpoint。
 优先查看 GitHub Actions run 日志及 step summary，其中包含目标 SHA、捕获的旧镜像、
