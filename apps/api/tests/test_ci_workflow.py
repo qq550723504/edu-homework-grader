@@ -335,3 +335,10 @@ def test_manual_rollback_uses_safe_temporary_kubeconfig_and_always_cleans_up() -
     assert 'KUBECONFIG_B64" >> "$GITHUB_ENV"' not in workflow
     assert "if: ${{ always() }}" in workflow
     assert 'rm -f -- "$RUNNER_TEMP/production-kubeconfig"' in workflow
+
+
+def test_readme_links_the_production_cd_operator_runbook() -> None:
+    root = Path(__file__).resolve().parents[3]
+
+    assert (root / "docs" / "production-cd.md").is_file()
+    assert "docs/production-cd.md" in (root / "README.md").read_text(encoding="utf-8")

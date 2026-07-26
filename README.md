@@ -213,7 +213,7 @@ docker compose exec api python -m alembic -c alembic.ini upgrade head
 
 ## 下一步
 
-见 [项目状态](docs/project-status.md)、[机器可读状态证据](docs/status-evidence.json)、[文档索引](docs/README.md)、[试点上线检查表](docs/pilot-checklist.md) 和 [路线图](docs/roadmap.md)。
+见 [项目状态](docs/project-status.md)、[机器可读状态证据](docs/status-evidence.json)、[文档索引](docs/README.md)、[试点上线检查表](docs/pilot-checklist.md)、[生产 CD 运维手册](docs/production-cd.md) 和 [路线图](docs/roadmap.md)。
 
 ## 学生作答本地保存
 
