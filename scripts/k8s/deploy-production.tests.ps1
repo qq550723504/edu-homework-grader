@@ -115,7 +115,7 @@ users: []
             return '{"metadata":{"name":"student-activation-expiry"},"spec":{"jobTemplate":{"spec":{"template":{"spec":{"containers":[{"name":"expire","image":"registry.example/api-cron@sha256:old-cron"}]}}}}}}'
         }
 
-        if ($joined -match '^apply --server-side --filename ') {
+        if ($joined -match '^apply --server-side(?: --field-manager github-production-deployer)?(?: --force-conflicts)? --filename ') {
             $global:DeployProductionTestState.ApplyCount++
             $manifestPath = [string]$Arguments[-1]
             $global:DeployProductionTestState.AppliedManifests.Add(
@@ -248,6 +248,28 @@ BeforeEach {
         foreach ($image in $images) {
             $image | Should -Match ([regex]::Escape(":$validSha") + '$')
             $image | Should -Not -Match 'sha-not-published'
+        }
+    }
+
+    It 'preserves existing selector labels and force-adopts legacy image ownership' {
+        & $scriptPath -ImageSha $validSha -SkipPublicHealthCheck
+
+        @(
+            $global:DeployProductionTestState.KubectlCalls -match
+                '^apply --server-side --field-manager github-production-deployer --force-conflicts --filename '
+        ).Count | Should -Be 1
+
+        $resources = @(
+            Get-ManifestResources `
+                -Content $global:DeployProductionTestState.AppliedManifests[0]
+        )
+        foreach ($deployment in @($resources | Where-Object { $_.Kind -eq 'Deployment' })) {
+            $deployment.Content | Should -Match (
+                '(?ms)^  selector:\s*\r?\n' +
+                '\s{4}matchLabels:\s*\r?\n' +
+                '\s{6}app\.kubernetes\.io/name:\s*' + [regex]::Escape($deployment.Name) + '\s*\r?\n' +
+                '\s{6}app\.kubernetes\.io/part-of:\s*edu-homework-grader\s*$'
+            )
         }
     }
 
