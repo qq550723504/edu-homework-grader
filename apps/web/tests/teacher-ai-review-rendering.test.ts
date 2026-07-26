@@ -324,6 +324,29 @@ describe('teacher AI review rendering', () => {
     expect(navigateTo).toHaveBeenCalledWith({ query: { job: 'job-1', draft: 'draft-2' } })
   })
 
+  it('shows the lifecycle and a teacher-facing status for every draft in the selected batch', async () => {
+    const secondDraft = { ...warningE4Draft, id: 'draft-2', ordinal: 2, teacher_state: 'accepted' as const }
+    mocks.fetchAiGenerationDrafts.mockResolvedValue([warningE4Draft, secondDraft])
+    mocks.fetchAiValidationRuns.mockImplementation((_request, draftId) => Promise.resolve([
+      draftId === 'draft-1' ? warningValidation : { ...warningValidation, draft_id: draftId, status: 'passed' },
+    ]))
+
+    const wrapper = await mountWorkspace()
+
+    expect(wrapper.get('[data-testid="ai-review-lifecycle"]').text()).toContain('教师审核')
+    expect(wrapper.get('[data-testid="draft-status-draft-1"]').text()).toContain('需确认')
+    expect(wrapper.get('[data-testid="draft-status-draft-2"]').text()).toContain('已接受')
+  })
+
+  it('uses the count in the bulk acceptance action without selecting blocked drafts', async () => {
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="batch-select-draft-1"]').setValue(true)
+    await wrapper.get('[data-testid="batch-warning-draft-1"]').setValue(true)
+
+    expect(wrapper.get('[data-testid="bulk-accept-candidates"]').text()).toContain('接受已选 1 题为题库草稿')
+  })
+
   it('loads an initial warning validation before enabling acceptance', async () => {
     const wrapper = await mountWorkspace()
 

@@ -18,12 +18,14 @@ import {
   type TeacherAiValidationRun,
 } from '../../lib/teacher-ai-review'
 import { fetchCurrentPrincipal } from '../../lib/student-api'
+import { reviewPresentation } from '../../lib/teacher-ai-review-presentation'
 import TeacherAiCandidateReview from './TeacherAiCandidateReview.vue'
 import TeacherAiJobList from './TeacherAiJobList.vue'
 
 const route = useRoute()
 const jobs = ref<TeacherAiGenerationJob[]>([])
 const drafts = ref<TeacherAiDraft[]>([])
+const validationByDraftId = ref<Record<string, TeacherAiValidationRun | null>>({})
 const currentValidation = ref<TeacherAiValidationRun | null>(null)
 const currentValidationKey = ref('')
 const acceptedQuestionVersionIds = ref<Record<string, string>>({})
@@ -66,9 +68,7 @@ const selectedDraftId = computed(() => queryValue(route.query.draft))
 const selectedDraft = computed(() => drafts.value.find((draft) => draft.id === selectedDraftId.value) ?? null)
 const selectedValidation = computed(() => {
   const draft = selectedDraft.value
-  return draft && currentValidationKey.value === validationKey(draft)
-    ? currentValidation.value
-    : null
+  return draft ? validationByDraftId.value[draft.id] ?? null : null
 })
 const selectedAcceptedQuestionVersionId = computed(() => {
   const draft = selectedDraft.value
@@ -145,12 +145,16 @@ async function loadWorkspace() {
     const nextDrafts = jobId ? preserveConfirmedBatchStates(jobId, fetchedDrafts) : []
     if (!requestIsCurrent(generation, requestedJobId, requestedDraftId)) return
 
+    const nextValidationByDraftId = await fetchValidationSummaries(nextDrafts)
+    if (!requestIsCurrent(generation, requestedJobId, requestedDraftId)) return
+
     const draftId = nextDrafts.some((draft) => draft.id === requestedDraftId)
       ? requestedDraftId
       : nextDrafts[0]?.id ?? null
     if (jobId !== requestedJobId || draftId !== requestedDraftId) {
       jobs.value = nextJobs
       drafts.value = nextDrafts
+      validationByDraftId.value = nextValidationByDraftId
       currentValidation.value = null
       currentValidationKey.value = ''
       await navigateTo({ query: routeQuery(jobId, draftId) })
@@ -158,13 +162,12 @@ async function loadWorkspace() {
     }
 
     const draft = nextDrafts.find((item) => item.id === draftId) ?? null
-    const validation = draft ? await fetchCurrentValidation(draft) : null
-    if (!requestIsCurrent(generation, requestedJobId, requestedDraftId)) return
 
     jobs.value = nextJobs
     drafts.value = nextDrafts
+    validationByDraftId.value = nextValidationByDraftId
     pruneBatchIntent(nextDrafts)
-    setCurrentValidation(draft, validation)
+    setCurrentValidation(draft, draft ? nextValidationByDraftId[draft.id] : null)
     if (pendingBatchRefresh.value?.jobId !== jobId) syncWarning.value = ''
     pendingRefresh.value = null
   } catch (error: unknown) {
@@ -200,6 +203,7 @@ async function refreshSelection(
   if (!refreshIsCurrent(generation, owningRouteGeneration, jobId, draftId)) return 'stale'
 
   drafts.value = nextDrafts
+  validationByDraftId.value = { ...validationByDraftId.value, [draftId]: validation }
   pruneBatchIntent(nextDrafts)
   setCurrentValidation(draft, validation)
   return 'updated'
@@ -210,10 +214,19 @@ async function fetchCurrentValidation(draft: TeacherAiDraft): Promise<TeacherAiV
   return runs.find((run) => run.revision_number === draft.revision_number) ?? null
 }
 
+async function fetchValidationSummaries(drafts: TeacherAiDraft[]): Promise<Record<string, TeacherAiValidationRun | null>> {
+  const entries = await Promise.all(drafts.map(async (draft) => [
+    draft.id,
+    await fetchCurrentValidation(draft),
+  ] as const))
+  return Object.fromEntries(entries)
+}
+
 function setCurrentValidation(draft: TeacherAiDraft | null, validation: TeacherAiValidationRun | null) {
   currentValidation.value = validation
   currentValidationKey.value = draft ? validationKey(draft) : ''
   if (!draft) return
+  validationByDraftId.value = { ...validationByDraftId.value, [draft.id]: validation }
   if (!validation) {
     removeBatchDraft(draft.id)
     return
@@ -333,6 +346,7 @@ function pruneBatchIntent(nextDrafts: TeacherAiDraft[]) {
 }
 
 function resetBatchIntent() {
+  validationByDraftId.value = {}
   selectedBatchDraftIds.value = []
   batchWarningAcknowledgements.value = {}
   batchSelectionRevisions.value = {}
@@ -597,6 +611,7 @@ async function runWrite(
     notice.value = result.message
     currentValidation.value = result.validation
     currentValidationKey.value = validationKey(updatedDraft)
+    validationByDraftId.value = { ...validationByDraftId.value, [updatedDraft.id]: result.validation }
     if (result.acceptedQuestionVersionId) {
       acceptedQuestionVersionIds.value = {
         ...acceptedQuestionVersionIds.value,
@@ -802,6 +817,11 @@ watch(selectedJobId, (jobId, previousJobId) => {
     </p>
     <p v-if="loading" class="notice" role="status">正在加载 AI 出题审核数据…</p>
 
+    <nav data-testid="ai-review-lifecycle" aria-label="AI 出题流程">
+      <span>1 生成批次</span><span>2 系统校验</span><strong>3 教师审核</strong>
+      <span>4 题库草稿</span><span>5 组卷并发布</span>
+    </nav>
+
     <div class="ai-review-workspace__grid">
       <aside class="card" aria-label="AI 出题审核选择器">
         <TeacherAiJobList
@@ -819,7 +839,10 @@ watch(selectedJobId, (jobId, previousJobId) => {
                 type="button"
                 @click="selectDraft(draft.id)"
               >
-                候选 {{ draft.ordinal }} · 修订 {{ draft.revision_number }}
+                候选 {{ draft.ordinal }} · 修订 {{ draft.revision_number }} ·
+                <span :data-testid="`draft-status-${draft.id}`">
+                  {{ reviewPresentation(draft, validationByDraftId[draft.id] ?? null).label }}
+                </span>
               </button>
             </li>
           </ul>
@@ -828,7 +851,19 @@ watch(selectedJobId, (jobId, previousJobId) => {
       </aside>
 
       <section class="card wide ai-review-workspace__review" aria-live="polite">
+        <TeacherAiCandidateReview
+          v-if="selectedDraft"
+          :draft="selectedDraft"
+          :validation="selectedValidation"
+          :busy="writeControlsDisabled"
+          :accepted-question-version-id="selectedAcceptedQuestionVersionId"
+          @save-revision="saveRevision"
+          @reject="rejectCandidate"
+          @accept="acceptCandidate"
+          @regenerate="regenerateCandidate"
+        />
         <section v-if="selectedDraft" class="batch-review-controls" aria-label="批量接受候选题">
+          <h2>批量接受</h2>
           <label>
             <input
               :checked="currentBatchSelected"
@@ -856,20 +891,9 @@ watch(selectedJobId, (jobId, previousJobId) => {
             type="button"
             @click="acceptBatch"
           >
-            批量接受并创建草稿
+            接受已选 {{ selectedBatchDraftIds.length }} 题为题库草稿
           </button>
         </section>
-        <TeacherAiCandidateReview
-          v-if="selectedDraft"
-          :draft="selectedDraft"
-          :validation="selectedValidation"
-          :busy="writeControlsDisabled"
-          :accepted-question-version-id="selectedAcceptedQuestionVersionId"
-          @save-revision="saveRevision"
-          @reject="rejectCandidate"
-          @accept="acceptCandidate"
-          @regenerate="regenerateCandidate"
-        />
         <p v-else-if="!loading">请选择要审核的候选题。</p>
       </section>
     </div>
@@ -882,6 +906,13 @@ watch(selectedJobId, (jobId, previousJobId) => {
   grid-template-columns: minmax(220px, 0.32fr) minmax(0, 1fr);
   gap: 24px;
   margin-top: 32px;
+}
+
+[data-testid='ai-review-lifecycle'] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-top: 24px;
 }
 
 .ai-review-workspace__grid ul {
@@ -912,6 +943,11 @@ watch(selectedJobId, (jobId, previousJobId) => {
 }
 
 .batch-review-controls p {
+  margin: 0;
+}
+
+.batch-review-controls h2 {
+  width: 100%;
   margin: 0;
 }
 
