@@ -9,6 +9,7 @@ import {
   type TeacherAiRejectReason,
   type TeacherAiValidationRun,
 } from '../../lib/teacher-ai-review'
+import TeacherAiReviewDecision from './TeacherAiReviewDecision.vue'
 
 const props = withDefaults(defineProps<{
   draft: TeacherAiDraft
@@ -115,7 +116,7 @@ function regenerateCandidate() {
 </script>
 
 <template>
-  <section aria-label="AI 候选题审核">
+  <section class="ai-candidate-review" aria-label="AI 候选题审核">
     <div v-if="accepted" data-testid="accepted-notice" role="status">
       <p>该候选题已接受，已创建题库草稿。</p>
       <p v-if="acceptedQuestionVersionId">
@@ -125,26 +126,36 @@ function regenerateCandidate() {
     </div>
     <p v-else-if="draft.teacher_state === 'rejected'" data-testid="rejected-notice" role="status">该候选题已拒绝。</p>
 
-    <fieldset>
+    <section data-testid="ai-review-preview" class="ai-candidate-review__preview">
+      <p class="eyebrow">学生将看到</p>
+      <h2>{{ candidate.prompt }}</h2>
+      <section v-if="candidate.question_type === 'E4'" data-testid="reading-material" aria-label="阅读材料预览">
+        <h3>阅读材料</h3>
+        <p>{{ candidate.reading_material }}</p>
+      </section>
+    </section>
+
+    <details data-testid="advanced-review-information" class="ai-candidate-review__advanced">
+      <summary>高级信息：评分规则与技术记录</summary>
+      <fieldset>
       <legend>候选题信息</legend>
       <label>题型<input :value="candidate.question_type" aria-label="题型" readonly></label>
       <label>目标修订<input :value="candidate.objective_revision_id" aria-label="目标修订" readonly></label>
       <label>策略版本<input :value="candidate.policy_version" aria-label="策略版本" readonly></label>
-    </fieldset>
+      </fieldset>
+    </details>
 
-    <section v-if="candidate.question_type === 'E4'" data-testid="reading-material" aria-label="阅读材料预览">
-      <h2>阅读材料</h2>
-      <p>{{ candidate.reading_material }}</p>
-    </section>
-
-    <label>题目提示<textarea v-model="candidate.prompt" :disabled="writeDisabled" aria-label="题目提示" /></label>
+    <details class="ai-candidate-review__editor" open>
+      <summary>编辑题目</summary>
+      <label>题目提示<textarea v-model="candidate.prompt" :disabled="writeDisabled" aria-label="题目提示" /></label>
     <label>评分规则 JSON<textarea v-model="ruleJson" :disabled="writeDisabled" aria-label="评分规则 JSON" /></label>
     <label>解析<textarea v-model="candidate.explanation" :disabled="writeDisabled" aria-label="解析" /></label>
     <label>知识点<input v-model="candidate.knowledge_point" :disabled="writeDisabled" aria-label="知识点"></label>
     <label>难度<input v-model.number="candidate.difficulty" :disabled="writeDisabled" aria-label="难度" max="1" min="0" step="0.1" type="number"></label>
     <label v-if="candidate.question_type === 'E4'">阅读材料<textarea v-model="candidate.reading_material" :disabled="writeDisabled" aria-label="阅读材料" /></label>
     <p v-if="saveError" role="alert">{{ saveError }}</p>
-    <button :disabled="writeDisabled" data-testid="save-revision" type="button" @click="saveRevision">保存修订</button>
+      <button :disabled="writeDisabled" data-testid="save-revision" type="button" @click="saveRevision">保存修订</button>
+    </details>
     <button
       v-if="draft.teacher_state === 'pending_review'"
       :disabled="writeDisabled"
@@ -154,6 +165,8 @@ function regenerateCandidate() {
     >
       重新生成
     </button>
+
+    <TeacherAiReviewDecision :draft="draft" :validation="validation" />
 
     <section v-if="validation" aria-label="校验结果">
       <p>校验状态：{{ validation.status }}</p>
@@ -169,7 +182,7 @@ function regenerateCandidate() {
     <label v-if="validation?.status === 'warning'">
       <input v-model="warningConfirmed" :disabled="writeDisabled" aria-label="确认 warning 后接受" type="checkbox"> 我已阅读 warning
     </label>
-    <button :disabled="writeDisabled || !canAccept" data-testid="accept-candidate" type="button" @click="acceptCandidate">接受并创建草稿</button>
+    <button :disabled="writeDisabled || !canAccept" data-testid="accept-candidate" type="button" @click="acceptCandidate">接受为题库草稿</button>
 
     <label>拒绝原因
       <select v-model="rejectReason" :disabled="writeDisabled" aria-label="拒绝原因">
@@ -186,3 +199,18 @@ function regenerateCandidate() {
     <button :disabled="writeDisabled" data-testid="reject-candidate" type="button" @click="rejectCandidate">拒绝候选题</button>
   </section>
 </template>
+
+<style scoped>
+.ai-candidate-review { display: grid; gap: 18px; }
+.ai-candidate-review__preview, .ai-candidate-review__advanced, .ai-candidate-review__editor { padding: 20px; border: 1px solid #e1e7f0; border-radius: 16px; background: #fff; }
+.ai-candidate-review h2 { margin: 0; font-size: 1.45rem; line-height: 1.4; }
+.ai-candidate-review h3 { margin: 18px 0 8px; font-size: 1rem; }
+.ai-candidate-review label { display: grid; gap: 6px; margin-top: 14px; color: #35435a; font-weight: 750; }
+.ai-candidate-review input, .ai-candidate-review select, .ai-candidate-review textarea { width: 100%; padding: 10px 12px; border: 1px solid #cbd6e6; border-radius: 10px; background: #fff; color: #152033; font: inherit; }
+.ai-candidate-review textarea { min-height: 92px; resize: vertical; }
+.ai-candidate-review summary { min-height: 44px; cursor: pointer; color: #2459c4; font-weight: 850; }
+.ai-candidate-review fieldset { display: grid; gap: 10px; margin-top: 16px; }
+.ai-candidate-review button { min-height: 44px; margin-top: 14px; padding: 0 16px; border: 1px solid #2459c4; border-radius: 10px; background: #fff; color: #2459c4; font: inherit; font-weight: 800; cursor: pointer; }
+.ai-candidate-review button:disabled { border-color: #d6deea; background: #f4f6fa; color: #9aa7ba; cursor: not-allowed; }
+.ai-candidate-review pre { overflow: auto; padding: 12px; border-radius: 10px; background: #f5f7fb; white-space: pre-wrap; }
+</style>
