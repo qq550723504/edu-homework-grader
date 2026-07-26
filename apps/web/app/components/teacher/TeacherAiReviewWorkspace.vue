@@ -67,6 +67,12 @@ let selectionRefreshGeneration = 0
 const selectedJobId = computed(() => queryValue(route.query.job))
 const selectedDraftId = computed(() => queryValue(route.query.draft))
 const selectedDraft = computed(() => drafts.value.find((draft) => draft.id === selectedDraftId.value) ?? null)
+const nextPendingDraft = computed(() => {
+  const selected = selectedDraft.value
+  if (!selected || selected.teacher_state !== 'rejected') return null
+  const pending = drafts.value.filter(isPendingReview)
+  return pending.find((draft) => draft.ordinal > selected.ordinal) ?? pending[0] ?? null
+})
 const selectedValidation = computed(() => {
   const draft = selectedDraft.value
   return draft ? validationByDraftId.value[draft.id] ?? null : null
@@ -579,7 +585,7 @@ function batchIdempotencyKey(items: TeacherAiBatchAcceptItem[]): string {
 async function regenerateCandidate() {
   const jobId = selectedJobId.value
   const draft = selectedDraft.value
-  if (!jobId || !draft || !isPendingReview(draft) || writeControlsDisabled.value) return
+  if (!jobId || !draft || (!isPendingReview(draft) && draft.teacher_state !== 'rejected') || writeControlsDisabled.value) return
   busyOperation.value = 'regenerate'
   notice.value = ''
   errorMessage.value = ''
@@ -608,6 +614,10 @@ async function regenerateCandidate() {
   } finally {
     busyOperation.value = null
   }
+}
+
+function continueReview() {
+  if (nextPendingDraft.value) return selectDraft(nextPendingDraft.value.id)
 }
 
 function isPendingReview(draft: TeacherAiDraft): boolean {
@@ -888,10 +898,12 @@ watch(selectedJobId, (jobId, previousJobId) => {
           :validation="selectedValidation"
           :busy="writeControlsDisabled"
           :accepted-question-version-id="selectedAcceptedQuestionVersionId"
+          :has-next-review-candidate="nextPendingDraft !== null"
           @save-revision="saveRevision"
           @reject="rejectCandidate"
           @accept="acceptCandidate"
           @regenerate="regenerateCandidate"
+          @continue-review="continueReview"
         />
         <section v-if="selectedDraft" class="batch-review-controls" aria-label="批量接受候选题">
           <h2>批量接受</h2>

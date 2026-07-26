@@ -102,7 +102,13 @@ let navigateTo: ReturnType<typeof vi.fn>
 
 async function mountWorkspace(query: Record<string, string> = { job: 'job-1', draft: 'draft-1' }) {
   route.query = { ...query }
-  const wrapper = mount(TeacherAiReviewWorkspace)
+  const wrapper = mount(TeacherAiReviewWorkspace, {
+    global: {
+      stubs: {
+        NuxtLink: { props: ['to'], template: '<a :href="to"><slot /></a>' },
+      },
+    },
+  })
   await flushPromises()
   return wrapper
 }
@@ -266,6 +272,36 @@ describe('teacher AI review rendering', () => {
     } else {
       expect(wrapper.get('[data-testid="rejected-notice"]').text()).toContain('已拒绝')
     }
+  })
+
+  it('offers a rejected candidate regeneration while keeping it immutable', () => {
+    const wrapper = mount(TeacherAiCandidateReview, {
+      props: {
+        draft: { ...warningE4Draft, teacher_state: 'rejected' },
+        validation: warningValidation,
+      },
+    })
+
+    expect(wrapper.get('[data-testid="rejected-notice"]').text()).toContain('已拒绝')
+    expect(wrapper.get('[data-testid="regenerate-candidate"]').text()).toContain('重新生成同题型候选题')
+    expect(wrapper.find('[data-testid="save-revision"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="accept-candidate"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="reject-candidate"]').exists()).toBe(false)
+  })
+
+  it('lets a rejected candidate continue to another pending review candidate', async () => {
+    const wrapper = mount(TeacherAiCandidateReview, {
+      props: {
+        draft: { ...warningE4Draft, teacher_state: 'rejected' },
+        validation: warningValidation,
+        hasNextReviewCandidate: true,
+      },
+    })
+
+    await wrapper.get('[data-testid="continue-review-next-candidate"]').trigger('click')
+
+    expect(wrapper.emitted('continue-review')).toEqual([[]])
+    expect(wrapper.find('[data-testid="generate-new-ai-batch"]').exists()).toBe(false)
   })
 
   it('treats an accepted QuestionVersion id as terminal when the draft state is stale', () => {
@@ -652,6 +688,56 @@ describe('teacher AI review rendering', () => {
       },
     })
     expect(terminal.find('[data-testid="regenerate-candidate"]').exists()).toBe(false)
+  })
+
+  it('regenerates a rejected source draft and preserves its audit state', async () => {
+    mocks.fetchAiGenerationDrafts.mockResolvedValue([
+      { ...warningE4Draft, teacher_state: 'rejected' },
+    ])
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="regenerate-candidate"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.regenerateAiCandidate).toHaveBeenCalledWith(
+      expect.any(Function), 'csrf-token', 'draft-1', 'operation-key',
+    )
+    expect(navigateTo).toHaveBeenCalledWith({ query: { job: 'job-regenerated' } })
+    expect(wrapper.get('[data-testid="rejected-notice"]').text()).toContain('已拒绝')
+  })
+
+  it('continues from a rejected draft to the next pending review candidate without a write', async () => {
+    const nextDraft = {
+      ...warningE4Draft,
+      id: 'draft-2',
+      ordinal: 2,
+      candidate: { ...warningE4Draft.candidate, prompt: 'Second prompt' },
+    }
+    mocks.fetchAiGenerationDrafts.mockResolvedValue([
+      { ...warningE4Draft, teacher_state: 'rejected' },
+      nextDraft,
+    ])
+    mocks.fetchAiValidationRuns.mockImplementation((_request, draftId: string) => Promise.resolve([{
+      ...warningValidation,
+      draft_id: draftId,
+    }]))
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="continue-review-next-candidate"]').trigger('click')
+    await flushPromises()
+
+    expect(navigateTo).toHaveBeenCalledWith({ query: { job: 'job-1', draft: 'draft-2' } })
+    expect(mocks.regenerateAiCandidate).not.toHaveBeenCalled()
+  })
+
+  it('offers a new batch when a rejected batch has no pending review candidate', async () => {
+    mocks.fetchAiGenerationDrafts.mockResolvedValue([
+      { ...warningE4Draft, teacher_state: 'rejected' },
+    ])
+    const wrapper = await mountWorkspace()
+
+    expect(wrapper.get('[data-testid="generate-new-ai-batch"]').attributes('href')).toBe('/teacher/ai-questions/new')
+    expect(wrapper.find('[data-testid="continue-review-next-candidate"]').exists()).toBe(false)
   })
 
   it('uses a fresh regeneration key after returning to the source draft from a successful job', async () => {
