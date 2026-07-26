@@ -347,6 +347,64 @@ describe('teacher AI review rendering', () => {
     expect(wrapper.get('[data-testid="bulk-accept-candidates"]').text()).toContain('接受已选 1 题为题库草稿')
   })
 
+  it('removes a non-current selected draft when its refreshed validation becomes blocked', async () => {
+    let secondValidation: TeacherAiValidationRun = { ...passedValidation, draft_id: 'draft-2' }
+    const secondDraft = { ...warningE4Draft, id: 'draft-2', ordinal: 2 }
+    mocks.fetchAiGenerationDrafts.mockResolvedValue([warningE4Draft, secondDraft])
+    mocks.fetchAiValidationRuns.mockImplementation((_request, draftId) => Promise.resolve([
+      draftId === 'draft-2' ? secondValidation : passedValidation,
+    ]))
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="batch-select-draft-1"]').setValue(true)
+    await wrapper.get('[data-testid="generation-draft-draft-2"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="batch-select-draft-2"]').setValue(true)
+    expect(wrapper.get('[data-testid="bulk-accept-candidates"]').attributes('disabled')).toBeUndefined()
+
+    secondValidation = { ...blockedValidation, draft_id: 'draft-2', revision_number: 1 }
+    await wrapper.get('[data-testid="generation-draft-draft-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已选择 1 道候选题。')
+    expect(wrapper.get('[data-testid="bulk-accept-candidates"]').text()).toContain('接受已选 1 题为题库草稿')
+    await wrapper.get('[data-testid="bulk-accept-candidates"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.bulkAcceptAiCandidates).toHaveBeenCalledWith(
+      expect.any(Function), 'csrf-token', 'job-1', 'operation-key', [{
+        draft_id: 'draft-1', expected_revision_number: 1, confirm_warnings: false,
+      }],
+    )
+  })
+
+  it('requires acknowledgement when a non-current selected draft becomes a warning', async () => {
+    let secondValidation: TeacherAiValidationRun = { ...passedValidation, draft_id: 'draft-2' }
+    const secondDraft = { ...warningE4Draft, id: 'draft-2', ordinal: 2 }
+    mocks.fetchAiGenerationDrafts.mockResolvedValue([warningE4Draft, secondDraft])
+    mocks.fetchAiValidationRuns.mockImplementation((_request, draftId) => Promise.resolve([
+      draftId === 'draft-2' ? secondValidation : passedValidation,
+    ]))
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="batch-select-draft-1"]').setValue(true)
+    await wrapper.get('[data-testid="generation-draft-draft-2"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="batch-select-draft-2"]').setValue(true)
+    expect(wrapper.get('[data-testid="bulk-accept-candidates"]').attributes('disabled')).toBeUndefined()
+
+    secondValidation = { ...warningValidation, draft_id: 'draft-2' }
+    await wrapper.get('[data-testid="generation-draft-draft-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="bulk-accept-candidates"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="generation-draft-draft-2"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="batch-warning-draft-2"]').setValue(true)
+
+    expect(wrapper.get('[data-testid="bulk-accept-candidates"]').attributes('disabled')).toBeUndefined()
+  })
+
   it('loads an initial warning validation before enabling acceptance', async () => {
     const wrapper = await mountWorkspace()
 

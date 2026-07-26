@@ -155,6 +155,7 @@ async function loadWorkspace() {
       jobs.value = nextJobs
       drafts.value = nextDrafts
       validationByDraftId.value = nextValidationByDraftId
+      pruneBatchIntent(nextDrafts)
       currentValidation.value = null
       currentValidationKey.value = ''
       await navigateTo({ query: routeQuery(jobId, draftId) })
@@ -331,18 +332,42 @@ function removeBatchDraft(draftId: string) {
   selectedBatchDraftIds.value = selectedBatchDraftIds.value.filter(id => id !== draftId)
   batchWarningAcknowledgements.value = omitKey(batchWarningAcknowledgements.value, draftId)
   batchSelectionRevisions.value = omitKey(batchSelectionRevisions.value, draftId)
+  batchValidationStates.value = omitKey(batchValidationStates.value, draftId)
 }
 
 function pruneBatchIntent(nextDrafts: TeacherAiDraft[]) {
   const nextDraftsById = new Map(nextDrafts.map(draft => [draft.id, draft]))
+  const nextSelectedDraftIds: string[] = []
+  const nextWarningAcknowledgements: Record<string, boolean> = {}
+  const nextSelectionRevisions: Record<string, number> = {}
+  const nextValidationStates: typeof batchValidationStates.value = {}
   for (const draftId of selectedBatchDraftIds.value) {
     const draft = nextDraftsById.get(draftId)
+    const validation = validationByDraftId.value[draftId]
     if (!draft
       || !isPendingReview(draft)
-      || batchSelectionRevisions.value[draftId] !== draft.revision_number) {
-      removeBatchDraft(draftId)
+      || batchSelectionRevisions.value[draftId] !== draft.revision_number
+      || !validation
+      || validation.status === 'blocked') {
+      continue
+    }
+    nextSelectedDraftIds.push(draftId)
+    nextSelectionRevisions[draftId] = draft.revision_number
+    nextValidationStates[draftId] = {
+      revisionNumber: draft.revision_number,
+      status: validation.status,
+    }
+    if (validation.status === 'warning') {
+      const previousValidation = batchValidationStates.value[draftId]
+      nextWarningAcknowledgements[draftId] = previousValidation?.revisionNumber === draft.revision_number
+        && previousValidation.status === 'warning'
+        && batchWarningAcknowledgements.value[draftId] === true
     }
   }
+  selectedBatchDraftIds.value = nextSelectedDraftIds
+  batchWarningAcknowledgements.value = nextWarningAcknowledgements
+  batchSelectionRevisions.value = nextSelectionRevisions
+  batchValidationStates.value = nextValidationStates
 }
 
 function resetBatchIntent() {
