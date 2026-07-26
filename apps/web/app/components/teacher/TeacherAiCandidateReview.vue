@@ -37,8 +37,12 @@ const rejectError = ref('')
 const saveError = ref('')
 const ruleJson = ref(formatRuleJson(candidate.rule_json))
 const accepted = computed(() => props.draft.teacher_state === 'accepted' || Boolean(props.acceptedQuestionVersionId))
-const writeDisabled = computed(() => props.busy || accepted.value || props.draft.teacher_state !== 'pending_review')
-const presentation = computed(() => reviewPresentation(props.draft, props.validation))
+const pendingReview = computed(() => !accepted.value && props.draft.teacher_state === 'pending_review')
+const reviewDraft = computed<TeacherAiDraft>(() => accepted.value
+  ? { ...props.draft, teacher_state: 'accepted' }
+  : props.draft)
+const writeDisabled = computed(() => props.busy || !pendingReview.value)
+const presentation = computed(() => reviewPresentation(reviewDraft.value, props.validation))
 
 const canAccept = computed(() => canAcceptCandidate({
   teacher_state: props.draft.teacher_state,
@@ -150,7 +154,7 @@ function regenerateCandidate() {
       >
         接受为题库草稿
       </button>
-      <template v-if="draft.teacher_state === 'pending_review'">
+      <template v-if="pendingReview">
         <label>拒绝原因
           <select v-model="rejectReason" :disabled="writeDisabled" aria-label="拒绝原因">
             <option value="incorrect_answer">答案错误</option>
@@ -168,7 +172,7 @@ function regenerateCandidate() {
       </template>
     </section>
 
-    <details v-if="!accepted && draft.teacher_state === 'pending_review'" data-testid="edit-candidate-details">
+    <details v-if="pendingReview" data-testid="edit-candidate-details">
       <summary>修改题目</summary>
       <fieldset>
         <legend>候选题信息</legend>

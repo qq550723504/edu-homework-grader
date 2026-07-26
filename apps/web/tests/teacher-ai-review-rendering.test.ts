@@ -248,6 +248,24 @@ describe('teacher AI review rendering', () => {
     }
   })
 
+  it('treats an accepted QuestionVersion id as terminal when the draft state is stale', () => {
+    const wrapper = mount(TeacherAiCandidateReview, {
+      props: {
+        draft: warningE4Draft,
+        validation: warningValidation,
+        acceptedQuestionVersionId: 'version-1',
+      },
+    })
+
+    expect(wrapper.get('[data-testid="review-decision"] h3').text()).toBe('已创建题库草稿')
+    expect(wrapper.get('[data-testid="accepted-notice"]').text()).toContain('已创建题库草稿')
+    expect(wrapper.find('[data-testid="edit-candidate-details"]').exists()).toBe(false)
+    expect(wrapper.find('input[aria-label="确认 warning 后接受"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="accept-candidate"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="reject-candidate"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="regenerate-candidate"]').exists()).toBe(false)
+  })
+
   it.each([
     ['blank', '   ', '选择“其他”时，请填写拒绝详情。'],
     ['overlong', 'x'.repeat(501), '拒绝详情不能超过 500 个字符。'],
