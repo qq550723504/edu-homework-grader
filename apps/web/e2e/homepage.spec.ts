@@ -1,0 +1,25 @@
+import { expect, test } from '@playwright/test'
+
+test('homepage presents both workspace entries and the trustworthy learning loop on desktop', async ({ page }) => {
+  await page.goto('/')
+  await expect(page).toHaveTitle('Edu Homework Grader｜作业、反馈与教学协作平台')
+  await expect(page.getByRole('heading', { name: '让作业、反馈与教学协作更清楚' })).toBeVisible()
+  await expect(page.getByRole('link', { name: '进入学生工作台' }).first()).toHaveAttribute('href', '/student')
+  await expect(page.getByRole('link', { name: '进入教师工作台' }).first()).toHaveAttribute('href', '/teacher')
+  await expect(page.getByRole('heading', { name: '从作业到订正，学习过程有迹可循' })).toBeVisible()
+  await expect(page.getByText('AI 辅助，不替代教师判断')).toBeVisible()
+  const [student, teacher] = await Promise.all([page.locator('.homepage__student-entry').boundingBox(), page.locator('.homepage__teacher-entry').boundingBox()])
+  expect(student).not.toBeNull(); expect(teacher).not.toBeNull(); expect(Math.abs(student!.y - teacher!.y)).toBeLessThan(8)
+})
+
+test('homepage remains single-column and without horizontal overflow at 320px', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 320, height: 720 } }); const page = await context.newPage()
+  try {
+    await page.goto('/')
+    const [student, teacher] = await Promise.all([page.locator('.homepage__student-entry').boundingBox(), page.locator('.homepage__teacher-entry').boundingBox()])
+    expect(student).not.toBeNull(); expect(teacher).not.toBeNull(); expect(teacher!.y).toBeGreaterThan(student!.y + student!.height)
+    await expect(page.getByRole('link', { name: '进入学生工作台' }).first()).toHaveCSS('min-height', '44px')
+    await expect(page.getByRole('link', { name: '进入教师工作台' }).first()).toHaveCSS('min-height', '44px')
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  } finally { await context.close() }
+})
