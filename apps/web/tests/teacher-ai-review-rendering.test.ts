@@ -178,6 +178,27 @@ describe('teacher AI review rendering', () => {
     expect(wrapper.emitted('accept')).toEqual([[{ confirmWarnings: true }]])
   })
 
+  it('renders a decision-focused workbench with a readable warning conclusion', async () => {
+    const wrapper = await mountWorkspace()
+
+    expect(wrapper.get('[data-testid="ai-review-candidate-list"]')).toBeTruthy()
+    expect(wrapper.get('[data-testid="ai-review-preview"]')).toBeTruthy()
+    expect(wrapper.get('[data-testid="ai-review-decision"]')).toBeTruthy()
+    expect(wrapper.get('[data-testid="review-decision-heading"]').text()).toBe('可接受，但请先确认提醒')
+    expect(wrapper.get('[data-testid="review-decision-next-step"]').text()).toContain('勾选“我已阅读提醒”')
+    expect(wrapper.get('[data-testid="advanced-review-information"]').attributes('open')).toBeUndefined()
+  })
+
+  it('explains blocked candidates without offering acceptance', () => {
+    const wrapper = mount(TeacherAiCandidateReview, {
+      props: { draft: warningE4Draft, validation: blockedValidation },
+    })
+
+    expect(wrapper.get('[data-testid="review-decision-heading"]').text()).toBe('暂不能接受')
+    expect(wrapper.get('[data-testid="review-decision-next-step"]').text()).toContain('修改题目、重新生成或拒绝')
+    expect(wrapper.get('[data-testid="accept-candidate"]').attributes('disabled')).toBeDefined()
+  })
+
   it('keeps blocked candidates from being accepted and emits a trimmed other rejection detail', async () => {
     const wrapper = mount(TeacherAiCandidateReview, {
       props: { draft: warningE4Draft, validation: { ...warningValidation, status: 'blocked' }, busy: false },

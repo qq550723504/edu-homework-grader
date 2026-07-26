@@ -15,6 +15,7 @@ const supervisorPath = resolve(repositoryRoot, 'apps/web/e2e/e2e-api-supervisor.
 const databaseUrl = `sqlite+pysqlite:///${databasePath.replaceAll('\\', '/')}`
 const pythonPath = [
   resolve(repositoryRoot, 'apps/api/src'),
+  resolve(repositoryRoot, 'services/generator/src'),
   resolve(repositoryRoot, 'services/grader/src'),
   resolve(repositoryRoot, 'packages/processor-policy/src'),
 ].join(delimiter)
