@@ -302,7 +302,6 @@ spec:
 
     $kustomizationPath = Join-Path $Destination 'kustomization.yaml'
     $patchConfiguration = @'
-patches:
   - path: managed-api-images.yaml
   - path: managed-grader-image.yaml
   - path: managed-web-image.yaml
@@ -310,6 +309,33 @@ patches:
   - path: managed-expiry-image.yaml
 '@
     Add-Content -LiteralPath $kustomizationPath -Value $patchConfiguration
+}
+
+function Initialize-ReleaseKustomization {
+    param([Parameter(Mandatory = $true)][string]$Destination)
+
+    Set-Content `
+        -LiteralPath (Join-Path $Destination 'kustomization.yaml') `
+        -Value @'
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: edu-homework-grader
+resources:
+  - application.yaml
+  - student-activation-expiry.yaml
+patches:
+  - path: managed-keycloak-exclusion.yaml
+'@
+
+    Set-Content `
+        -LiteralPath (Join-Path $Destination 'managed-keycloak-exclusion.yaml') `
+        -Value @'
+$patch: delete
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+'@
 }
 
 function New-RenderedRelease {
@@ -332,13 +358,7 @@ function New-RenderedRelease {
     }
 
     Copy-Item -LiteralPath $ProductionManifestPath -Destination $Destination -Recurse
-    $kustomizationPath = Join-Path $Destination 'kustomization.yaml'
-    $kustomization = Get-Content -Raw -LiteralPath $kustomizationPath
-    $withoutNamespaceResource = $kustomization -replace '(?m)^\s*-\s+namespace\.yaml\r?\n', ''
-    Set-Content `
-        -LiteralPath $kustomizationPath `
-        -Value $withoutNamespaceResource `
-        -NoNewline
+    Initialize-ReleaseKustomization -Destination $Destination
 
     Push-Location $Destination
     try {

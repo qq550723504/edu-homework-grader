@@ -73,10 +73,10 @@ exit /b 0
             Remove-Item Env:FAKE_JWT -ErrorAction SilentlyContinue
         }
 
-        function Get-RbacObjects {
-            $documents = (& kubectl create --dry-run=client --filename $rbacPath --output json) -join "`n"
-            $jsonArray = '[' + ($documents -replace '(?m)^}\r?\n(?=\{)', '},') + ']'
-            return @($jsonArray | ConvertFrom-Json)
+        function Get-RbacDocuments {
+            return @(
+                (Get-Content -Raw -LiteralPath $rbacPath) -split '(?m)^---\s*\r?\n'
+            )
         }
     }
 
@@ -135,38 +135,39 @@ exit /b 0
     }
 
     It 'grants only the exact namespace-scoped deployment rules' {
-        $objects = Get-RbacObjects
-        @($objects | Where-Object kind -eq 'ClusterRole').Count | Should -Be 0
-        $role = $objects | Where-Object kind -eq 'Role'
-        $role.metadata.name | Should -Be 'github-production-deployer'
-        $role.metadata.namespace | Should -Be 'edu-homework-grader'
-
-        $expectedRules = @(
-            @{ apiGroups = 'apps'; resources = 'deployments,statefulsets'; resourceNames = 'api,grader,web,languagetool'; verbs = 'get,list,watch,patch,update' }
-            @{ apiGroups = 'batch'; resources = 'cronjobs'; resourceNames = 'student-activation-expiry'; verbs = 'get,list,watch,patch,update' }
-            @{ apiGroups = ''; resources = 'configmaps'; resourceNames = $null; verbs = 'get,list,watch,create,patch,update' }
-            @{ apiGroups = ''; resources = 'services,endpoints'; resourceNames = 'api,grader,web,languagetool'; verbs = 'get,list,watch,patch,update' }
-            @{ apiGroups = 'networking.k8s.io'; resources = 'ingresses'; resourceNames = 'edu-homework-grader'; verbs = 'get,list,watch,patch,update' }
+        $documents = Get-RbacDocuments
+        @($documents | Where-Object { $_ -match '(?m)^kind:\s*ClusterRole\s*$' }).Count |
+            Should -Be 0
+        $roleDocuments = @(
+            $documents | Where-Object { $_ -match '(?m)^kind:\s*Role\s*$' }
         )
+        $roleDocuments | Should -HaveCount 1
+        $role = $roleDocuments[0]
+        $role | Should -Match '(?ms)^metadata:\s*\r?\n.*?^\s{2}name:\s*github-production-deployer\s*$'
+        $role | Should -Match '(?ms)^metadata:\s*\r?\n.*?^\s{2}namespace:\s*edu-homework-grader\s*$'
 
-        @($role.rules).Count | Should -Be $expectedRules.Count
-        for ($index = 0; $index -lt $expectedRules.Count; $index++) {
-            $actual = $role.rules[$index]
-            $expected = $expectedRules[$index]
-            (@($actual.apiGroups) -join ',') | Should -Be $expected.apiGroups
-            (@($actual.resources) -join ',') | Should -Be $expected.resources
-            (@($actual.verbs) -join ',') | Should -Be $expected.verbs
-            if ($null -eq $expected.resourceNames) {
-                $actual.PSObject.Properties.Name | Should -Not -Contain 'resourceNames'
-            } else {
-                (@($actual.resourceNames) -join ',') | Should -Be $expected.resourceNames
-            }
+        $actualRules = [regex]::Match(
+            $role,
+            '(?ms)^rules:\s*\r?\n(?<rules>.*)$'
+        ).Groups['rules'].Value.Trim() -replace "`r`n", "`n"
+        $expectedRules = @'
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["api", "grader", "web", "languagetool"]
+    verbs: ["get", "watch", "patch"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    resourceNames: ["student-activation-expiry"]
+    verbs: ["get", "patch"]
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    resourceNames: ["api"]
+    verbs: ["get"]
+'@.Trim() -replace "`r`n", "`n"
 
-            @($actual.apiGroups) + @($actual.resources) + @($actual.verbs) | Should -Not -Contain '*'
-        }
-
-        $allResources = @($role.rules | ForEach-Object { $_.resources })
-        $allResources | Should -Not -Contain 'secrets'
-        $allResources | Should -Not -Match '^pods($|/)'
+        $actualRules | Should -BeExactly $expectedRules
+        $actualRules | Should -Not -Match '(?i)\bsecrets?\b'
+        $actualRules | Should -Not -Match '(?i)\bpods?(?:/|\b)'
+        $actualRules | Should -Not -Match '\*'
     }
 }

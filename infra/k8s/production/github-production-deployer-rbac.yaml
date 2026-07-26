@@ -11,24 +11,17 @@ metadata:
   namespace: edu-homework-grader
 rules:
   - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets"]
+    resources: ["deployments"]
     resourceNames: ["api", "grader", "web", "languagetool"]
-    verbs: ["get", "list", "watch", "patch", "update"]
+    verbs: ["get", "watch", "patch"]
   - apiGroups: ["batch"]
     resources: ["cronjobs"]
     resourceNames: ["student-activation-expiry"]
-    verbs: ["get", "list", "watch", "patch", "update"]
+    verbs: ["get", "patch"]
   - apiGroups: [""]
-    resources: ["configmaps"]
-    verbs: ["get", "list", "watch", "create", "patch", "update"]
-  - apiGroups: [""]
-    resources: ["services", "endpoints"]
-    resourceNames: ["api", "grader", "web", "languagetool"]
-    verbs: ["get", "list", "watch", "patch", "update"]
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses"]
-    resourceNames: ["edu-homework-grader"]
-    verbs: ["get", "list", "watch", "patch", "update"]
+    resources: ["endpoints"]
+    resourceNames: ["api"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
