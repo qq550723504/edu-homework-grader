@@ -55,6 +55,12 @@ h2 { margin: 12px 0 8px; font-size: 1.2rem; }
 .homepage__section { padding: clamp(56px, 9vw, 104px) 0; scroll-margin-top: 20px; }.homepage__section > h2, .homepage__footer h2 { max-width: 690px; margin: 0; font-size: clamp(1.8rem, 4vw, 3rem); letter-spacing: -.04em; }.homepage__audience-grid, .homepage__trust-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 32px; }.homepage__audience-grid article, .homepage__trust-grid article { padding: 22px; border-top: 2px solid #dbe6fb; }.homepage__audience-grid h3, .homepage__trust-grid h3, .homepage__journey h3 { margin: 0 0 8px; font-size: 1.05rem; }.homepage__audience-grid p, .homepage__trust-grid p, .homepage__journey p { margin: 0; color: #667085; line-height: 1.65; }
 .homepage__section--tinted { margin-inline: calc((100vw - min(1180px, calc(100vw - 32px))) / -2); padding-inline: max(16px, calc((100vw - min(1180px, calc(100vw - 32px))) / 2)); background: #eaf1ff; }.homepage__journey { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; padding: 0; margin: 34px 0 0; list-style: none; }.homepage__journey li { display: grid; gap: 16px; padding: 22px 0; border-top: 1px solid #bdd0f6; }.homepage__journey strong { color: #2459c4; font-size: .8rem; letter-spacing: .1em; }
 .homepage__footer { justify-content: space-between; gap: 24px; padding: 38px; border-radius: 20px; background: #14284a; color: #fff; }.homepage__footer .eyebrow { color: #9ebcf7; }.homepage__footer-actions { flex-wrap: wrap; gap: 12px; }.homepage :focus-visible { outline: 3px solid rgba(45, 99, 216, .4); outline-offset: 3px; }
+@media (max-width: 760px) {
+  .shell { padding-top: 38px; }
+  .grid, .metrics { grid-template-columns: 1fr; }
+  .assignment { align-items: flex-start; flex-direction: column; }
+  .assignment .button { width: 100%; }
+}
 @media (max-width: 760px) { .homepage { padding-top: 12px; }.homepage__header, .homepage__footer { align-items: flex-start; flex-direction: column; }.homepage__nav { justify-content: flex-start; }.homepage__role-grid, .homepage__audience-grid, .homepage__trust-grid, .homepage__journey { grid-template-columns: 1fr; }.homepage__role-card { min-height: 0; }.homepage__role-card .button, .homepage__footer-actions, .homepage__footer-actions .button { width: 100%; }.homepage__footer { padding: 28px 24px; } }
 
 .teacher-workbench { display: grid; grid-template-columns: 236px minmax(0, 1fr); min-height: 100dvh; background: #f5f7fb; }
