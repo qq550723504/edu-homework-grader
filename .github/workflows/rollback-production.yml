@@ -1,0 +1,90 @@
+name: Roll back production
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_sha:
+        description: Immutable 40-character commit SHA to deploy
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://edu.getkr.com
+    steps:
+      - name: Check out trusted deployment tooling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Validate rollback image SHA
+        shell: bash
+        env:
+          REQUESTED_IMAGE_SHA: ${{ inputs.image_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$REQUESTED_IMAGE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "image_sha must be a 40-character lower-case Git SHA." >&2
+            exit 1
+          fi
+          echo "IMAGE_SHA=$REQUESTED_IMAGE_SHA" >> "$GITHUB_ENV"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify rollback images exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          for image in api grader web languagetool; do
+            docker manifest inspect \
+              "ghcr.io/${{ github.repository_owner }}/edu-homework-grader-${image}:${IMAGE_SHA}" \
+              >/dev/null
+          done
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@829323503d1be3d00ca8346e5391ca0b07a9ab0d # v5.1.0
+        with:
+          version: v1.34.1
+
+      - name: Install Kustomize
+        uses: imranismail/setup-kustomize@53f941b41dca13ed61874bbc6b4b6e1562877530 # v3.0.0
+        with:
+          kustomize-version: 5.7.1
+
+      - name: Configure production kubeconfig
+        shell: bash
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+        run: |
+          set -euo pipefail
+          kubeconfig_path="$RUNNER_TEMP/production-kubeconfig"
+          umask 077
+          printf '%s' "$KUBECONFIG_B64" | base64 --decode > "$kubeconfig_path"
+          echo "KUBECONFIG=$kubeconfig_path" >> "$GITHUB_ENV"
+
+      - name: Deploy approved rollback
+        shell: pwsh
+        run: ./scripts/k8s/deploy-production.ps1 -ImageSha "$env:IMAGE_SHA"
+
+      - name: Remove production kubeconfig
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f -- "$RUNNER_TEMP/production-kubeconfig"

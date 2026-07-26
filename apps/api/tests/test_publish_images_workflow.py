@@ -12,7 +12,14 @@ def test_publish_images_workflow_uses_immutable_ghcr_tags() -> None:
     assert "- name: grader" in workflow
     assert "- name: web" in workflow
     assert "- name: languagetool" in workflow
-    assert (
-        "ghcr.io/${{ github.repository_owner }}/edu-homework-grader-${{ matrix.name }}:${{ github.sha }}"
-        in workflow
+    immutable_tag = (
+        "ghcr.io/${{ github.repository_owner }}/edu-homework-grader-"
+        "${{ matrix.name }}:${{ github.event.workflow_run.head_sha }}"
     )
+    obsolete_workflow_sha_tag = (
+        "ghcr.io/${{ github.repository_owner }}/edu-homework-grader-"
+        "${{ matrix.name }}:${{ github.sha }}"
+    )
+
+    assert immutable_tag in workflow
+    assert obsolete_workflow_sha_tag not in workflow
