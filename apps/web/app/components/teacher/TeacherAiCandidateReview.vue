@@ -134,6 +134,9 @@ function regenerateCandidate() {
       <h2>系统审核结果</h2>
       <h3>{{ presentation.title }}</h3>
       <p>{{ presentation.description }}</p>
+      <p v-if="presentation.kind === 'needs_fix'" data-testid="blocked-primary-action">
+        下一步：{{ presentation.primaryAction }}。在下方修改题目后保存，系统会重新校验。
+      </p>
       <div v-if="accepted" data-testid="accepted-notice" role="status">
         <p>该候选题已接受，已创建题库草稿。</p>
         <p v-if="acceptedQuestionVersionId">
@@ -173,7 +176,8 @@ function regenerateCandidate() {
     </section>
 
     <details v-if="pendingReview" data-testid="edit-candidate-details">
-      <summary>修改题目</summary>
+      <summary>修改题目并重新校验</summary>
+      <p>保存后会重新校验此候选题；校验通过或完成 warning 确认后才能接受。</p>
       <fieldset>
         <legend>候选题信息</legend>
         <label>题型<input :value="candidate.question_type" aria-label="题型" readonly></label>
@@ -187,11 +191,16 @@ function regenerateCandidate() {
       <label>难度<input v-model.number="candidate.difficulty" :disabled="writeDisabled" aria-label="难度" max="1" min="0" step="0.1" type="number"></label>
       <label v-if="candidate.question_type === 'E4'">阅读材料<textarea v-model="candidate.reading_material" :disabled="writeDisabled" aria-label="阅读材料" /></label>
       <p v-if="saveError" role="alert">{{ saveError }}</p>
-      <button :disabled="writeDisabled" data-testid="save-revision" type="button" @click="saveRevision">保存修订</button>
+      <button :disabled="writeDisabled" data-testid="save-revision" type="button" @click="saveRevision">保存并重新校验</button>
     </details>
 
     <details data-testid="technical-review-details">
       <summary>高级信息：评分规则与技术记录</summary>
+      <section aria-label="候选题审计记录">
+        <p>题型：{{ candidate.question_type }}</p>
+        <p>目标修订：{{ candidate.objective_revision_id }}</p>
+        <p>策略版本：{{ candidate.policy_version }}</p>
+      </section>
       <section v-if="validation" aria-label="校验结果">
         <p>校验状态：{{ validation.status }}</p>
         <ul>

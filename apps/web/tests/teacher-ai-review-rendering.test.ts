@@ -193,7 +193,10 @@ describe('teacher AI review rendering', () => {
     expect(wrapper.get('[data-testid="review-student-preview"]').text()).toContain('Why was the bridge closed?')
     expect(wrapper.get('[data-testid="review-decision"]').text()).toContain('暂不能接受')
     expect(wrapper.get('[data-testid="review-decision"]').text()).toContain('Resolve this validation finding')
+    expect(wrapper.get('[data-testid="blocked-primary-action"]').text()).toContain('修改并重新校验')
     expect(wrapper.get('[data-testid="edit-candidate-details"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="edit-candidate-details"]').text()).toContain('保存后会重新校验')
+    expect(wrapper.get('[data-testid="save-revision"]').text()).toContain('保存并重新校验')
     expect(wrapper.get('[data-testid="technical-review-details"]').exists()).toBe(true)
   })
 
@@ -238,6 +241,9 @@ describe('teacher AI review rendering', () => {
     expect(wrapper.emitted('save-revision')).toBeUndefined()
     expect(wrapper.emitted('reject')).toBeUndefined()
     expect(wrapper.emitted('accept')).toBeUndefined()
+    expect(wrapper.get('[data-testid="technical-review-details"]').text()).toContain('题型：E4')
+    expect(wrapper.get('[data-testid="technical-review-details"]').text()).toContain('目标修订：objective-1')
+    expect(wrapper.get('[data-testid="technical-review-details"]').text()).toContain('策略版本：policy-1')
 
     if (teacherState === 'accepted') {
       expect(wrapper.get('[data-testid="accepted-notice"]').text()).toContain('已创建题库草稿')
@@ -403,6 +409,30 @@ describe('teacher AI review rendering', () => {
     await wrapper.get('[data-testid="batch-warning-draft-2"]').setValue(true)
 
     expect(wrapper.get('[data-testid="bulk-accept-candidates"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('requires a new acknowledgement when a warning has a newer validation run at the same revision', async () => {
+    let secondValidation: TeacherAiValidationRun = {
+      ...warningValidation, draft_id: 'draft-2', id: 'warning-run-a', revision_number: 1, run_number: 1,
+    }
+    const secondDraft = { ...warningE4Draft, id: 'draft-2', ordinal: 2 }
+    mocks.fetchAiGenerationDrafts.mockResolvedValue([warningE4Draft, secondDraft])
+    mocks.fetchAiValidationRuns.mockImplementation((_request, draftId) => Promise.resolve([
+      draftId === 'draft-2' ? secondValidation : passedValidation,
+    ]))
+    const wrapper = await mountWorkspace()
+
+    await wrapper.get('[data-testid="generation-draft-draft-2"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="batch-select-draft-2"]').setValue(true)
+    await wrapper.get('[data-testid="batch-warning-draft-2"]').setValue(true)
+    expect(wrapper.get('[data-testid="bulk-accept-candidates"]').attributes('disabled')).toBeUndefined()
+
+    secondValidation = { ...secondValidation, id: 'warning-run-b', run_number: 2 }
+    await wrapper.get('[data-testid="generation-draft-draft-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="bulk-accept-candidates"]').attributes('disabled')).toBeDefined()
   })
 
   it('loads an initial warning validation before enabling acceptance', async () => {

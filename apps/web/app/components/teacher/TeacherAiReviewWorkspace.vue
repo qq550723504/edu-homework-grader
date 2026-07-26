@@ -34,6 +34,7 @@ const batchWarningAcknowledgements = ref<Record<string, boolean>>({})
 const batchSelectionRevisions = ref<Record<string, number>>({})
 const batchValidationStates = ref<Record<string, {
   revisionNumber: number
+  validationRunId: string
   status: TeacherAiValidationRun['status']
 }>>({})
 const regenerationKeys = ref<Record<string, string>>({})
@@ -236,6 +237,7 @@ function setCurrentValidation(draft: TeacherAiDraft | null, validation: TeacherA
     ...batchValidationStates.value,
     [draft.id]: {
       revisionNumber: draft.revision_number,
+      validationRunId: validation.id,
       status: validation.status,
     },
   }
@@ -303,6 +305,7 @@ function updateCurrentBatchSelection(event: Event) {
     ...batchValidationStates.value,
     [draft.id]: {
       revisionNumber: draft.revision_number,
+      validationRunId: validation.id,
       status: validation.status,
     },
   }
@@ -355,11 +358,13 @@ function pruneBatchIntent(nextDrafts: TeacherAiDraft[]) {
     nextSelectionRevisions[draftId] = draft.revision_number
     nextValidationStates[draftId] = {
       revisionNumber: draft.revision_number,
+      validationRunId: validation.id,
       status: validation.status,
     }
     if (validation.status === 'warning') {
       const previousValidation = batchValidationStates.value[draftId]
       nextWarningAcknowledgements[draftId] = previousValidation?.revisionNumber === draft.revision_number
+        && previousValidation.validationRunId === validation.id
         && previousValidation.status === 'warning'
         && batchWarningAcknowledgements.value[draftId] === true
     }
@@ -481,6 +486,7 @@ async function acceptBatch() {
         ...batchValidationStates.value,
         [decision.draft_id]: {
           revisionNumber: decision.revision_number,
+          validationRunId: decision.validation_run.id,
           status: decision.validation_run.status,
         },
       }
