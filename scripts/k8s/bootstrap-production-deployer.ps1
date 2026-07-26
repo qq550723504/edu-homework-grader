@@ -1,9 +1,9 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [string]$Namespace = 'edu-homework-grader',
-    [Parameter(Mandatory = $true)]
-    [string]$Repository,
-    [switch]$ConfirmProductionCredential
+    [switch]$ConfirmProductionCredential,
+    [ValidateRange(1, 8760)]
+    [int]$MinimumTokenLifetimeHours = 720
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,7 +16,7 @@ if ($Namespace -ne 'edu-homework-grader') {
     throw 'The production deploy identity is restricted to the edu-homework-grader namespace.'
 }
 
-if (-not $PSCmdlet.ShouldProcess("$Repository production environment", 'replace KUBECONFIG_B64')) {
+if (-not $PSCmdlet.ShouldProcess('qq550723504/edu-homework-grader production environment', 'replace KUBECONFIG_B64')) {
     return
 }
 
@@ -48,10 +48,37 @@ function Get-CurrentClusterValue {
     return $value
 }
 
+function Assert-TokenLifetime {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Token,
+        [Parameter(Mandatory = $true)]
+        [int]$MinimumLifetimeHours
+    )
+
+    $segments = $Token.Split('.')
+    if ($segments.Count -ne 3) {
+        throw 'TokenRequest did not return a valid JWT.'
+    }
+
+    $payloadSegment = $segments[1].Replace('-', '+').Replace('_', '/')
+    $padding = (4 - ($payloadSegment.Length % 4)) % 4
+    $payloadJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payloadSegment.PadRight($payloadSegment.Length + $padding, '=')))
+    try {
+        $payload = $payloadJson | ConvertFrom-Json -ErrorAction Stop
+        $expiration = [DateTimeOffset]::FromUnixTimeSeconds([int64]$payload.exp)
+    } catch {
+        throw 'TokenRequest did not return a JWT with a valid expiration.'
+    }
+
+    if ($expiration -lt [DateTimeOffset]::UtcNow.AddHours($MinimumLifetimeHours)) {
+        throw 'TokenRequest lifetime is shorter than the required minimum.'
+    }
+}
+
 $clusterName = Get-CurrentClusterValue -JsonPath '{.contexts[0].context.cluster}' -Description 'a cluster name'
 $clusterServer = Get-CurrentClusterValue -JsonPath '{.clusters[0].cluster.server}' -Description 'a usable cluster endpoint'
 $certificateAuthorityData = & kubectl config view --raw --minify --output 'jsonpath={.clusters[0].cluster.certificate-authority-data}'
-$insecureSkipTlsVerify = & kubectl config view --raw --minify --output 'jsonpath={.clusters[0].cluster.insecure-skip-tls-verify}'
 if ($LASTEXITCODE -ne 0) {
     throw 'Kubernetes could not read the active cluster TLS configuration.'
 }
@@ -59,10 +86,8 @@ if ($LASTEXITCODE -ne 0) {
 $deployCluster = @{ server = $clusterServer }
 if ($certificateAuthorityData) {
     $deployCluster['certificate-authority-data'] = $certificateAuthorityData
-} elseif ($insecureSkipTlsVerify -eq 'true') {
-    $deployCluster['insecure-skip-tls-verify'] = $true
 } else {
-    throw 'The active Kubernetes context does not contain certificate data.'
+    throw 'The active Kubernetes context must contain certificate authority data.'
 }
 
 $deployerName = 'github-production-deployer'
@@ -88,8 +113,10 @@ $deployKubeconfig = @{
         })
 } | ConvertTo-Json -Depth 10 -Compress
 
+Assert-TokenLifetime -Token $token -MinimumLifetimeHours $MinimumTokenLifetimeHours
+
 [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($deployKubeconfig)) |
-    & gh secret set KUBECONFIG_B64 --env production --repo $Repository
+    & gh secret set KUBECONFIG_B64 --env production --repo qq550723504/edu-homework-grader
 if ($LASTEXITCODE -ne 0) {
     throw 'GitHub could not update the production deploy credential.'
 }
