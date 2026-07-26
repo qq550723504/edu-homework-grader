@@ -267,32 +267,57 @@ Expected: FAIL because the script does not exist.
 
 - [ ] **Step 3: Implement temporary Kustomize render and restore**
 
-Implement Assert-ImageSha, Get-ManagedImages, New-RenderedRelease, Wait-ProductionHealthy and Restore-ManagedImages. New-RenderedRelease accepts either a validated ImageSha (for a new release) or the exact image map returned by Get-ManagedImages (for rollback); it must not infer rollback versions from a tag.
+Implement Assert-ImageSha, Get-ManagedImages, Initialize-ReleaseKustomization,
+Add-ExactImagePatches, New-RenderedRelease, Wait-ProductionHealthy and
+Restore-ManagedImages.
 
-~~~powershell
-function Assert-ImageSha([string]$ImageSha) {
-    if ($ImageSha -notmatch '^[0-9a-f]{40}$') {
-        throw 'ImageSha must be a 40-character lower-case Git SHA.'
-    }
-}
-function New-RenderedRelease([string]$Sha, [string]$Destination) {
-    Copy-Item $ProductionManifestPath $Destination -Recurse
-    $kustomization = Join-Path $Destination 'kustomization.yaml'
-    $copiedKustomization = Get-Content -Raw $kustomization
-    $withoutNamespace = $copiedKustomization -replace '(?m)^\s*-\s+namespace\.yaml\r?\n', ''
-    Set-Content -LiteralPath $kustomization -Value $withoutNamespace -NoNewline
-    Push-Location $Destination
-    try {
-        & kustomize edit set image "ghcr.io/qq550723504/edu-homework-grader-api=ghcr.io/qq550723504/edu-homework-grader-api:$Sha"
-        & kustomize edit set image "ghcr.io/qq550723504/edu-homework-grader-grader=ghcr.io/qq550723504/edu-homework-grader-grader:$Sha"
-        & kustomize edit set image "ghcr.io/qq550723504/edu-homework-grader-web=ghcr.io/qq550723504/edu-homework-grader-web:$Sha"
-        & kustomize edit set image "ghcr.io/qq550723504/edu-homework-grader-languagetool=ghcr.io/qq550723504/edu-homework-grader-languagetool:$Sha"
-        return (& kustomize build .)
-    } finally { Pop-Location }
-}
+Before any apply, Get-ManagedImages reads and validates these six exact image
+references from the cluster:
+
+1. API `migrate` init container;
+2. API main container;
+3. Grader;
+4. Web;
+5. LanguageTool;
+6. `student-activation-expiry` CronJob.
+
+New-RenderedRelease accepts exactly one of a validated ImageSha (new release) or
+that exact image map (rollback); it must never infer rollback versions from a
+tag. It copies the production directory into a new temporary destination, then
+replaces the copied `kustomization.yaml` with this release-only boundary:
+
+~~~yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: edu-homework-grader
+resources:
+  - application.yaml
+  - student-activation-expiry.yaml
+patches:
+  - path: managed-keycloak-exclusion.yaml
 ~~~
 
-Capture API, Grader, Web, LanguageTool and expiry CronJob images before applying rendered YAML with server-side kubectl. Wait for all four Deployments, poll `kubectl get endpoints api --output json` until it has a ready address (the API Deployment readiness probe already calls `/ready`), then check https://edu.getkr.com/ from the runner. On any failure call New-RenderedRelease with the captured image map, apply that result, recheck rollouts, and throw Production release sha failed; rollback succeeded or failed. Remove the temporary directory in finally.
+`managed-keycloak-exclusion.yaml` deletes the Keycloak Deployment from the
+render. The resulting manifest therefore contains only Deployments `api`,
+`grader`, `web` and `languagetool`, plus CronJob
+`student-activation-expiry`; it does not render Namespace, datastore,
+ConfigMap, Service, Ingress or Keycloak resources.
+
+For a target SHA, run `kustomize edit set image` for the API, Grader, Web and
+LanguageTool repositories. The API replacement pins its init container, main
+container and expiry CronJob occurrences to that same SHA. For rollback,
+Add-ExactImagePatches writes resource-specific patches for all six captured
+references and adds those patches to the release-only Kustomization. Build the
+result into a temporary manifest and server-side apply only the five rendered
+resources.
+
+After target apply, wait for all four Deployment rollouts, poll
+`kubectl get endpoints api --output json` until it has a ready address (the API
+Deployment readiness probe calls `/ready`), then check
+https://edu.getkr.com/ from the runner. On any failure once target apply has
+been attempted, render and apply the exact captured-image patches, recheck the
+four rollouts, and report `rollback succeeded` or `rollback failed` separately.
+Remove every temporary release directory in `finally`.
 
 - [ ] **Step 4: Verify GREEN and commit**
 
