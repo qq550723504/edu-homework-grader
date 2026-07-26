@@ -30,7 +30,7 @@ jobs:
       - id: release
         shell: bash
         run: |
-          if git diff --quiet HEAD^ HEAD -- . ':(exclude)docs/**' ':(exclude)**/*.md'; then
+          if git diff --quiet HEAD^ HEAD -- . ':(exclude)docs/**' ':(exclude)*.md'; then
             echo "release_eligible=false" >> "$GITHUB_OUTPUT"
           else
             echo "release_eligible=true" >> "$GITHUB_OUTPUT"

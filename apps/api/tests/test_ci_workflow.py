@@ -1,4 +1,5 @@
 import re
+import subprocess
 from pathlib import Path
 
 
@@ -71,3 +72,27 @@ def test_publish_waits_for_successful_main_ci_and_uses_its_head_sha() -> None:
     assert "github.event.workflow_run.head_branch == 'main'" in workflow
     assert "github.event.workflow_run.head_sha" in workflow
     assert "production-release" in workflow
+
+
+def test_publish_docs_only_gate_excludes_root_markdown() -> None:
+    workflow = PUBLISH_WORKFLOW_PATH.read_text(encoding="utf-8")
+    eligibility = job_block(workflow, "eligibility")
+    root = PUBLISH_WORKFLOW_PATH.parents[2]
+    remaining_paths = subprocess.run(
+        [
+            "git",
+            "ls-files",
+            "--",
+            ".",
+            ":(exclude)docs/**",
+            ":(exclude)*.md",
+        ],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+
+    assert "README.md" not in remaining_paths
+    assert "CONTRIBUTING.md" not in remaining_paths
+    assert "git diff --quiet HEAD^ HEAD -- . ':(exclude)docs/**' ':(exclude)*.md'" in eligibility
