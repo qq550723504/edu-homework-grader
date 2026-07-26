@@ -27,6 +27,16 @@ describe('teacher workbench UI contract', () => {
     expect(reviewPage).toContain('<TeacherWorkbenchNav active-module="reviews" />')
   })
 
+  it('keeps the student appeals queue inside the teacher workbench shell', () => {
+    const appealsPage = readFileSync(new URL('../app/pages/teacher/appeals.vue', import.meta.url), 'utf8')
+
+    expect(appealsPage).toContain('<main class="teacher-workbench">')
+    expect(appealsPage).toContain('<aside class="teacher-workbench__sidebar">')
+    expect(appealsPage).toContain('<section class="teacher-workbench__content">')
+    expect(appealsPage).toContain('<TeacherWorkbenchNav active-module="requests" />')
+    expect(appealsPage).toContain('<div class="shell teacher-page">')
+  })
+
   it('renders the selected class roster with an empty state', () => {
     const teacherPage = readFileSync(new URL('../app/pages/teacher/index.vue', import.meta.url), 'utf8')
 
@@ -91,6 +101,13 @@ describe('teacher workbench UI contract', () => {
 
     expect(navigation).toContain("module === 'ai_questions'")
     expect(navigation).toContain("return '/teacher/ai-questions'")
+  })
+
+  it('routes hash-based workbench modules back to the teacher route', () => {
+    const navigation = readFileSync(new URL('../app/components/teacher/TeacherWorkbenchNav.vue', import.meta.url), 'utf8')
+
+    expect(navigation).toContain('return `/teacher#${module}`')
+    expect(navigation).not.toContain('return { hash: `#${module}` }')
   })
 
   it('requires the visible question creation fields', () => {
