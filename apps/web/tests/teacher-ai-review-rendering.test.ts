@@ -90,6 +90,13 @@ const blockedValidation: TeacherAiValidationRun = {
   }],
 }
 
+const passedValidation: TeacherAiValidationRun = {
+  ...warningValidation,
+  id: 'validation-passed',
+  status: 'passed',
+  findings: [],
+}
+
 let route: { query: Record<string, string> }
 let navigateTo: ReturnType<typeof vi.fn>
 
@@ -178,12 +185,31 @@ describe('teacher AI review rendering', () => {
     expect(wrapper.emitted('accept')).toEqual([[{ confirmWarnings: true }]])
   })
 
+  it('shows the student preview, blocked reason, and corrective action before editable internals', () => {
+    const wrapper = mount(TeacherAiCandidateReview, {
+      props: { draft: warningE4Draft, validation: blockedValidation },
+    })
+
+    expect(wrapper.get('[data-testid="review-student-preview"]').text()).toContain('Why was the bridge closed?')
+    expect(wrapper.get('[data-testid="review-decision"]').text()).toContain('暂不能接受')
+    expect(wrapper.get('[data-testid="review-decision"]').text()).toContain('Resolve this validation finding')
+    expect(wrapper.get('[data-testid="edit-candidate-details"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="technical-review-details"]').exists()).toBe(true)
+  })
+
+  it('explains that acceptance creates a draft rather than publishing to students', () => {
+    const wrapper = mount(TeacherAiCandidateReview, { props: { draft: warningE4Draft, validation: passedValidation } })
+
+    expect(wrapper.get('[data-testid="review-decision"]').text()).toContain('只会创建题库草稿')
+    expect(wrapper.get('[data-testid="accept-candidate"]').text()).toBe('接受为题库草稿')
+  })
+
   it('keeps blocked candidates from being accepted and emits a trimmed other rejection detail', async () => {
     const wrapper = mount(TeacherAiCandidateReview, {
       props: { draft: warningE4Draft, validation: { ...warningValidation, status: 'blocked' }, busy: false },
     })
 
-    expect(wrapper.get('[data-testid="accept-candidate"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="accept-candidate"]').exists()).toBe(false)
     expect(wrapper.find('textarea[aria-label="拒绝详情"]').exists()).toBe(false)
     await wrapper.get('select[aria-label="拒绝原因"]').setValue('other')
     await wrapper.get('textarea[aria-label="拒绝详情"]').setValue('  Question wording is ambiguous.  ')
@@ -191,7 +217,7 @@ describe('teacher AI review rendering', () => {
     expect(wrapper.emitted('reject')).toEqual([['other', 'Question wording is ambiguous.']])
   })
 
-  it.each(['accepted', 'rejected'])('makes %s candidates read-only and prevents every write event', async (teacherState) => {
+  it.each(['accepted', 'rejected'])('makes %s candidates read-only and hides write controls', async (teacherState) => {
     const wrapper = mount(TeacherAiCandidateReview, {
       props: {
         draft: { ...warningE4Draft, teacher_state: teacherState },
@@ -201,16 +227,13 @@ describe('teacher AI review rendering', () => {
       },
     })
 
-    expect(wrapper.get(`input[aria-label="知识点"]`).attributes('disabled')).toBeDefined()
-    expect(wrapper.get('textarea[aria-label="题目提示"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('select[aria-label="拒绝原因"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-testid="save-revision"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-testid="reject-candidate"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-testid="accept-candidate"]').attributes('disabled')).toBeDefined()
-
-    await wrapper.get('[data-testid="save-revision"]').trigger('click')
-    await wrapper.get('[data-testid="reject-candidate"]').trigger('click')
-    await wrapper.get('[data-testid="accept-candidate"]').trigger('click')
+    expect(wrapper.find('[data-testid="edit-candidate-details"]').exists()).toBe(false)
+    expect(wrapper.find('input[aria-label="知识点"]').exists()).toBe(false)
+    expect(wrapper.find('textarea[aria-label="题目提示"]').exists()).toBe(false)
+    expect(wrapper.find('select[aria-label="拒绝原因"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="save-revision"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="reject-candidate"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="accept-candidate"]').exists()).toBe(false)
 
     expect(wrapper.emitted('save-revision')).toBeUndefined()
     expect(wrapper.emitted('reject')).toBeUndefined()
@@ -300,7 +323,7 @@ describe('teacher AI review rendering', () => {
     const wrapper = await mountWorkspace()
 
     expect(wrapper.get('[data-testid="validation-finding"]').text()).toContain('UNSAFE_CONTENT')
-    expect(wrapper.get('[data-testid="accept-candidate"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="accept-candidate"]').exists()).toBe(false)
   })
 
   it('never allows a blocked draft to enter the batch selection', async () => {
