@@ -313,8 +313,11 @@ test('teacher continues after rejecting a candidate without mutating its audit r
 
   await expect(page.getByTestId('rejected-notice')).toContainText('已拒绝')
   await expect(page.getByTestId('regenerate-candidate')).toHaveText('重新生成同题型候选题')
+  await expect(page.getByTestId('accept-candidate')).not.toBeAttached()
+  await expect(page.getByTestId('edit-candidate-details')).not.toBeAttached()
   await expect(page.getByTestId('save-revision')).not.toBeAttached()
   await expect(page.getByTestId('reject-candidate')).not.toBeAttached()
+  await expect(page.getByTestId(`batch-select-${sourceE1!.id}`)).toBeDisabled()
   await expect(page.getByTestId('continue-review-next-candidate')).toBeVisible()
 
   const writesDuringContinuation: string[] = []
