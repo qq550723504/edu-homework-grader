@@ -23,7 +23,7 @@ jobs:
     outputs:
       release_eligible: ${{ steps.release.outputs.release_eligible }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 2
@@ -57,15 +57,15 @@ jobs:
             context: infra/languagetool
             file: infra/languagetool/Dockerfile
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
@@ -83,33 +83,36 @@ jobs:
       url: https://edu.getkr.com
     permissions:
       contents: read
-      packages: read
     steps:
       - name: Check out the successful CI revision
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Reject a superseded production release
         shell: bash
         run: |
           set -euo pipefail
-          git fetch origin main:refs/remotes/origin/main --depth=1
-          main_sha="$(git rev-parse origin/main)"
+          git fetch --no-tags origin +main:refs/remotes/origin/main
           release_sha="${{ github.event.workflow_run.head_sha }}"
-          if [[ "$release_sha" != "$main_sha" ]]; then
+          if ! git merge-base --is-ancestor "$release_sha" origin/main; then
+            echo "Refusing superseded production release." >&2
+            exit 1
+          fi
+          if ! git diff --quiet "$release_sha" origin/main -- \
+            . ':(exclude)docs/**' ':(exclude,glob)**/*.md'; then
             echo "Refusing superseded production release." >&2
             exit 1
           fi
 
       - name: Install kubectl
-        uses: azure/setup-kubectl@v5
+        uses: azure/setup-kubectl@829323503d1be3d00ca8346e5391ca0b07a9ab0d # v5.1.0
         with:
           version: v1.34.1
 
       - name: Install Kustomize
-        uses: imranismail/setup-kustomize@v3
+        uses: imranismail/setup-kustomize@53f941b41dca13ed61874bbc6b4b6e1562877530 # v3.0.0
         with:
           kustomize-version: 5.7.1
 
@@ -123,6 +126,22 @@ jobs:
           umask 077
           printf '%s' "$KUBECONFIG_B64" | base64 --decode > "$kubeconfig_path"
           echo "KUBECONFIG=$kubeconfig_path" >> "$GITHUB_ENV"
+
+      - name: Recheck release immediately before deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +main:refs/remotes/origin/main
+          release_sha="${{ github.event.workflow_run.head_sha }}"
+          if ! git merge-base --is-ancestor "$release_sha" origin/main; then
+            echo "Refusing superseded production release." >&2
+            exit 1
+          fi
+          if ! git diff --quiet "$release_sha" origin/main -- \
+            . ':(exclude)docs/**' ':(exclude,glob)**/*.md'; then
+            echo "Refusing superseded production release." >&2
+            exit 1
+          fi
 
       - name: Deploy approved production release
         shell: pwsh

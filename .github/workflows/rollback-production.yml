@@ -18,13 +18,17 @@ concurrency:
 
 jobs:
   rollback:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: production
       url: https://edu.getkr.com
     steps:
-      - name: Check out current deployment tooling
-        uses: actions/checkout@v4
+      - name: Check out trusted deployment tooling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: main
+          fetch-depth: 1
 
       - name: Validate rollback image SHA
         shell: bash
@@ -39,7 +43,7 @@ jobs:
           echo "IMAGE_SHA=$REQUESTED_IMAGE_SHA" >> "$GITHUB_ENV"
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -56,12 +60,12 @@ jobs:
           done
 
       - name: Install kubectl
-        uses: azure/setup-kubectl@v5
+        uses: azure/setup-kubectl@829323503d1be3d00ca8346e5391ca0b07a9ab0d # v5.1.0
         with:
           version: v1.34.1
 
       - name: Install Kustomize
-        uses: imranismail/setup-kustomize@v3
+        uses: imranismail/setup-kustomize@53f941b41dca13ed61874bbc6b4b6e1562877530 # v3.0.0
         with:
           kustomize-version: 5.7.1
 
@@ -78,7 +82,7 @@ jobs:
 
       - name: Deploy approved rollback
         shell: pwsh
-        run: ./scripts/k8s/deploy-production.ps1 -ImageSha "$IMAGE_SHA"
+        run: ./scripts/k8s/deploy-production.ps1 -ImageSha "$env:IMAGE_SHA"
 
       - name: Remove production kubeconfig
         if: ${{ always() }}
