@@ -103,6 +103,13 @@ describe('teacher workbench UI contract', () => {
     expect(navigation).toContain("return '/teacher/ai-questions'")
   })
 
+  it('routes hash-based workbench modules back to the teacher route', () => {
+    const navigation = readFileSync(new URL('../app/components/teacher/TeacherWorkbenchNav.vue', import.meta.url), 'utf8')
+
+    expect(navigation).toContain('return `/teacher#${module}`')
+    expect(navigation).not.toContain('return { hash: `#${module}` }')
+  })
+
   it('requires the visible question creation fields', () => {
     expect(isQuestionDraftReady({ title: '', prompt: '计算 2 + 3', questionType: 'math', answer: '5' })).toBe(false)
     expect(isQuestionDraftReady({ title: '加法练习', prompt: '   ', questionType: 'math', answer: '5' })).toBe(false)
