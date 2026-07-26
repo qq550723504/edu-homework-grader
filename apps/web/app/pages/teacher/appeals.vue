@@ -1,24 +1,37 @@
 <template>
-  <main class="shell narrow">
-    <NuxtLink class="back" to="/teacher">← 返回教师工作台</NuxtLink><LogoutButton />
-    <p class="eyebrow">教师端 · 申诉</p>
-    <h1>学生申诉</h1>
-    <p v-if="message" class="notice" role="status">{{ message }}</p>
-    <section class="stack">
-      <article v-for="appeal in appeals" :key="appeal.id" class="assignment">
-        <div><span class="subject">{{ appeal.status }}</span><h2>{{ appeal.assignment_title }}</h2><p>{{ appeal.student_name || appeal.student_id }}：{{ appeal.reason }}</p><p v-if="appeal.decision_reason">处理理由：{{ appeal.decision_reason }}</p></div>
-        <button v-if="appeal.status === 'open'" class="button secondary" type="button" @click="selectedAppeal = appeal">处理申诉</button>
-      </article>
-      <p v-if="appeals.length === 0" class="notice">当前没有可查看的学生申诉。</p>
-    </section>
-    <section v-if="selectedAppeal" class="card wide" aria-labelledby="appeal-decision-heading">
-      <h2 id="appeal-decision-heading">处理申诉：{{ selectedAppeal.assignment_title }}</h2>
-      <p>{{ selectedAppeal.reason }}</p>
-      <form class="stack" @submit.prevent="submitDecision">
-        <label>决定<select v-model="decision.approve" aria-label="申诉决定"><option :value="true">批准并创建订正机会</option><option :value="false">拒绝申诉</option></select></label>
-        <label v-if="!decision.approve">拒绝理由<textarea v-model.trim="decision.reason" aria-label="拒绝理由" required rows="3" /></label>
-        <button class="button primary" :disabled="saving" type="submit">保存申诉决定</button>
-      </form>
+  <main class="teacher-workbench">
+    <aside class="teacher-workbench__sidebar">
+      <NuxtLink class="teacher-brand" to="/teacher">作业批改</NuxtLink>
+      <p class="teacher-brand__role">教师工作区</p>
+      <TeacherWorkbenchNav active-module="requests" />
+    </aside>
+
+    <section class="teacher-workbench__content">
+      <div class="shell teacher-page">
+        <header class="teacher-topbar">
+          <NuxtLink class="teacher-topbar__back" to="/teacher">← 返回教师工作台</NuxtLink>
+          <LogoutButton />
+        </header>
+        <p class="eyebrow">教师端 · 申诉</p>
+        <h1>学生申诉</h1>
+        <p v-if="message" class="notice" role="status">{{ message }}</p>
+        <section class="stack">
+          <article v-for="appeal in appeals" :key="appeal.id" class="assignment">
+            <div><span class="subject">{{ appeal.status }}</span><h2>{{ appeal.assignment_title }}</h2><p>{{ appeal.student_name || appeal.student_id }}：{{ appeal.reason }}</p><p v-if="appeal.decision_reason">处理理由：{{ appeal.decision_reason }}</p></div>
+            <button v-if="appeal.status === 'open'" class="button secondary" type="button" @click="selectedAppeal = appeal">处理申诉</button>
+          </article>
+          <p v-if="appeals.length === 0" class="notice">当前没有可查看的学生申诉。</p>
+        </section>
+        <section v-if="selectedAppeal" class="card wide" aria-labelledby="appeal-decision-heading">
+          <h2 id="appeal-decision-heading">处理申诉：{{ selectedAppeal.assignment_title }}</h2>
+          <p>{{ selectedAppeal.reason }}</p>
+          <form class="stack" @submit.prevent="submitDecision">
+            <label>决定<select v-model="decision.approve" aria-label="申诉决定"><option :value="true">批准并创建订正机会</option><option :value="false">拒绝申诉</option></select></label>
+            <label v-if="!decision.approve">拒绝理由<textarea v-model.trim="decision.reason" aria-label="拒绝理由" required rows="3" /></label>
+            <button class="button primary" :disabled="saving" type="submit">保存申诉决定</button>
+          </form>
+        </section>
+      </div>
     </section>
   </main>
 </template>
@@ -26,6 +39,7 @@
 <script setup lang="ts">
 import { fetchCurrentPrincipal } from '../../lib/student-api'
 import { decideTeacherAppeal, fetchTeacherAppeals, type TeacherAppeal } from '../../lib/teacher-api'
+import TeacherWorkbenchNav from '../../components/teacher/TeacherWorkbenchNav.vue'
 
 const appeals = ref<TeacherAppeal[]>([])
 const selectedAppeal = ref<TeacherAppeal | null>(null)
