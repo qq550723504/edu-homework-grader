@@ -92,6 +92,29 @@ def test_generation_request_rejects_more_than_eight_or_overlong_avoid_prompts() 
         GenerationRequest(**base, avoid_prompts=["x" * 1201])
 
 
+def test_generation_request_rejects_pii_in_avoid_prompts() -> None:
+    with pytest.raises(ValueError, match="generation request must be de-identified"):
+        GenerationRequest(
+            objective_revision_id=uuid4(),
+            objective_text="Use whole numbers under 100.",
+            difficulty_min=0,
+            difficulty_max=1,
+            grade="Grade 5",
+            subject="mathematics",
+            items=[
+                GenerationPlanItem(
+                    question_type="M1",
+                    difficulty_band="standard",
+                    target_difficulty=0.5,
+                )
+            ],
+            requested_count=1,
+            policy_version="1",
+            prompt_version="generator-v3",
+            avoid_prompts=["Contact 13800138000 before solving."],
+        )
+
+
 def test_generator_v3_requires_materially_different_context_and_reasoning() -> None:
     template = resolve_prompt_template("generator-v3", ["M1"])
 
