@@ -142,7 +142,7 @@ def persist_generated_draft(
     session.add_all([job, attempt])
     session.flush()
 
-    created = _persist_valid_candidates(
+    created, candidate_rejections = _persist_valid_candidates(
         session,
         job=job,
         attempt=attempt,
@@ -160,6 +160,7 @@ def persist_generated_draft(
         ],
     )
     assert created == 1
+    assert candidate_rejections == []
     session.flush()
     return job.drafts[0]
 
