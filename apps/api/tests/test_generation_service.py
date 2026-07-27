@@ -1,14 +1,9 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
 from uuid import UUID, uuid4
 
 import pytest
-from pydantic import ValidationError
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session
-
-import edu_generator.prompt_templates as prompt_templates
-import edu_grader_api.services.generation as generation_service
+from edu_generator import prompt_templates
 from edu_generator.contracts import (
     GeneratedCandidateEnvelope,
     GenerationPlanItem,
@@ -17,6 +12,11 @@ from edu_generator.contracts import (
 )
 from edu_generator.prompt_templates import PromptTemplate, resolve_prompt_template
 from edu_generator.providers import FakeGenerationProvider
+from pydantic import ValidationError
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+
+import edu_grader_api.services.generation as generation_service
 from edu_grader_api.models import (
     Base,
     CurriculumActivityType,
@@ -29,17 +29,18 @@ from edu_grader_api.models import (
     CurriculumSourceRecord,
     GeneratedQuestionDraft,
     GeneratedQuestionDraftRevision,
+    GenerationAttempt,
     GenerationControlState,
     GenerationGovernanceEntry,
     GenerationGovernanceTargetType,
     GenerationJob,
     GenerationJobStatus,
-    GenerationAttempt,
     Role,
     Tenant,
     User,
     utc_now,
 )
+from edu_grader_api.policies import validate_policy
 from edu_grader_api.services.generation import (
     GENERATION_PROMPT_VERSION,
     GenerationJobRequest,
@@ -51,7 +52,6 @@ from edu_grader_api.services.generation import (
     create_or_get_job,
     run_generation_job,
 )
-from edu_grader_api.policies import validate_policy
 
 
 @pytest.fixture
@@ -1027,7 +1027,7 @@ def test_recent_pending_avoid_prompts_uses_only_matching_current_pending_revisio
     qualifying_job = _generation_job_for_diversity_test(
         session, teacher=teacher, revision=revision, idempotency_key="diversity-qualifying"
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     _add_draft_revision_for_diversity_test(
         session,
         job=qualifying_job,
@@ -1125,7 +1125,7 @@ def test_recent_pending_avoid_prompts_bounds_dedupes_and_summary_stays_private(
     reference_job = _generation_job_for_diversity_test(
         session, teacher=teacher, revision=revision, idempotency_key="diversity-references"
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for ordinal in range(1, 22):
         prompt: object = f"Prompt {ordinal}"
         if ordinal == 21:

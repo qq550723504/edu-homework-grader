@@ -4,10 +4,11 @@ import hashlib
 import json
 import re
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal, Protocol, Sequence
+from typing import Literal, Protocol
 from uuid import UUID
 
 from edu_generator.contracts import (
@@ -40,12 +41,12 @@ from ..models import (
     User,
     utc_now,
 )
+from ..policies import validate_policy
 from ..services.generation_governance import (
     GenerationGovernanceError,
     assert_generation_configured_components_allowed,
     assert_generation_pipeline_allowed,
 )
-from ..policies import validate_policy
 from .question_fingerprints import fingerprint_prompt
 
 
