@@ -473,6 +473,49 @@ def test_openai_provider_rejects_a_normal_request_outside_template_scope_before_
     assert not provider_called
 
 
+def test_openai_provider_rejects_pii_in_model_copy_avoid_prompts_before_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = GenerationRequest(
+        objective_revision_id=uuid4(),
+        objective_text="Use whole numbers under 100.",
+        difficulty_min=0,
+        difficulty_max=1,
+        grade="Grade 5",
+        subject="mathematics",
+        items=[
+            GenerationPlanItem(
+                question_type="M1",
+                difficulty_band="standard",
+                target_difficulty=0.5,
+            )
+        ],
+        requested_count=1,
+        policy_version="1",
+        prompt_version="generator-v1",
+    ).model_copy(update={"avoid_prompts": ["Call 13800138000 before solving."]})
+    provider = OpenAIResponsesProvider(
+        api_key="test-key",
+        model="gpt-test-2025-08-07",
+        base_url="https://api.openai.com",
+        allowed_hosts=frozenset({"api.openai.com"}),
+    )
+    provider_called = False
+
+    def unexpected_provider_client(**_kwargs: object) -> SimpleNamespace:
+        nonlocal provider_called
+        provider_called = True
+        raise AssertionError("de-identification validation must precede SDK calls")
+
+    monkeypatch.setattr(openai, "OpenAI", unexpected_provider_client)
+
+    with pytest.raises(ProviderFailure) as exc_info:
+        provider.generate(request)
+
+    assert exc_info.value.code == "invalid_generation_request"
+    assert not provider_called
+
+
 def test_fake_provider_emits_only_e4_reading_material() -> None:
     request = GenerationRequest(
         objective_revision_id=uuid4(),

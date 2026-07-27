@@ -60,12 +60,17 @@ class GenerationRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_avoid_prompts_are_deidentified(self) -> "GenerationRequest":
+        self.assert_deidentified_avoid_prompts()
+        return self
+
+    def assert_deidentified_avoid_prompts(self) -> None:
+        """Recheck free-text diversity context before an external model send."""
+
         try:
             for avoid_prompt in self.avoid_prompts:
                 assert_deidentified_text(avoid_prompt)
         except ProcessorPolicyError as exc:
             raise ValueError("generation request must be de-identified") from exc
-        return self
 
     def model_post_init(self, __context: object) -> None:
         try:
