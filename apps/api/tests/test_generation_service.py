@@ -1172,3 +1172,32 @@ def test_recent_pending_avoid_prompts_bounds_dedupes_and_summary_stays_private(
     serialized_summary = str(summary)
     assert "Prompt 2" not in serialized_summary
     assert "x" * 20 not in serialized_summary
+
+
+def test_recent_pending_avoid_prompts_skips_stored_pii(session: Session) -> None:
+    teacher, revision = teacher_and_objective(session)
+    job = _generation_job_for_diversity_test(
+        session, teacher=teacher, revision=revision, idempotency_key="diversity-pii-request"
+    )
+    reference_job = _generation_job_for_diversity_test(
+        session, teacher=teacher, revision=revision, idempotency_key="diversity-pii-reference"
+    )
+    now = datetime.now(UTC)
+    _add_draft_revision_for_diversity_test(
+        session,
+        job=reference_job,
+        ordinal=1,
+        current_prompt="Call 13800138000 before solving.",
+        created_at=now,
+    )
+    _add_draft_revision_for_diversity_test(
+        session,
+        job=reference_job,
+        ordinal=2,
+        current_prompt="Use a number line to compare values.",
+        created_at=now - timedelta(seconds=1),
+    )
+
+    assert generation_service._recent_pending_avoid_prompts(session, job=job) == [
+        "Use a number line to compare values."
+    ]

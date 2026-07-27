@@ -405,6 +405,10 @@ def _recent_pending_avoid_prompts(session: Session, *, job: GenerationJob) -> li
         trimmed = prompt.strip()[:_AVOID_PROMPT_MAX_LENGTH]
         if not trimmed:
             continue
+        try:
+            assert_deidentified_text(trimmed)
+        except ProcessorPolicyError:
+            continue
         normalized_hash = fingerprint_prompt(trimmed).normalized_hash
         if normalized_hash in seen_hashes:
             continue
