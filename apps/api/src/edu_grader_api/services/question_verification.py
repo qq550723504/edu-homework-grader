@@ -58,6 +58,11 @@ from .verification_budget import (
 VALIDATOR_VERSION = "verification-v8"
 RULESET_VERSION = "rules-v8"
 _SEMANTIC_CHUNK_SIZE = 128
+_DUPLICATE_COMPARISON_CATEGORIES = (
+    "published_question",
+    "batch_candidate",
+    "pending_candidate",
+)
 _DUPLICATE_REMEDIATION = "Revise the prompt to make the candidate meaningfully distinct."
 _WHITESPACE = re.compile(r"\s+")
 _E2_TERMINAL_PUNCTUATION = re.compile(r"[.!?。！？]+$")
@@ -1757,7 +1762,7 @@ def _empty_duplicate_feature_summary(snapshot: _DuplicateSnapshot) -> dict[str, 
             "normalized_hash": snapshot.candidate_fingerprints.normalized_hash,
         },
         "similarity_threshold": snapshot.threshold,
-        "comparison_counts": {"published_question": 0, "batch_candidate": 0},
+        "comparison_counts": {category: 0 for category in _DUPLICATE_COMPARISON_CATEGORIES},
         "embedding_dependency": (
             snapshot.embedding_dependency.as_dict()
             if snapshot.embedding_dependency is not None
@@ -1770,7 +1775,7 @@ def _duplicate_feature_summary(snapshot: _DuplicateSnapshot) -> dict[str, object
     summary = _empty_duplicate_feature_summary(snapshot)
     summary["comparison_counts"] = {
         category: sum(comparator.category == category for comparator in snapshot.comparators)
-        for category in ("published_question", "batch_candidate")
+        for category in _DUPLICATE_COMPARISON_CATEGORIES
     }
     return summary
 
@@ -1990,6 +1995,37 @@ def _batch_current_revision_candidates(
     )
 
 
+def _pending_current_revision_candidates(
+    session: Session,
+    *,
+    draft: GeneratedQuestionDraft,
+    tenant_id: object,
+) -> list[dict[str, object]]:
+    return list(
+        session.scalars(
+            select(GeneratedQuestionDraftRevision.candidate_json)
+            .join(
+                GeneratedQuestionDraft,
+                and_(
+                    GeneratedQuestionDraft.current_revision_id == GeneratedQuestionDraftRevision.id,
+                    GeneratedQuestionDraft.id
+                    == GeneratedQuestionDraftRevision.generated_question_draft_id,
+                ),
+            )
+            .join(GenerationJob, GenerationJob.id == GeneratedQuestionDraft.job_id)
+            .where(
+                GenerationJob.tenant_id == tenant_id,
+                GenerationJob.curriculum_objective_revision_id
+                == draft.job.curriculum_objective_revision_id,
+                GeneratedQuestionDraft.job_id != draft.job_id,
+                GeneratedQuestionDraft.teacher_state == "pending_review",
+            )
+            .order_by(GeneratedQuestionDraft.created_at.desc(), GeneratedQuestionDraft.id.desc())
+            .limit(20)
+        )
+    )
+
+
 def _semantic_comparators(
     session: Session,
     *,
@@ -2013,12 +2049,21 @@ def _semantic_comparators(
         (candidate, None, None)
         for candidate in _batch_current_revision_candidates(session, draft=draft)
     ]
+    pending_rows = [
+        (candidate, None, None)
+        for candidate in _pending_current_revision_candidates(
+            session,
+            draft=draft,
+            tenant_id=tenant_id,
+        )
+    ]
 
     comparators: list[_PromptComparator] = []
     seen_hashes: set[str] = set()
-    for category, rows in (
-        ("published_question", published_rows),
-        ("batch_candidate", batch_rows),
+    for category, rows in zip(
+        _DUPLICATE_COMPARISON_CATEGORIES,
+        (published_rows, batch_rows, pending_rows),
+        strict=True,
     ):
         for value, fingerprint_version, normalized_hash in rows:
             prompt = value.get("prompt") if isinstance(value, dict) else value
