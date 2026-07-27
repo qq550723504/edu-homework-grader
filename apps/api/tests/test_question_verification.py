@@ -902,7 +902,7 @@ def test_m1_without_structured_assertions_fails_closed(session: Session) -> None
     draft = generation_draft(
         session,
         candidate_json=candidate,
-        prompt_version="generator-v3",
+        prompt_version="generator-v1",
     )
 
     run = verify_current_revision(session, draft=draft, grader_client=PassingGrader())

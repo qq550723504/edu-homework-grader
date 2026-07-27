@@ -15,7 +15,7 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..audit import append_audit_event
 from ..auth import CurrentPrincipal
@@ -204,7 +204,11 @@ def list_generation_jobs_route(
     after: UUID | None = None,
 ) -> dict[str, object]:
     actor = _actor(session, principal)
-    statement = select(GenerationJob).where(GenerationJob.tenant_id == actor.tenant_id)
+    statement = (
+        select(GenerationJob)
+        .options(selectinload(GenerationJob.attempts))
+        .where(GenerationJob.tenant_id == actor.tenant_id)
+    )
     if actor.role is Role.TEACHER:
         statement = statement.where(GenerationJob.teacher_user_id == actor.id)
     if after is not None:
@@ -922,6 +926,7 @@ def _job_payload(job: GenerationJob) -> dict[str, object]:
         "failed_count": job.failed_count,
         "failure_code": job.failure_code,
         "failure_summary": _job_failure_summary(job),
+        "failure_details": _job_failure_details(job),
         "created_at": job.created_at.isoformat(),
         "started_at": job.started_at.isoformat() if job.started_at else None,
         "finished_at": job.finished_at.isoformat() if job.finished_at else None,
@@ -962,6 +967,28 @@ def _job_failure_summary(job: GenerationJob) -> list[str]:
                 continue
             summary.append(code)
     return summary
+
+
+def _job_failure_details(job: GenerationJob) -> list[dict[str, str]]:
+    details: list[dict[str, str]] = []
+    for attempt in sorted(job.attempts, key=lambda item: item.attempt_number):
+        response_summary = attempt.response_summary
+        if not isinstance(response_summary, dict):
+            continue
+        rejections = response_summary.get("candidate_rejections")
+        if not isinstance(rejections, list):
+            continue
+        for rejection in rejections:
+            if not isinstance(rejection, dict) or rejection.get("code") != "policy_rule_invalid":
+                continue
+            path = rejection.get("rule_path")
+            keyword = rejection.get("rule_keyword")
+            if not isinstance(path, str) or not isinstance(keyword, str):
+                continue
+            detail = {"path": path, "keyword": keyword}
+            if detail not in details:
+                details.append(detail)
+    return details
 
 
 def _draft_payload(draft: GeneratedQuestionDraft) -> dict[str, object]:

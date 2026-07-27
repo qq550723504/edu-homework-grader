@@ -10,7 +10,7 @@
 - [x] AI 只生成候选题；`blocked` 无法接受，`warning` 必须明确确认。
 - [x] AI 候选题编辑后形成不可变 revision 并重新验证。
 - [x] 接受 AI 候选题只创建 `QuestionVersion` 草稿，仍需原有测试和发布门禁。
-- [x] `generator-v3` 真实 Provider 对 M1、M2、E1、E4 的受控验收通过。
+- [x] `generator-v1` 真实 Provider 对 M1、M2、E1、E4 的受控验收通过。
 - [x] 离线 AI evaluation gate 能在样本不足、未批准版本、矛盾状态或质量退化时失败。
 - [x] 生产形态的生成/验证/审核数据可导出去标识化事实并做显式版本比较。
 - [x] 文档状态、内部链接、CI Job、策略版本、Generator/Validator 版本和英语模型锁定值进入自动校验。

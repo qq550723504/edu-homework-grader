@@ -26,9 +26,9 @@
     "operational_exporter_version": "operational-ai-evaluation-export-v1"
   },
   "live_generator_provider_acceptance": {
-    "run_id": 30024119371,
+    "run_id": 30251760367,
     "conclusion": "success",
-    "contract": "generator-v3",
+    "contract": "generator-v1",
     "question_types": [
       "M1",
       "M2",
@@ -37,7 +37,7 @@
     ]
   },
   "generation_contract": {
-    "prompt_version": "generator-v3",
+    "prompt_version": "generator-v1",
     "validator_version": "verification-v8",
     "ruleset_version": "rules-v8",
     "grade_complexity_rules_version": "grade-complexity-v1",

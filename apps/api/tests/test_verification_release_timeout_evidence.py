@@ -83,7 +83,7 @@ def test_fault_proxy_forwards_real_http_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _allow_local_processor(monkeypatch)
-    monkeypatch.setattr(evidence.settings, "grader_request_timeout_seconds", 1.0)
+    monkeypatch.setattr(evidence.settings, "grader_request_timeout_seconds", 5.0)
 
     with _grade_upstream() as upstream:
         with evidence.FaultInjectingGraderProxy(

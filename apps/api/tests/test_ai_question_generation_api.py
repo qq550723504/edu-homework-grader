@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
@@ -344,8 +344,18 @@ def test_list_jobs_exposes_safe_candidate_validation_summary(
     attempt.response_summary = {
         "candidate_count": 1,
         "candidate_rejections": [
-            {"ordinal": 1, "code": "policy_rule_invalid"},
-            {"ordinal": 2, "code": "policy_rule_invalid"},
+            {
+                "ordinal": 1,
+                "code": "policy_rule_invalid",
+                "rule_path": "/",
+                "rule_keyword": "additionalProperties",
+            },
+            {
+                "ordinal": 2,
+                "code": "policy_rule_invalid",
+                "rule_path": "/accepted_answers",
+                "rule_keyword": "required",
+            },
             {"ordinal": 3, "code": "untrusted_provider_detail"},
         ],
     }
@@ -357,6 +367,76 @@ def test_list_jobs_exposes_safe_candidate_validation_summary(
     item = next(item for item in response.json()["items"] if item["id"] == str(job.id))
     assert item["failure_code"] == "candidate_validation_failed"
     assert item["failure_summary"] == ["policy_rule_invalid"]
+    assert item["failure_details"] == [
+        {"path": "/", "keyword": "additionalProperties"},
+        {"path": "/accepted_answers", "keyword": "required"},
+    ]
+
+
+def test_list_jobs_exposes_safe_rule_diagnostics_for_partially_failed_job(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client, teacher, revision, idempotency_key="partial-candidate-validation-summary"
+    )
+    job = session.get(GenerationJob, UUID(str(created["id"])))
+    assert job is not None
+    attempt = job.attempts[0]
+    job.status = GenerationJobStatus.PARTIALLY_FAILED
+    job.succeeded_count = 1
+    job.failed_count = 1
+    attempt.response_summary = {
+        "candidate_count": 2,
+        "candidate_rejections": [
+            {
+                "ordinal": 2,
+                "code": "policy_rule_invalid",
+                "rule_path": "/accepted_answers",
+                "rule_keyword": "required",
+            }
+        ],
+    }
+    session.commit()
+
+    response = client.get("/v1/ai-question-generation/jobs", headers=headers)
+
+    assert response.status_code == 200
+    item = next(item for item in response.json()["items"] if item["id"] == str(job.id))
+    assert item["failure_code"] is None
+    assert item["failure_details"] == [{"path": "/accepted_answers", "keyword": "required"}]
+
+
+def test_list_jobs_loads_attempts_in_one_query(client: TestClient, session: Session) -> None:
+    teacher, revision = teacher_and_objective(session)
+    headers, _ = create_generation_job(
+        client, teacher, revision, idempotency_key="list-jobs-attempt-query-one"
+    )
+    create_generation_job(client, teacher, revision, idempotency_key="list-jobs-attempt-query-two")
+    session.expire_all()
+    attempt_queries: list[str] = []
+
+    def capture_attempt_query(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: object,
+    ) -> None:
+        if "generation_attempts" in statement.lower():
+            attempt_queries.append(statement)
+
+    engine = session.get_bind()
+    event.listen(engine, "before_cursor_execute", capture_attempt_query)
+    try:
+        response = client.get("/v1/ai-question-generation/jobs", headers=headers)
+    finally:
+        event.remove(engine, "before_cursor_execute", capture_attempt_query)
+
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 2
+    assert len(attempt_queries) == 1
 
 
 def test_created_job_has_initial_validation_run(

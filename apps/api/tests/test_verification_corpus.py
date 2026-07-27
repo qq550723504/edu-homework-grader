@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+from edu_grader_api.services.generation import GENERATION_PROMPT_VERSION
 from test_question_verification import (
     Base,
     FailingE2Grader,
@@ -556,7 +557,7 @@ def _run_case(
         draft = generation_draft(
             session,
             candidate_json=_m1_candidate(scenario),
-            prompt_version="generator-v3",
+            prompt_version=GENERATION_PROMPT_VERSION,
         )
         grader = FailingGrader() if scenario == "grader_failure" else PassingGrader()
         run = verify_current_revision(session, draft=draft, grader_client=grader)
@@ -579,7 +580,7 @@ def _run_case(
             session,
             allowed_question_types=["M2"],
             candidate_json=_m2_candidate(scenario),
-            prompt_version="generator-v3",
+            prompt_version=GENERATION_PROMPT_VERSION,
         )
         run = verify_current_revision(session, draft=draft, grader_client=grader)
     elif question_type == "E1":

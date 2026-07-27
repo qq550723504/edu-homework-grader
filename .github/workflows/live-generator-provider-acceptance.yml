@@ -44,7 +44,12 @@ jobs:
                 core.setFailed('target_ref is required');
                 return;
               }
-              core.setOutput('target_ref', targetRef.trim());
+              const commit = await github.rest.repos.getCommit({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: targetRef.trim(),
+              });
+              core.setOutput('target_ref', commit.data.sha);
               core.setOutput('pull_request_number', '');
               return;
             }
@@ -64,7 +69,7 @@ jobs:
             core.setOutput('pull_request_number', String(pullNumber));
 
   acceptance:
-    name: generator-v3 M1/M2/E1/E4
+    name: generator-v1 M1/M2/E1/E4
     needs: resolve-target
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -109,7 +114,7 @@ jobs:
             echo
             echo "- Target: \`${{ needs.resolve-target.outputs.target_ref }}\`"
             echo "- Pull request: \`${{ needs.resolve-target.outputs.pull_request_number || 'manual dispatch' }}\`"
-            echo "- Contract: \`generator-v3\`"
+            echo "- Contract: \`generator-v1\`"
             echo "- Coverage: M1, M2, E1, E4"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -161,8 +166,8 @@ jobs:
               state: succeeded ? 'success' : 'failure',
               context: 'live-generator-provider-acceptance',
               description: succeeded
-                ? 'generator-v3 M1/M2/E1/E4 acceptance passed'
-                : 'generator-v3 real Provider acceptance failed',
+                ? 'generator-v1 M1/M2/E1/E4 acceptance passed'
+                : 'generator-v1 real Provider acceptance failed',
               target_url: runUrl,
             });
 
@@ -172,7 +177,7 @@ jobs:
                 `## ${succeeded ? '✅' : '❌'} Live generator Provider acceptance ${succeeded ? 'passed' : 'failed'}`,
                 '',
                 `- Exact target: \`${target}\``,
-                '- Contract: `generator-v3`',
+                '- Contract: `generator-v1`',
                 '- Coverage: M1, M2, E1, E4',
                 `- Evidence: ${runUrl}`,
                 '',

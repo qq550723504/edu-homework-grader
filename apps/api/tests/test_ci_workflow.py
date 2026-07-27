@@ -14,6 +14,12 @@ PUBLISH_WORKFLOW_PATH = (
 ROLLBACK_WORKFLOW_PATH = (
     Path(__file__).resolve().parents[3] / ".github" / "workflows" / "rollback-production.yml"
 )
+LIVE_GENERATOR_PROVIDER_ACCEPTANCE_WORKFLOW_PATH = (
+    Path(__file__).resolve().parents[3]
+    / ".github"
+    / "workflows"
+    / "live-generator-provider-acceptance.yml"
+)
 HEAVY_JOB_NAMES = (
     "python",
     "migrations",
@@ -292,6 +298,14 @@ def test_manual_rollback_is_dispatch_only_approved_and_checks_all_sha_images() -
     assert workflow.index("Verify rollback images exist") < workflow.index(
         "Configure production kubeconfig"
     )
+
+
+def test_live_generator_acceptance_resolves_manual_refs_to_full_commit_shas() -> None:
+    workflow = LIVE_GENERATOR_PROVIDER_ACCEPTANCE_WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    assert "github.rest.repos.getCommit" in workflow
+    assert "ref: targetRef.trim()" in workflow
+    assert "core.setOutput('target_ref', commit.data.sha);" in workflow
 
 
 def test_manual_rollback_passes_github_environment_sha_to_powershell() -> None:

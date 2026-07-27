@@ -184,12 +184,16 @@ describe('teacher AI review rendering', () => {
           status: 'failed',
           failed_count: 1,
           failure_summary: ['policy_rule_invalid'],
+          failure_details: [{ path: '/', keyword: 'additionalProperties' }],
         }],
       },
     })
 
     expect(wrapper.get('[data-testid="generation-job-job-failed"]').text()).toContain(
       '原因：评分规则不符合平台要求',
+    )
+    expect(wrapper.get('[data-testid="generation-job-job-failed"]').text()).toContain(
+      '规则：/ · 包含不允许字段',
     )
   })
 
