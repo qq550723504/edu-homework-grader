@@ -105,9 +105,10 @@ _GENERATOR_V4 = PromptTemplate(
         "For M1 and M2, return verification_assertions and end explanation with "
         "Final answer: followed exactly by final_answer_text; M2 must also return "
         "JSON-encoded final_answer_mathjson. "
-        'For E1, set policy_version to "2". Its rule_json must contain '
-        "accepted_answers and may contain only max_score and normalization; normalization "
-        'may contain only unicode_form set to "NFKC", collapse_whitespace, '
+        'For E1, set policy_version to "2". Its rule_json must contain accepted_answers; '
+        "accepted_answers is required, and max_score and normalization are the only additional optional "
+        'top-level fields. normalization may contain only unicode_form set to "NFKC", '
+        "collapse_whitespace, "
         "ignore_case, and ignore_terminal_punctuation. "
         "E4 must return a nonblank generated reading_material containing every E4 "
         "evidence phrase; all other types must return reading_material null. "

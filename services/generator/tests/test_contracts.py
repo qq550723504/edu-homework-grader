@@ -107,8 +107,11 @@ def test_generator_v4_instructs_e1_policy_v2_schema() -> None:
 
     assert template.schema_version == "generated_question_candidates-v2"
     assert 'set policy_version to "2"' in template.system_instructions
-    assert "accepted_answers" in template.system_instructions
-    assert "normalization" in template.system_instructions
+    assert "accepted_answers is required" in template.system_instructions
+    assert (
+        "max_score and normalization are the only additional optional top-level fields"
+        in template.system_instructions
+    )
 
 
 def test_template_resolver_rejects_question_types_outside_template_scope() -> None:

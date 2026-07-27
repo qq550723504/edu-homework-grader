@@ -15,7 +15,7 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..audit import append_audit_event
 from ..auth import CurrentPrincipal
@@ -204,7 +204,11 @@ def list_generation_jobs_route(
     after: UUID | None = None,
 ) -> dict[str, object]:
     actor = _actor(session, principal)
-    statement = select(GenerationJob).where(GenerationJob.tenant_id == actor.tenant_id)
+    statement = (
+        select(GenerationJob)
+        .options(selectinload(GenerationJob.attempts))
+        .where(GenerationJob.tenant_id == actor.tenant_id)
+    )
     if actor.role is Role.TEACHER:
         statement = statement.where(GenerationJob.teacher_user_id == actor.id)
     if after is not None:
