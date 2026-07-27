@@ -175,6 +175,24 @@ describe('teacher AI review rendering', () => {
     expect(wrapper.emitted('select-job')).toEqual([['job-2']])
   })
 
+  it('renders a safe failed batch reason', () => {
+    const wrapper = mount(TeacherAiJobList, {
+      props: {
+        jobs: [{
+          id: 'job-failed',
+          subject: 'english',
+          status: 'failed',
+          failed_count: 1,
+          failure_summary: ['policy_rule_invalid'],
+        }],
+      },
+    })
+
+    expect(wrapper.get('[data-testid="generation-job-job-failed"]').text()).toContain(
+      '原因：评分规则不符合平台要求',
+    )
+  })
+
   it('renders E4 material and blocks acceptance until warning confirmation', async () => {
     const wrapper = mount(TeacherAiCandidateReview, {
       props: { draft: warningE4Draft, validation: warningValidation, busy: false },
