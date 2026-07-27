@@ -409,14 +409,67 @@ function Apply-RenderedRelease {
         )
 }
 
+function Get-OptionalPropertyValue {
+    param(
+        [object]$Object,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    if ($null -eq $Object) {
+        return $null
+    }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        return $null
+    }
+    return $property.Value
+}
+
 function Wait-DeploymentRollouts {
     foreach ($deployment in $ManagedDeployments) {
-        $null = Invoke-NativeTool `
-            -Tool 'kubectl' `
-            -Arguments @(
-                'rollout', 'status', "deployment/$deployment",
-                "--timeout=${RolloutTimeoutSeconds}s", '--namespace', $Namespace
+        $deadline = [DateTimeOffset]::UtcNow.AddSeconds($RolloutTimeoutSeconds)
+        while ($true) {
+            $deploymentOutput = @(
+                Invoke-NativeTool -Tool 'kubectl' -Arguments @(
+                    'get', 'deployment', $deployment,
+                    '--output', 'json', '--namespace', $Namespace
+                )
             )
+            $deploymentDocument = ConvertFrom-ToolJson `
+                -Output $deploymentOutput `
+                -Description "Deployment $deployment query"
+
+            $spec = Get-OptionalPropertyValue -Object $deploymentDocument -Name 'spec'
+            $desiredReplicaValue = Get-OptionalPropertyValue -Object $spec -Name 'replicas'
+            $desiredReplicas = if ($null -eq $desiredReplicaValue) {
+                1
+            }
+            else {
+                [int]$desiredReplicaValue
+            }
+            $status = Get-OptionalPropertyValue -Object $deploymentDocument -Name 'status'
+            $observedGeneration = [int](Get-OptionalPropertyValue -Object $status -Name 'observedGeneration')
+            $updatedReplicas = [int](Get-OptionalPropertyValue -Object $status -Name 'updatedReplicas')
+            $availableReplicas = [int](Get-OptionalPropertyValue -Object $status -Name 'availableReplicas')
+            if (
+                $observedGeneration -ge [int]$deploymentDocument.metadata.generation -and
+                $updatedReplicas -ge $desiredReplicas -and
+                $availableReplicas -ge $desiredReplicas
+            ) {
+                break
+            }
+
+            if ([DateTimeOffset]::UtcNow -ge $deadline) {
+                throw "Deployment $deployment did not become ready."
+            }
+            $remainingMilliseconds = [int][Math]::Max(
+                1,
+                [Math]::Min(5000, ($deadline - [DateTimeOffset]::UtcNow).TotalMilliseconds)
+            )
+            Start-Sleep -Milliseconds $remainingMilliseconds
+        }
     }
 }
 
