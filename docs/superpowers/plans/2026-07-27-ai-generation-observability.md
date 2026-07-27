@@ -57,7 +57,7 @@ Add parameterized equivalents for a wrong `question_type`, difficulty outside `_
 
 - [ ] **Step 2: Run the new test to verify it fails**
 
-Run: `python -m pytest apps/api/tests/test_generation_service.py -k candidate_rejections -q`  
+Run: `python -m pytest apps/api/tests/test_generation_service.py -k candidate_rejections -q`
 Expected: FAIL because the attempt summary has only `candidate_count` and the job failure code is `None`.
 
 - [ ] **Step 3: Implement the minimal classifier and persistence**
@@ -83,7 +83,7 @@ Refactor `_persist_valid_candidates` to return both the valid count and the safe
 
 - [ ] **Step 4: Run service tests to verify green**
 
-Run: `python -m pytest apps/api/tests/test_generation_service.py -q`  
+Run: `python -m pytest apps/api/tests/test_generation_service.py -q`
 Expected: PASS.
 
 - [ ] **Step 5: Commit the isolated service change**
@@ -134,10 +134,10 @@ it('shows a failed batch reason without exposing candidate content', async () =>
 
 - [ ] **Step 2: Run each new test to verify red**
 
-Run: `python -m pytest apps/api/tests/test_ai_question_generation_api.py -k failure_summary -q`  
+Run: `python -m pytest apps/api/tests/test_ai_question_generation_api.py -k failure_summary -q`
 Expected: FAIL because `failure_summary` is absent.
 
-Run: `npm test -- --run apps/web/tests/teacher-ai-review-rendering.test.ts -t "failed batch reason"`  
+Run: `npm test -- --run apps/web/tests/teacher-ai-review-rendering.test.ts -t "failed batch reason"`
 Expected: FAIL because the job type and component do not expose the summary.
 
 - [ ] **Step 3: Implement safe projection and Chinese labels**
@@ -146,10 +146,10 @@ Add a router-private extractor that accepts only `candidate_rejections` records 
 
 - [ ] **Step 4: Run API and web tests to verify green**
 
-Run: `python -m pytest apps/api/tests/test_ai_question_generation_api.py -k failure_summary -q`  
+Run: `python -m pytest apps/api/tests/test_ai_question_generation_api.py -k failure_summary -q`
 Expected: PASS.
 
-Run: `npm test -- --run apps/web/tests/teacher-ai-review-rendering.test.ts`  
+Run: `npm test -- --run apps/web/tests/teacher-ai-review-rendering.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit the safe API/UI projection**
@@ -190,7 +190,7 @@ Add the corresponding regeneration test and assert the validation client is not 
 
 - [ ] **Step 2: Run the new tests to verify red**
 
-Run: `python -m pytest apps/api/tests/test_ai_question_generation_api.py -k initial_validation -q`  
+Run: `python -m pytest apps/api/tests/test_ai_question_generation_api.py -k initial_validation -q`
 Expected: FAIL because a newly generated draft has no validation runs.
 
 - [ ] **Step 3: Add one shared generation-validation coordinator**
@@ -216,7 +216,7 @@ Call it immediately after `run_generation_job` only when the current request res
 
 - [ ] **Step 4: Run API tests to verify green**
 
-Run: `python -m pytest apps/api/tests/test_ai_question_generation_api.py -k "initial_validation or regenerate" -q`  
+Run: `python -m pytest apps/api/tests/test_ai_question_generation_api.py -k "initial_validation or regenerate" -q`
 Expected: PASS.
 
 - [ ] **Step 5: Commit the initial-validation change**
@@ -233,24 +233,23 @@ git commit -m "fix: validate AI candidates when generated"
 
 - [ ] **Step 1: Run focused API regressions**
 
-Run: `python -m pytest apps/api/tests/test_generation_service.py apps/api/tests/test_ai_question_generation_api.py -q`  
+Run: `python -m pytest apps/api/tests/test_generation_service.py apps/api/tests/test_ai_question_generation_api.py -q`
 Expected: PASS.
 
 - [ ] **Step 2: Run the web review regression suite**
 
-Run: `npm test -- --run apps/web/tests/teacher-ai-review-rendering.test.ts`  
+Run: `npm test -- --run apps/web/tests/teacher-ai-review-rendering.test.ts`
 Expected: PASS.
 
 - [ ] **Step 3: Run static checks**
 
-Run: `python -m ruff check apps/api/src apps/api/tests`  
+Run: `python -m ruff check apps/api/src apps/api/tests`
 Expected: PASS.
 
-Run: `npm run lint --prefix apps/web`  
+Run: `npm run lint --prefix apps/web`
 Expected: PASS.
 
 - [ ] **Step 4: Inspect final change scope**
 
-Run: `git status --short && git diff main...HEAD --check`  
+Run: `git status --short && git diff main...HEAD --check`
 Expected: only the documented API, service, and web changes; no whitespace errors.
-
