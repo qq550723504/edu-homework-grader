@@ -26,7 +26,7 @@
     "operational_exporter_version": "operational-ai-evaluation-export-v1"
   },
   "live_generator_provider_acceptance": {
-    "run_id": 30024119371,
+    "run_id": 30251760367,
     "conclusion": "success",
     "contract": "generator-v1",
     "question_types": [
