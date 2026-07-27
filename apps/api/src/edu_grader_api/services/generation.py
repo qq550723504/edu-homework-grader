@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -55,6 +57,8 @@ GENERATION_PROMPT_VERSION = "generator-v1"
 _DIFFICULTY_BAND_FRACTIONS = {"foundation": 0.2, "standard": 0.5, "stretch": 0.8}
 # Provider-authored estimates within five percentage points remain aligned to the plan target.
 _TARGET_DIFFICULTY_TOLERANCE = 0.05
+_WHITESPACE = re.compile(r"\s+")
+_TERMINAL_PUNCTUATION = re.compile(r"[.!?。！？]+$")
 
 
 class _GenerationPlanSourceItem(Protocol):
@@ -399,6 +403,7 @@ def _persist_valid_candidates(
     candidate_rejections: list[dict[str, int | str]] = []
     plan_items = _generation_plan_items(job)
     for ordinal, candidate in enumerate(candidates, start=1):
+        candidate = _canonicalize_generated_e1_candidate(candidate)
         plan_item = plan_items[ordinal - 1] if ordinal <= len(plan_items) else None
         rejection_code = _candidate_rejection_code(
             candidate=candidate,
@@ -439,6 +444,48 @@ def _persist_valid_candidates(
         )
         valid_count += 1
     return valid_count, candidate_rejections
+
+
+def _canonicalize_generated_e1_candidate(candidate: GeneratedCandidate) -> GeneratedCandidate:
+    """Remove model-output duplicates according to the E1 Grader's normalization rules."""
+
+    if candidate.question_type != "E1" or candidate.policy_version != "2":
+        return candidate
+    accepted_answers = candidate.rule_json.get("accepted_answers")
+    normalization = candidate.rule_json.get("normalization")
+    if not isinstance(accepted_answers, list) or not all(
+        isinstance(answer, str) for answer in accepted_answers
+    ):
+        return candidate
+    settings = normalization if isinstance(normalization, dict) else {}
+    canonical_answers: list[str] = []
+    seen: set[str] = set()
+    for answer in accepted_answers:
+        normalized = _normalize_e1_answer(answer, settings)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        canonical_answers.append(answer)
+    if canonical_answers == accepted_answers:
+        return candidate
+    return candidate.model_copy(
+        update={
+            "rule_json": {**candidate.rule_json, "accepted_answers": canonical_answers},
+        }
+    )
+
+
+def _normalize_e1_answer(answer: str, normalization: dict[str, object]) -> str:
+    """Match the platform Grader's E1@2 answer normalization contract."""
+
+    normalized = unicodedata.normalize("NFKC", answer).strip()
+    if normalization.get("collapse_whitespace", True) is not False:
+        normalized = _WHITESPACE.sub(" ", normalized)
+    if normalization.get("ignore_terminal_punctuation", True) is not False:
+        normalized = _TERMINAL_PUNCTUATION.sub("", normalized).rstrip()
+    if normalization.get("ignore_case", True) is not False:
+        normalized = normalized.casefold()
+    return normalized
 
 
 def _candidate_rejection_code(

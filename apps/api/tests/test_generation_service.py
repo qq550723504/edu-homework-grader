@@ -729,6 +729,66 @@ def test_generation_records_safe_policy_schema_diagnostic_for_e1(
     assert "blue" not in str(job.attempts[0].response_summary)
 
 
+def test_generation_deduplicates_e1_answers_using_policy_normalization(session: Session) -> None:
+    teacher, revision = teacher_and_objective(session)
+    revision.allowed_question_types = ["E1"]
+    request = GenerationJobRequest(
+        curriculum_objective_revision_id=revision.id,
+        items=[
+            GenerationPlanItem(
+                question_type="E1",
+                difficulty_band="standard",
+                target_difficulty=0.5,
+            )
+        ],
+        requested_count=1,
+        idempotency_key="deduplicate-e1-normalized-answers",
+    )
+    job = create_or_get_job(session, request=request, actor=teacher)
+    candidate = (
+        valid_single_candidate(revision)
+        .candidates[0]
+        .model_copy(
+            update={
+                "question_type": "E1",
+                "policy_version": "2",
+                "prompt": "What color is the ball?",
+                "rule_json": {
+                    "accepted_answers": ["red", " Red. "],
+                    "normalization": {
+                        "unicode_form": "NFKC",
+                        "collapse_whitespace": True,
+                        "ignore_case": True,
+                        "ignore_terminal_punctuation": True,
+                    },
+                },
+                "explanation": "The ball is red.",
+            }
+        )
+    )
+
+    run_generation_job(
+        session,
+        job=job,
+        provider=CapturingProvider(
+            GeneratedCandidateEnvelope(
+                provider_name="fake", model_version="fake-v1", candidates=[candidate]
+            )
+        ),
+    )
+
+    assert job.status is GenerationJobStatus.READY_FOR_REVIEW
+    assert job.drafts[0].candidate_json["rule_json"] == {
+        "accepted_answers": ["red"],
+        "normalization": {
+            "unicode_form": "NFKC",
+            "collapse_whitespace": True,
+            "ignore_case": True,
+            "ignore_terminal_punctuation": True,
+        },
+    }
+
+
 def test_successful_attempt_records_template_audit_metadata_without_prompt_body(
     session: Session,
 ) -> None:

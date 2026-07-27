@@ -11,6 +11,8 @@ from ..settings import settings
 
 from .questions import GradeResult
 
+_MAX_SEMANTIC_SIMILARITY_REQUEST_TIMEOUT_SECONDS = 30.0
+
 
 class MathAnswerNormalizationError(ValueError):
     def __init__(self, code: str, message: str) -> None:
@@ -52,6 +54,7 @@ class HttpGraderClient:
         request_timeout_seconds: float | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
+        self._request_timeout_is_explicit = request_timeout_seconds is not None
         timeout = (
             settings.grader_request_timeout_seconds
             if request_timeout_seconds is None
@@ -134,6 +137,7 @@ class HttpGraderClient:
             "/v1/semantic-similarity",
             payload,
             operation="similarity",
+            request_timeout_seconds=self._semantic_similarity_timeout_seconds(),
         )
         data = response.json()
         if not isinstance(data, dict):
@@ -156,19 +160,32 @@ class HttpGraderClient:
             embedding=embedding,
         )
 
+    def _semantic_similarity_timeout_seconds(self) -> float:
+        if self._request_timeout_is_explicit:
+            return self.request_timeout_seconds
+        return min(
+            _MAX_SEMANTIC_SIMILARITY_REQUEST_TIMEOUT_SECONDS,
+            settings.verification_total_timeout_seconds,
+        )
+
     def _post(
         self,
         path: str,
         payload: dict[str, object],
         *,
         operation: str,
+        request_timeout_seconds: float | None = None,
     ) -> httpx.Response:
         self._validate_request(payload)
         try:
             response = httpx.post(
                 f"{self.base_url}{path}",
                 json=payload,
-                timeout=self.request_timeout_seconds,
+                timeout=(
+                    self.request_timeout_seconds
+                    if request_timeout_seconds is None
+                    else request_timeout_seconds
+                ),
             )
         except httpx.TimeoutException as error:
             raise GraderRequestTimeoutError(operation) from error
