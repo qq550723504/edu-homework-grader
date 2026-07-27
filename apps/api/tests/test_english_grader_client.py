@@ -93,7 +93,7 @@ def test_http_grader_client_posts_semantic_batch(monkeypatch: pytest.MonkeyPatch
     assert captured == {
         "url": "http://grader/v1/semantic-similarity",
         "json": {"query": "query", "comparisons": ["first", "second"]},
-        "timeout": 10,
+        "timeout": 30,
     }
 
 
