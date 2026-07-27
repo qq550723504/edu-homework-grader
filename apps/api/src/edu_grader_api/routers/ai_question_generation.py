@@ -966,8 +966,6 @@ def _job_failure_summary(job: GenerationJob) -> list[str]:
 
 
 def _job_failure_details(job: GenerationJob) -> list[dict[str, str]]:
-    if job.failure_code != "candidate_validation_failed":
-        return []
     details: list[dict[str, str]] = []
     for attempt in sorted(job.attempts, key=lambda item: item.attempt_number):
         response_summary = attempt.response_summary

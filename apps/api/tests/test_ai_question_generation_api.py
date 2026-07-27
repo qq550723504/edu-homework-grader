@@ -373,6 +373,40 @@ def test_list_jobs_exposes_safe_candidate_validation_summary(
     ]
 
 
+def test_list_jobs_exposes_safe_rule_diagnostics_for_partially_failed_job(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client, teacher, revision, idempotency_key="partial-candidate-validation-summary"
+    )
+    job = session.get(GenerationJob, UUID(str(created["id"])))
+    assert job is not None
+    attempt = job.attempts[0]
+    job.status = GenerationJobStatus.PARTIALLY_FAILED
+    job.succeeded_count = 1
+    job.failed_count = 1
+    attempt.response_summary = {
+        "candidate_count": 2,
+        "candidate_rejections": [
+            {
+                "ordinal": 2,
+                "code": "policy_rule_invalid",
+                "rule_path": "/accepted_answers",
+                "rule_keyword": "required",
+            }
+        ],
+    }
+    session.commit()
+
+    response = client.get("/v1/ai-question-generation/jobs", headers=headers)
+
+    assert response.status_code == 200
+    item = next(item for item in response.json()["items"] if item["id"] == str(job.id))
+    assert item["failure_code"] is None
+    assert item["failure_details"] == [{"path": "/accepted_answers", "keyword": "required"}]
+
+
 def test_created_job_has_initial_validation_run(
     client: TestClient, session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

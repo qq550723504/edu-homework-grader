@@ -7,6 +7,7 @@ import pytest
 
 from edu_generator.contracts import GenerationPlanItem, GenerationRequest
 from edu_generator.openai_provider import OpenAIResponsesProvider
+from edu_grader_api.services.generation import GENERATION_PROMPT_VERSION
 
 
 pytestmark = pytest.mark.skipif(
@@ -17,7 +18,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_openai_responses_provider_returns_generator_v3_representative_batch() -> None:
+def test_openai_responses_provider_returns_active_contract_representative_batch() -> None:
     provider = OpenAIResponsesProvider(
         api_key=os.environ["OPENAI_API_KEY"],
         model=os.environ["GENERATOR_OPENAI_MODEL"],
@@ -66,7 +67,7 @@ def test_openai_responses_provider_returns_generator_v3_representative_batch() -
             ],
             requested_count=4,
             policy_version="2026.07",
-            prompt_version="generator-v3",
+            prompt_version=GENERATION_PROMPT_VERSION,
             teacher_constraint=(
                 "Return one concise candidate for every requested type. Use elementary algebra "
                 "and short original English material."
