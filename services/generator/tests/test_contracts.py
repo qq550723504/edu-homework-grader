@@ -17,32 +17,39 @@ from edu_generator.contracts import (
 from edu_generator.openai_provider import OpenAIResponsesProvider
 from edu_generator.prompt_templates import (
     ALL_ACTIVE_CURRICULUM_PROFILES,
-    GENERATED_QUESTION_CANDIDATES_SCHEMA_V1,
+    GENERATED_QUESTION_CANDIDATES_SCHEMA_V2,
     PromptTemplate,
     resolve_prompt_template,
 )
 from edu_generator.providers import FakeGenerationProvider, ProviderFailure
 
 
-def test_generator_v1_template_exposes_current_generation_contract_metadata() -> None:
-    template = resolve_prompt_template("generator-v1", ["E4", "M1"])
+def test_generator_v1_is_the_only_development_prompt_contract() -> None:
+    template = resolve_prompt_template("generator-v1", ["E4", "M1", "E1"])
 
     assert template.version == "generator-v1"
-    assert template.schema_version == GENERATED_QUESTION_CANDIDATES_SCHEMA_V1
+    assert template.schema_version == GENERATED_QUESTION_CANDIDATES_SCHEMA_V2
     assert template.profile_scope == ALL_ACTIVE_CURRICULUM_PROFILES
     assert template.allowed_question_types == frozenset(
         {"M1", "M2", "E1", "E2", "E3", "E4"}
     )
-    assert template.system_instructions == (
-        "Generate de-identified candidate homework questions. "
-        "E4 must return a nonblank generated reading_material containing every E4 "
-        "evidence phrase; all other types must return reading_material null. "
-        "Return only JSON conforming to the supplied schema."
+    assert (
+        "exactly one candidate for each ordered input item"
+        in template.system_instructions
+    )
+    assert "Final answer:" in template.system_instructions
+    assert 'set policy_version to "2"' in template.system_instructions
+    assert "accepted_answers is required" in template.system_instructions
+    assert (
+        "max_score and normalization are the only additional optional top-level fields"
+        in template.system_instructions
     )
     assert len(template.fingerprint) == 64
     assert set(template.fingerprint) <= set("0123456789abcdef")
     with pytest.raises(FrozenInstanceError):
         template.version = "other"  # type: ignore[misc]
+    with pytest.raises(ValueError, match="unknown prompt template version"):
+        resolve_prompt_template("generator-v4", ["E1"])
 
 
 def test_template_fingerprint_is_stable_across_question_type_order() -> None:
@@ -52,66 +59,9 @@ def test_template_fingerprint_is_stable_across_question_type_order() -> None:
     assert first.fingerprint == second.fingerprint
 
 
-def test_generator_v2_requires_ordered_candidate_for_each_plan_item() -> None:
-    template = resolve_prompt_template("generator-v2", ["M2", "M1"])
-
-    assert template.version == "generator-v2"
-    assert template.schema_version == GENERATED_QUESTION_CANDIDATES_SCHEMA_V1
-    assert (
-        "exactly one candidate for each ordered input item"
-        in template.system_instructions
-    )
-    assert "same order" in template.system_instructions
-    assert "same question_type" in template.system_instructions
-    assert "requested target_difficulty" in template.system_instructions
-    assert (
-        template.fingerprint
-        != resolve_prompt_template("generator-v1", ["M2", "M1"]).fingerprint
-    )
-
-
 def test_template_resolver_rejects_unknown_versions() -> None:
     with pytest.raises(ValueError, match="unknown prompt template version"):
         resolve_prompt_template("generator-v5", ["M1"])
-
-
-def test_generator_v3_requires_structured_m1_m2_assertions() -> None:
-    with pytest.raises(ValueError, match="null final_answer_mathjson"):
-        GeneratedCandidate.model_validate(
-            {
-                "objective_revision_id": str(uuid4()),
-                "question_type": "M1",
-                "policy_version": "1",
-                "prompt": "What is 2 + 2?",
-                "rule_json": {"expected": 4, "tolerance": 0},
-                "explanation": "Add the two numbers. Final answer: 4",
-                "knowledge_point": "addition",
-                "difficulty": 0.1,
-                "reading_material": None,
-                "verification_assertions": {
-                    "final_answer_text": "4",
-                    "final_answer_mathjson": json.dumps(["Add", 2, 2]),
-                    "declared_max_score": 1,
-                },
-            }
-        )
-
-    template = resolve_prompt_template("generator-v3", ["M1", "M2"])
-
-    assert template.schema_version == "generated_question_candidates-v2"
-    assert "Final answer:" in template.system_instructions
-
-
-def test_generator_v4_instructs_e1_policy_v2_schema() -> None:
-    template = resolve_prompt_template("generator-v4", ["E1"])
-
-    assert template.schema_version == "generated_question_candidates-v2"
-    assert 'set policy_version to "2"' in template.system_instructions
-    assert "accepted_answers is required" in template.system_instructions
-    assert (
-        "max_score and normalization are the only additional optional top-level fields"
-        in template.system_instructions
-    )
 
 
 def test_template_resolver_rejects_question_types_outside_template_scope() -> None:
@@ -294,7 +244,7 @@ def test_openai_provider_instructs_conditional_reading_material_output(
     assert outgoing["text"]["format"]["name"] == "generated_question_candidates"
 
 
-def test_openai_provider_sends_v2_ordered_generation_plan_and_matching_instructions(
+def test_openai_provider_sends_ordered_generation_plan_and_matching_instructions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     items = [
@@ -312,14 +262,14 @@ def test_openai_provider_sends_v2_ordered_generation_plan_and_matching_instructi
 
     outgoing = _capture_openai_request(
         monkeypatch,
-        prompt_version="generator-v2",
+        prompt_version="generator-v1",
         items=items,
     )
-    template = resolve_prompt_template("generator-v2", ["M2", "M1"])
+    template = resolve_prompt_template("generator-v1", ["M2", "M1"])
     model_input = json.loads(outgoing["input"])
 
     assert outgoing["instructions"] == template.system_instructions
-    assert model_input["prompt_version"] == "generator-v2"
+    assert model_input["prompt_version"] == "generator-v1"
     assert model_input["items"] == [
         {
             "question_type": "M2",
