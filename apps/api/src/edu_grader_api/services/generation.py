@@ -46,6 +46,7 @@ from ..services.generation_governance import (
     assert_generation_pipeline_allowed,
 )
 from ..policies import validate_policy
+from .question_fingerprints import fingerprint_prompt
 
 
 class GenerationServiceError(ValueError):
@@ -59,6 +60,9 @@ _DIFFICULTY_BAND_FRACTIONS = {"foundation": 0.2, "standard": 0.5, "stretch": 0.8
 _TARGET_DIFFICULTY_TOLERANCE = 0.05
 _WHITESPACE = re.compile(r"\s+")
 _TERMINAL_PUNCTUATION = re.compile(r"[.!?。！？]+$")
+_AVOID_PROMPT_SCAN_LIMIT = 20
+_AVOID_PROMPT_LIMIT = 8
+_AVOID_PROMPT_MAX_LENGTH = 1_200
 
 
 class _GenerationPlanSourceItem(Protocol):
@@ -369,7 +373,45 @@ def _provider_request(
         policy_version=job.policy_version or "unknown",
         prompt_version=job.prompt_version or "unknown",
         teacher_constraint=teacher_constraint,
+        avoid_prompts=_recent_pending_avoid_prompts(session, job=job),
     )
+
+
+def _recent_pending_avoid_prompts(session: Session, *, job: GenerationJob) -> list[str]:
+    current_revision_candidates = session.scalars(
+        select(GeneratedQuestionDraftRevision.candidate_json)
+        .join(
+            GeneratedQuestionDraft,
+            GeneratedQuestionDraft.current_revision_id == GeneratedQuestionDraftRevision.id,
+        )
+        .join(GenerationJob, GenerationJob.id == GeneratedQuestionDraft.job_id)
+        .where(
+            GeneratedQuestionDraftRevision.generated_question_draft_id == GeneratedQuestionDraft.id,
+            GenerationJob.tenant_id == job.tenant_id,
+            GenerationJob.curriculum_objective_revision_id == job.curriculum_objective_revision_id,
+            GeneratedQuestionDraft.job_id != job.id,
+            GeneratedQuestionDraft.teacher_state == "pending_review",
+        )
+        .order_by(GeneratedQuestionDraft.created_at.desc(), GeneratedQuestionDraft.id.desc())
+        .limit(_AVOID_PROMPT_SCAN_LIMIT)
+    )
+    avoid_prompts: list[str] = []
+    seen_hashes: set[str] = set()
+    for candidate_json in current_revision_candidates:
+        prompt = candidate_json.get("prompt") if isinstance(candidate_json, dict) else None
+        if not isinstance(prompt, str):
+            continue
+        trimmed = prompt.strip()[:_AVOID_PROMPT_MAX_LENGTH]
+        if not trimmed:
+            continue
+        normalized_hash = fingerprint_prompt(trimmed).normalized_hash
+        if normalized_hash in seen_hashes:
+            continue
+        seen_hashes.add(normalized_hash)
+        avoid_prompts.append(trimmed)
+        if len(avoid_prompts) == _AVOID_PROMPT_LIMIT:
+            break
+    return avoid_prompts
 
 
 def generation_plan_item_for_ordinal(job: GenerationJob, ordinal: int) -> GenerationPlanItem:
@@ -545,6 +587,8 @@ def _request_summary(
             "fingerprint": template.fingerprint,
         },
         "requested_count": requested_count,
+        "avoid_prompt_count": len(request.avoid_prompts),
+        "avoid_prompt_max_length": _AVOID_PROMPT_MAX_LENGTH,
     }
 
 
