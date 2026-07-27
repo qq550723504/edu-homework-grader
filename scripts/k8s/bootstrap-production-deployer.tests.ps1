@@ -154,7 +154,7 @@ exit /b 0
   - apiGroups: ["apps"]
     resources: ["deployments"]
     resourceNames: ["api", "grader", "web", "languagetool"]
-    verbs: ["get", "watch", "patch"]
+    verbs: ["get", "patch"]
   - apiGroups: ["batch"]
     resources: ["cronjobs"]
     resourceNames: ["student-activation-expiry"]

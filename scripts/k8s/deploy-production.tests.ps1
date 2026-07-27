@@ -115,6 +115,32 @@ users: []
             return '{"metadata":{"name":"student-activation-expiry"},"spec":{"jobTemplate":{"spec":{"template":{"spec":{"containers":[{"name":"expire","image":"registry.example/api-cron@sha256:old-cron"}]}}}}}}'
         }
 
+        if ($joined -match '^get deployment (api|grader|web|languagetool) --output json --namespace edu-homework-grader$') {
+            $name = [string]$Arguments[2]
+            $isTarget = $global:DeployProductionTestState.ApplyCount -eq 1
+            $isRollback = $global:DeployProductionTestState.ApplyCount -ge 2
+            $deploymentReadKey = "$($global:DeployProductionTestState.ApplyCount)/$name"
+            if (-not $global:DeployProductionTestState.DeploymentReadCounts.ContainsKey($deploymentReadKey)) {
+                $global:DeployProductionTestState.DeploymentReadCounts[$deploymentReadKey] = 0
+            }
+            $global:DeployProductionTestState.DeploymentReadCounts[$deploymentReadKey]++
+            if (
+                ($isTarget -and $global:DeployProductionTestState.TargetDeploymentNeverReady) -or
+                ($isRollback -and $global:DeployProductionTestState.RollbackDeploymentNeverReady)
+            ) {
+                return ('{"metadata":{"name":"' + $name + '","generation":7},"spec":{"replicas":1},"status":{"observedGeneration":6,"updatedReplicas":0,"availableReplicas":0}}')
+            }
+            if (
+                $isTarget -and
+                $global:DeployProductionTestState.TargetDeploymentStatusMissingOnFirstRead -and
+                $name -eq 'api' -and
+                $global:DeployProductionTestState.DeploymentReadCounts[$deploymentReadKey] -eq 1
+            ) {
+                return ('{"metadata":{"name":"' + $name + '","generation":7},"spec":{"replicas":1},"status":{}}')
+            }
+            return ('{"metadata":{"name":"' + $name + '","generation":7},"spec":{"replicas":1},"status":{"observedGeneration":7,"updatedReplicas":1,"availableReplicas":1}}')
+        }
+
         if ($joined -match '^apply --server-side(?: --field-manager github-production-deployer)?(?: --force-conflicts)? --filename ') {
             $global:DeployProductionTestState.ApplyCount++
             $manifestPath = [string]$Arguments[-1]
@@ -125,11 +151,7 @@ users: []
         }
 
         if ($joined -match '^rollout status deployment/') {
-            if ($global:DeployProductionTestState.RolloutFailuresRemaining -gt 0) {
-                $global:DeployProductionTestState.RolloutFailuresRemaining--
-                throw 'rollout timed out'
-            }
-            return 'rollout complete'
+            throw 'forbidden: User system:serviceaccount:edu-homework-grader:github-production-deployer cannot list resource "deployments"'
         }
 
         if ($joined -eq 'get endpoints api --output json --namespace edu-homework-grader') {
@@ -209,7 +231,10 @@ BeforeEach {
         AppliedManifests         = [System.Collections.Generic.List[string]]::new()
         PublicHealthCalls        = [System.Collections.Generic.List[string]]::new()
         ApplyCount               = 0
-        RolloutFailuresRemaining = 0
+        DeploymentReadCounts     = @{}
+        TargetDeploymentNeverReady = $false
+        RollbackDeploymentNeverReady = $false
+        TargetDeploymentStatusMissingOnFirstRead = $false
         EndpointReady            = $true
     }
 }
@@ -235,8 +260,10 @@ BeforeEach {
             Should -Contain "edit set image ghcr.io/qq550723504/edu-homework-grader-languagetool=ghcr.io/qq550723504/edu-homework-grader-languagetool:$validSha"
         $global:DeployProductionTestState.KubectlCalls |
             Should -Contain 'get endpoints api --output json --namespace edu-homework-grader'
-        @($global:DeployProductionTestState.KubectlCalls -match '^rollout status deployment/').Count |
+        @($global:DeployProductionTestState.KubectlCalls -match '^get deployment (api|grader|web|languagetool) --output json --namespace edu-homework-grader$').Count |
             Should -Be 4
+        $global:DeployProductionTestState.KubectlCalls |
+            Should -Not -Match '^rollout status deployment/'
 
         $resources = @(
             Get-ManifestResources `
@@ -273,10 +300,22 @@ BeforeEach {
         }
     }
 
-    It 'restores the exact captured images after rollout failure' {
-        $global:DeployProductionTestState.RolloutFailuresRemaining = 1
+    It 'treats omitted deployment status fields as not ready until the named deployment becomes ready' {
+        $global:DeployProductionTestState.TargetDeploymentStatusMissingOnFirstRead = $true
 
-        { & $scriptPath -ImageSha $validSha -SkipPublicHealthCheck } |
+        & $scriptPath -ImageSha $validSha -SkipPublicHealthCheck -RolloutTimeoutSeconds 6
+
+        $global:DeployProductionTestState.ApplyCount | Should -Be 1
+        @($global:DeployProductionTestState.KubectlCalls -match '^get deployment api --output json --namespace edu-homework-grader$').Count |
+            Should -Be 2
+        $global:DeployProductionTestState.KubectlCalls |
+            Should -Not -Match '^rollout status deployment/'
+    }
+
+    It 'restores the exact captured images after rollout failure' {
+        $global:DeployProductionTestState.TargetDeploymentNeverReady = $true
+
+        { & $scriptPath -ImageSha $validSha -SkipPublicHealthCheck -RolloutTimeoutSeconds 1 } |
             Should -Throw '*rollback succeeded*'
 
         $global:DeployProductionTestState.ApplyCount | Should -Be 2
@@ -311,9 +350,10 @@ BeforeEach {
     }
 
     It 'reports a rollback failure separately from the release failure' {
-        $global:DeployProductionTestState.RolloutFailuresRemaining = 2
+        $global:DeployProductionTestState.TargetDeploymentNeverReady = $true
+        $global:DeployProductionTestState.RollbackDeploymentNeverReady = $true
 
-        { & $scriptPath -ImageSha $validSha -SkipPublicHealthCheck } |
+        { & $scriptPath -ImageSha $validSha -SkipPublicHealthCheck -RolloutTimeoutSeconds 1 } |
             Should -Throw '*rollback failed*'
 
         $global:DeployProductionTestState.ApplyCount | Should -Be 2
