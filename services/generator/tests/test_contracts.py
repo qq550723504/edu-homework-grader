@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import openai
 import pytest
+from pydantic import ValidationError
 
 import edu_generator.prompt_templates as prompt_templates
 from edu_generator.contracts import (
@@ -62,6 +63,44 @@ def test_template_fingerprint_is_stable_across_question_type_order() -> None:
 def test_template_resolver_rejects_unknown_versions() -> None:
     with pytest.raises(ValueError, match="unknown prompt template version"):
         resolve_prompt_template("generator-v5", ["M1"])
+
+
+def test_generation_request_rejects_more_than_eight_or_overlong_avoid_prompts() -> None:
+    base = {
+        "objective_revision_id": uuid4(),
+        "objective_text": "Use whole numbers under 100.",
+        "difficulty_min": 0,
+        "difficulty_max": 1,
+        "grade": "Grade 5",
+        "subject": "mathematics",
+        "items": [
+            {
+                "question_type": "M1",
+                "difficulty_band": "standard",
+                "target_difficulty": 0.5,
+            }
+        ],
+        "requested_count": 1,
+        "policy_version": "1",
+        "prompt_version": "generator-v3",
+    }
+
+    assert GenerationRequest(**base).avoid_prompts == []
+    with pytest.raises(ValidationError):
+        GenerationRequest(**base, avoid_prompts=["x"] * 9)
+    with pytest.raises(ValidationError):
+        GenerationRequest(**base, avoid_prompts=["x" * 1201])
+
+
+def test_generator_v3_requires_materially_different_context_and_reasoning() -> None:
+    template = resolve_prompt_template("generator-v3", ["M1"])
+
+    assert template.version == "generator-v3"
+    assert "avoid_prompts" in template.system_instructions
+    assert (
+        "not merely replace names, objects, or one number"
+        in template.system_instructions
+    )
 
 
 def test_template_resolver_rejects_question_types_outside_template_scope() -> None:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from edu_grader_processor_policy import (
@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 QuestionType = Literal["M1", "M2", "E1", "E2", "E3", "E4"]
 DifficultyBand = Literal["foundation", "standard", "stretch"]
+AvoidPrompt = Annotated[str, Field(min_length=1, max_length=1_200)]
 
 
 class ProviderFailure(RuntimeError):
@@ -48,6 +49,7 @@ class GenerationRequest(BaseModel):
     policy_version: str = Field(min_length=1, max_length=100)
     prompt_version: str = Field(min_length=1, max_length=100)
     teacher_constraint: str | None = Field(default=None, max_length=1_000)
+    avoid_prompts: list[AvoidPrompt] = Field(default_factory=list, max_length=8)
 
     @model_validator(mode="after")
     def _validate_item_count(self) -> "GenerationRequest":
