@@ -1957,16 +1957,30 @@ def _fingerprint_match_category(
     if published_match is not None:
         return "published_question"
 
-    for candidate in _batch_current_revision_candidates(session, draft=draft):
-        prompt = candidate.get("prompt")
-        if not isinstance(prompt, str):
-            raise ValueError("batch candidate prompt is invalid")
-        fingerprints = fingerprint_prompt(prompt)
-        peer_fingerprint = (
-            fingerprints.exact_hash if column == "exact" else fingerprints.normalized_hash
-        )
-        if peer_fingerprint == fingerprint:
-            return "batch_candidate"
+    for category, candidates in (
+        (
+            "batch_candidate",
+            _batch_current_revision_candidates(session, draft=draft),
+        ),
+        (
+            "pending_candidate",
+            _pending_current_revision_candidates(
+                session,
+                draft=draft,
+                tenant_id=tenant_id,
+            ),
+        ),
+    ):
+        for candidate in candidates:
+            prompt = candidate.get("prompt")
+            if not isinstance(prompt, str):
+                raise ValueError(f"{category} prompt is invalid")
+            fingerprints = fingerprint_prompt(prompt)
+            peer_fingerprint = (
+                fingerprints.exact_hash if column == "exact" else fingerprints.normalized_hash
+            )
+            if peer_fingerprint == fingerprint:
+                return category
     return None
 
 

@@ -67,7 +67,11 @@ _GENERATOR_V1 = PromptTemplate(
         "Each candidate must differ materially from every avoid_prompts item in at least two of: "
         "context or objects, key values or conditions, and the cognitive action or solution structure. "
         "Do not merely replace names, objects, or one number. "
-        "Candidates in the same response must follow the same diversity rule. "
+        "Each candidate must differ materially from every other candidate in the same "
+        "response in at least two of: context or objects, key values or conditions, "
+        "and the cognitive action or solution structure. "
+        "Candidates with the same question_type must differ in both context or objects "
+        "and the cognitive action or solution structure. "
         "Return only JSON conforming to the supplied schema."
     ),
     schema_version=GENERATED_QUESTION_CANDIDATES_SCHEMA_V2,

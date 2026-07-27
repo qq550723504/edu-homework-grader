@@ -124,6 +124,17 @@ def test_generator_v3_requires_materially_different_context_and_reasoning() -> N
         "not merely replace names, objects, or one number"
         in template.system_instructions
     )
+    assert (
+        "Each candidate must differ materially from every other candidate in the same "
+        "response in at least two of: context or objects, key values or conditions, "
+        "and the cognitive action or solution structure."
+        in template.system_instructions
+    )
+    assert (
+        "Candidates with the same question_type must differ in both context or objects "
+        "and the cognitive action or solution structure."
+        in template.system_instructions
+    )
 
 
 def test_template_resolver_rejects_question_types_outside_template_scope() -> None:
@@ -506,6 +517,59 @@ def test_openai_provider_rejects_pii_in_model_copy_avoid_prompts_before_sdk(
         nonlocal provider_called
         provider_called = True
         raise AssertionError("de-identification validation must precede SDK calls")
+
+    monkeypatch.setattr(openai, "OpenAI", unexpected_provider_client)
+
+    with pytest.raises(ProviderFailure) as exc_info:
+        provider.generate(request)
+
+    assert exc_info.value.code == "invalid_generation_request"
+    assert not provider_called
+
+
+@pytest.mark.parametrize(
+    "avoid_prompts",
+    [
+        ["x"] * 9,
+        ["x" * 1_201],
+        [123],
+    ],
+    ids=["too-many", "item-too-long", "invalid-item-type"],
+)
+def test_openai_provider_rejects_model_copy_invalid_avoid_prompts_before_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+    avoid_prompts: list[object],
+) -> None:
+    request = GenerationRequest(
+        objective_revision_id=uuid4(),
+        objective_text="Use whole numbers under 100.",
+        difficulty_min=0,
+        difficulty_max=1,
+        grade="Grade 5",
+        subject="mathematics",
+        items=[
+            GenerationPlanItem(
+                question_type="M1",
+                difficulty_band="standard",
+                target_difficulty=0.5,
+            )
+        ],
+        requested_count=1,
+        policy_version="1",
+        prompt_version="generator-v1",
+    ).model_copy(update={"avoid_prompts": avoid_prompts})
+    provider = OpenAIResponsesProvider(
+        api_key="test-key",
+        model="gpt-test-2025-08-07",
+        base_url="https://api.openai.com",
+        allowed_hosts=frozenset({"api.openai.com"}),
+    )
+    provider_called = False
+
+    def unexpected_provider_client(**_kwargs: object) -> SimpleNamespace:
+        nonlocal provider_called
+        provider_called = True
+        raise AssertionError("request validation must precede SDK calls")
 
     monkeypatch.setattr(openai, "OpenAI", unexpected_provider_client)
 

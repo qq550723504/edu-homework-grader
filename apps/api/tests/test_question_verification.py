@@ -1082,6 +1082,52 @@ def test_normalized_batch_duplicate_is_blocked_without_source_text(session: Sess
     assert grader.semantic_requests == []
 
 
+def test_exact_cross_job_pending_duplicate_is_blocked_before_semantic_check(
+    session: Session,
+) -> None:
+    prompt = "Calculate two plus two."
+    draft = generation_draft(session, candidate_json=valid_m1_candidate(prompt))
+    add_cross_job_draft(session, draft=draft, prompt=prompt)
+    grader = SemanticGrader([[0.1]])
+
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
+
+    finding = finding_by_code(run, "duplicate_exact_prompt")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {
+        "comparison": "pending_candidate",
+        "method": "exact_hash",
+    }
+    assert run.feature_summary_json["comparison_counts"]["pending_candidate"] == 1
+    assert grader.semantic_requests == []
+
+
+def test_normalized_cross_job_pending_duplicate_is_blocked_before_semantic_check(
+    session: Session,
+) -> None:
+    draft = generation_draft(
+        session,
+        candidate_json=valid_m1_candidate("Calculate two plus two."),
+    )
+    add_cross_job_draft(
+        session,
+        draft=draft,
+        prompt="  ＣＡＬＣＵＬＡＴＥ   TWO PLUS TWO.  ",
+    )
+    grader = SemanticGrader([[0.1]])
+
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
+
+    finding = finding_by_code(run, "duplicate_normalized_prompt")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {
+        "comparison": "pending_candidate",
+        "method": "normalized_hash",
+    }
+    assert run.feature_summary_json["comparison_counts"]["pending_candidate"] == 1
+    assert grader.semantic_requests == []
+
+
 def test_semantic_published_question_is_blocked_without_raw_comparator(
     session: Session,
 ) -> None:

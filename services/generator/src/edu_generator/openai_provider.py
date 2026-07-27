@@ -69,10 +69,12 @@ class OpenAIResponsesProvider:
                 "Prompt template is not available for this request",
             ) from exc
         try:
-            request.assert_deidentified_avoid_prompts()
-        except ValueError as exc:
+            request = GenerationRequest.model_validate(
+                request.model_dump(mode="python", warnings="none")
+            )
+        except (ValidationError, ValueError) as exc:
             raise ProviderFailure(
-                "invalid_generation_request", "generation request must be de-identified"
+                "invalid_generation_request", "generation request failed validation"
             ) from exc
         request_input = json.dumps(request.model_dump(mode="json"), ensure_ascii=True)
         try:
