@@ -1,6 +1,7 @@
 import importlib.util
 import json
 from copy import deepcopy
+from datetime import timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -788,6 +789,69 @@ def add_batch_draft(
     return comparison
 
 
+def add_cross_job_draft(
+    session: Session,
+    *,
+    draft: GeneratedQuestionDraft,
+    prompt: str,
+    tenant_id: object | None = None,
+    objective_revision_id: object | None = None,
+    teacher_state: str = "pending_review",
+    created_at_offset: int = 0,
+) -> GeneratedQuestionDraft:
+    source_job = session.get(GenerationJob, draft.job_id)
+    assert source_job is not None
+    job = GenerationJob(
+        tenant_id=tenant_id or source_job.tenant_id,
+        teacher_user_id=source_job.teacher_user_id,
+        curriculum_profile_id=source_job.curriculum_profile_id,
+        curriculum_objective_revision_id=(
+            objective_revision_id or source_job.curriculum_objective_revision_id
+        ),
+        grade=source_job.grade,
+        subject=source_job.subject,
+        distribution_json=source_job.distribution_json,
+        idempotency_key=str(uuid4()),
+        status=GenerationJobStatus.READY_FOR_REVIEW,
+        requested_count=1,
+        prompt_version=source_job.prompt_version,
+    )
+    session.add(job)
+    session.flush()
+    attempt = GenerationAttempt(
+        job_id=job.id,
+        attempt_number=1,
+        provider_name="fake",
+        model_version="fake-v1",
+        prompt_version=source_job.prompt_version or "generator-v1",
+        status="succeeded",
+    )
+    session.add(attempt)
+    session.flush()
+    comparison = GeneratedQuestionDraft(
+        job_id=job.id,
+        generation_attempt_id=attempt.id,
+        ordinal=1,
+        content_hash=f"{job.id.int:064x}"[-64:],
+        candidate_json={**draft.candidate_json, "prompt": prompt},
+        teacher_state=teacher_state,
+        created_at=draft.created_at + timedelta(seconds=created_at_offset),
+    )
+    session.add(comparison)
+    session.flush()
+    session.add(
+        GeneratedQuestionDraftRevision(
+            id=comparison.current_revision_id,
+            generated_question_draft_id=comparison.id,
+            revision_number=1,
+            candidate_json=comparison.candidate_json,
+            content_hash=comparison.content_hash,
+        )
+    )
+    session.flush()
+    return comparison
+
+
 def add_published_question(
     session: Session,
     *,
@@ -1018,6 +1082,52 @@ def test_normalized_batch_duplicate_is_blocked_without_source_text(session: Sess
     assert grader.semantic_requests == []
 
 
+def test_exact_cross_job_pending_duplicate_is_blocked_before_semantic_check(
+    session: Session,
+) -> None:
+    prompt = "Calculate two plus two."
+    draft = generation_draft(session, candidate_json=valid_m1_candidate(prompt))
+    add_cross_job_draft(session, draft=draft, prompt=prompt)
+    grader = SemanticGrader([[0.1]])
+
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
+
+    finding = finding_by_code(run, "duplicate_exact_prompt")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {
+        "comparison": "pending_candidate",
+        "method": "exact_hash",
+    }
+    assert run.feature_summary_json["comparison_counts"]["pending_candidate"] == 1
+    assert grader.semantic_requests == []
+
+
+def test_normalized_cross_job_pending_duplicate_is_blocked_before_semantic_check(
+    session: Session,
+) -> None:
+    draft = generation_draft(
+        session,
+        candidate_json=valid_m1_candidate("Calculate two plus two."),
+    )
+    add_cross_job_draft(
+        session,
+        draft=draft,
+        prompt="  ＣＡＬＣＵＬＡＴＥ   TWO PLUS TWO.  ",
+    )
+    grader = SemanticGrader([[0.1]])
+
+    run = verify_current_revision(session, draft=draft, grader_client=grader)
+
+    finding = finding_by_code(run, "duplicate_normalized_prompt")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {
+        "comparison": "pending_candidate",
+        "method": "normalized_hash",
+    }
+    assert run.feature_summary_json["comparison_counts"]["pending_candidate"] == 1
+    assert grader.semantic_requests == []
+
+
 def test_semantic_published_question_is_blocked_without_raw_comparator(
     session: Session,
 ) -> None:
@@ -1054,7 +1164,11 @@ def test_semantic_published_question_is_blocked_without_raw_comparator(
             "normalized_hash": fingerprint_prompt("Calculate two plus two.").normalized_hash,
         },
         "similarity_threshold": 0.92,
-        "comparison_counts": {"published_question": 1, "batch_candidate": 0},
+        "comparison_counts": {
+            "published_question": 1,
+            "batch_candidate": 0,
+            "pending_candidate": 0,
+        },
         "embedding_dependency": {
             "id": "local-model",
             "revision": "test-revision",
@@ -1092,6 +1206,102 @@ def test_semantic_same_batch_candidate_is_blocked(session: Session) -> None:
     }
 
 
+def test_semantic_cross_job_pending_candidate_is_blocked_without_source_text(
+    session: Session,
+) -> None:
+    draft = generation_draft(session, candidate_json=valid_m1_candidate("Calculate two plus two."))
+    pending_prompt = "What is the sum of two and two?"
+    add_cross_job_draft(session, draft=draft, prompt=pending_prompt)
+
+    run = verify_current_revision(session, draft=draft, grader_client=SemanticGrader([[0.96]]))
+
+    finding = finding_by_code(run, "duplicate_semantic_near_match")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {
+        "comparison": "pending_candidate",
+        "method": "semantic",
+        "threshold_band": "at_or_above",
+    }
+    assert pending_prompt not in str(finding.evidence_json)
+    assert run.feature_summary_json["comparison_counts"] == {
+        "published_question": 0,
+        "batch_candidate": 0,
+        "pending_candidate": 1,
+    }
+
+
+def test_pending_comparators_use_current_revisions_and_exclude_other_scopes(
+    session: Session,
+) -> None:
+    draft = generation_draft(session, candidate_json=valid_m1_candidate("Calculate two plus two."))
+    included = add_cross_job_draft(session, draft=draft, prompt="Current revision is included.")
+    create_edited_revision(session, draft=included, prompt="Edited current revision is included.")
+    add_batch_draft(session, draft=draft, prompt="Same-job candidate is excluded.", ordinal=2)
+    add_cross_job_draft(
+        session,
+        draft=draft,
+        prompt="Rejected candidate is excluded.",
+        teacher_state="rejected",
+    )
+    other_tenant_draft = generation_draft(session)
+    other_objective_draft = generation_draft(session)
+    add_cross_job_draft(
+        session,
+        draft=draft,
+        prompt="Other tenant candidate is excluded.",
+        tenant_id=other_tenant_draft.job.tenant_id,
+    )
+    add_cross_job_draft(
+        session,
+        draft=draft,
+        prompt="Other objective candidate is excluded.",
+        objective_revision_id=other_objective_draft.job.curriculum_objective_revision_id,
+    )
+
+    comparators = verification._semantic_comparators(
+        session,
+        draft=draft,
+        tenant_id=draft.job.tenant_id,
+    )
+
+    assert [(comparator.category, comparator.prompt) for comparator in comparators] == [
+        ("batch_candidate", "Same-job candidate is excluded."),
+        ("pending_candidate", "Edited current revision is included."),
+    ]
+
+
+def test_pending_comparators_limit_to_twenty_newest_candidates(session: Session) -> None:
+    draft = generation_draft(session, candidate_json=valid_m1_candidate("Calculate two plus two."))
+    for index in range(21):
+        add_cross_job_draft(
+            session,
+            draft=draft,
+            prompt=f"Pending comparison {index}",
+            created_at_offset=index + 1,
+        )
+
+    comparators = verification._semantic_comparators(
+        session,
+        draft=draft,
+        tenant_id=draft.job.tenant_id,
+    )
+
+    assert [comparator.prompt for comparator in comparators] == [
+        f"Pending comparison {index}" for index in range(20, 0, -1)
+    ]
+
+
+def test_pending_semantic_comparator_failure_fails_closed(session: Session) -> None:
+    draft = generation_draft(session, candidate_json=valid_m1_candidate("Calculate two plus two."))
+    add_cross_job_draft(session, draft=draft, prompt="What is the sum of two and two?")
+
+    run = verify_current_revision(session, draft=draft, grader_client=MissingSemanticGrader())
+
+    finding = finding_by_code(run, "duplicate_semantic_check_unavailable")
+    assert run.status is ValidationRunStatus.BLOCKED
+    assert finding.evidence_json == {"category": "similarity_unavailable"}
+
+
 def test_cross_tenant_published_questions_are_never_queried(session: Session) -> None:
     draft = generation_draft(session, candidate_json=valid_m1_candidate("Calculate two plus two."))
     add_published_question(session, draft=draft, prompt="What is the sum of two and two?")
@@ -1120,6 +1330,7 @@ def test_cross_tenant_published_questions_are_never_queried(session: Session) ->
     assert run.feature_summary_json["comparison_counts"] == {
         "published_question": 1,
         "batch_candidate": 0,
+        "pending_candidate": 0,
     }
 
 
@@ -1166,7 +1377,11 @@ def test_duplicate_feature_summary_uses_the_gate_snapshot(
             "normalized_hash": fingerprint_prompt("Calculate two plus two.").normalized_hash,
         },
         "similarity_threshold": 0.92,
-        "comparison_counts": {"published_question": 1, "batch_candidate": 0},
+        "comparison_counts": {
+            "published_question": 1,
+            "batch_candidate": 0,
+            "pending_candidate": 0,
+        },
         "embedding_dependency": {
             "id": "local-model",
             "revision": "test-revision",
@@ -1212,6 +1427,7 @@ def test_normalized_comparators_are_deduplicated_across_sources_with_published_p
     assert run.feature_summary_json["comparison_counts"] == {
         "published_question": 1,
         "batch_candidate": 0,
+        "pending_candidate": 0,
     }
 
 
@@ -1239,6 +1455,7 @@ def test_semantic_comparators_are_deduplicated_before_chunking(session: Session)
     assert run.feature_summary_json["comparison_counts"] == {
         "published_question": 0,
         "batch_candidate": 129,
+        "pending_candidate": 0,
     }
 
 

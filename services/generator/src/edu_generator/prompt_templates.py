@@ -62,6 +62,16 @@ _GENERATOR_V1 = PromptTemplate(
         "ignore_case, and ignore_terminal_punctuation. "
         "E4 must return a nonblank generated reading_material containing every E4 "
         "evidence phrase; all other types must return reading_material null. "
+        "The request may include avoid_prompts containing recent de-identified questions. "
+        "Use them only as diversity boundaries and never copy or paraphrase them. "
+        "Each candidate must differ materially from every avoid_prompts item in at least two of: "
+        "context or objects, key values or conditions, and the cognitive action or solution structure. "
+        "Do not merely replace names, objects, or one number. "
+        "Each candidate must differ materially from every other candidate in the same "
+        "response in at least two of: context or objects, key values or conditions, "
+        "and the cognitive action or solution structure. "
+        "Candidates with the same question_type must differ in both context or objects "
+        "and the cognitive action or solution structure. "
         "Return only JSON conforming to the supplied schema."
     ),
     schema_version=GENERATED_QUESTION_CANDIDATES_SCHEMA_V2,

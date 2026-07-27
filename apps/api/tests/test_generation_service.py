@@ -1,12 +1,9 @@
+from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
 from uuid import UUID, uuid4
 
 import pytest
-from pydantic import ValidationError
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session
-
-import edu_generator.prompt_templates as prompt_templates
+from edu_generator import prompt_templates
 from edu_generator.contracts import (
     GeneratedCandidateEnvelope,
     GenerationPlanItem,
@@ -15,6 +12,11 @@ from edu_generator.contracts import (
 )
 from edu_generator.prompt_templates import PromptTemplate, resolve_prompt_template
 from edu_generator.providers import FakeGenerationProvider
+from pydantic import ValidationError
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+
+import edu_grader_api.services.generation as generation_service
 from edu_grader_api.models import (
     Base,
     CurriculumActivityType,
@@ -25,6 +27,9 @@ from edu_grader_api.models import (
     CurriculumProfileStatus,
     CurriculumRevisionStatus,
     CurriculumSourceRecord,
+    GeneratedQuestionDraft,
+    GeneratedQuestionDraftRevision,
+    GenerationAttempt,
     GenerationControlState,
     GenerationGovernanceEntry,
     GenerationGovernanceTargetType,
@@ -35,16 +40,18 @@ from edu_grader_api.models import (
     User,
     utc_now,
 )
+from edu_grader_api.policies import validate_policy
 from edu_grader_api.services.generation import (
     GENERATION_PROMPT_VERSION,
     GenerationJobRequest,
     GenerationServiceError,
     _content_hash,
+    _provider_request,
     _request_digest,
+    _request_summary,
     create_or_get_job,
     run_generation_job,
 )
-from edu_grader_api.policies import validate_policy
 
 
 @pytest.fixture
@@ -955,3 +962,242 @@ def test_generation_pipeline_blocks_provider_and_model_for_governed_entries(
     assert job.status is GenerationJobStatus.FAILED
     assert job.failure_code in {"provider_control_blocked", "model_control_blocked"}
     assert provider.calls == 0
+
+
+def _generation_job_for_diversity_test(
+    session: Session,
+    *,
+    teacher: User,
+    revision: CurriculumObjectiveRevision,
+    idempotency_key: str,
+) -> GenerationJob:
+    request = generation_request(revision).model_copy(update={"idempotency_key": idempotency_key})
+    return create_or_get_job(session, request=request, actor=teacher)
+
+
+def _add_draft_revision_for_diversity_test(
+    session: Session,
+    *,
+    job: GenerationJob,
+    ordinal: int,
+    current_prompt: object,
+    created_at: datetime,
+    teacher_state: str = "pending_review",
+) -> GeneratedQuestionDraft:
+    attempt = GenerationAttempt(
+        job=job,
+        attempt_number=ordinal,
+        provider_name="test",
+        model_version="test-v1",
+        prompt_version=GENERATION_PROMPT_VERSION,
+        status="succeeded",
+    )
+    draft = GeneratedQuestionDraft(
+        job=job,
+        generation_attempt=attempt,
+        ordinal=ordinal,
+        content_hash=f"draft-{job.id}-{ordinal}",
+        candidate_json={"prompt": "stale draft prompt"},
+        teacher_state=teacher_state,
+        created_at=created_at,
+    )
+    session.add_all([attempt, draft])
+    session.flush()
+    session.add(
+        GeneratedQuestionDraftRevision(
+            id=draft.current_revision_id,
+            generated_question_draft_id=draft.id,
+            revision_number=1,
+            candidate_json={"prompt": current_prompt},
+            content_hash=f"revision-{job.id}-{ordinal}",
+            created_at=created_at,
+        )
+    )
+    session.flush()
+    return draft
+
+
+def test_recent_pending_avoid_prompts_uses_only_matching_current_pending_revisions(
+    session: Session,
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    job = _generation_job_for_diversity_test(
+        session, teacher=teacher, revision=revision, idempotency_key="diversity-current"
+    )
+    qualifying_job = _generation_job_for_diversity_test(
+        session, teacher=teacher, revision=revision, idempotency_key="diversity-qualifying"
+    )
+    now = datetime.now(UTC)
+    _add_draft_revision_for_diversity_test(
+        session,
+        job=qualifying_job,
+        ordinal=1,
+        current_prompt="  Use the current edited prompt.  ",
+        created_at=now,
+    )
+    _add_draft_revision_for_diversity_test(
+        session,
+        job=qualifying_job,
+        ordinal=2,
+        current_prompt="Rejected prompt",
+        teacher_state="rejected",
+        created_at=now + timedelta(seconds=1),
+    )
+    _add_draft_revision_for_diversity_test(
+        session,
+        job=job,
+        ordinal=1,
+        current_prompt="Current job prompt",
+        created_at=now + timedelta(seconds=2),
+    )
+
+    other_tenant = Tenant(slug="other", name="Other")
+    other_teacher = User(
+        tenant=other_tenant,
+        role=Role.TEACHER,
+        oidc_issuer="https://issuer.example.test",
+        oidc_subject="other-teacher",
+        display_name="Other Teacher",
+        work_email="other@example.test",
+    )
+    session.add(other_teacher)
+    session.flush()
+    other_tenant_job = _generation_job_for_diversity_test(
+        session,
+        teacher=other_teacher,
+        revision=revision,
+        idempotency_key="diversity-other-tenant",
+    )
+    _add_draft_revision_for_diversity_test(
+        session,
+        job=other_tenant_job,
+        ordinal=1,
+        current_prompt="Other tenant prompt",
+        created_at=now + timedelta(seconds=3),
+    )
+    other_objective = CurriculumObjective(
+        profile=revision.objective.profile,
+        grade_mapping=revision.objective.grade_mapping,
+        code="MATH-G5-002",
+        subject="mathematics",
+        domain="number",
+        status=CurriculumProfileStatus.ACTIVE,
+    )
+    other_revision = CurriculumObjectiveRevision(
+        objective=other_objective,
+        revision_number=1,
+        text="Use whole numbers over 100.",
+        source_locator="section 2",
+        allowed_question_types=["M1"],
+        difficulty_min=0,
+        difficulty_max=1,
+        activity_type=CurriculumActivityType.SCORED_QUESTION,
+        status=CurriculumRevisionStatus.ACTIVE,
+    )
+    session.add(other_revision)
+    session.flush()
+    other_objective_job = _generation_job_for_diversity_test(
+        session,
+        teacher=teacher,
+        revision=other_revision,
+        idempotency_key="diversity-other-objective",
+    )
+    _add_draft_revision_for_diversity_test(
+        session,
+        job=other_objective_job,
+        ordinal=1,
+        current_prompt="Other objective prompt",
+        created_at=now + timedelta(seconds=4),
+    )
+
+    assert generation_service._recent_pending_avoid_prompts(session, job=job) == [
+        "Use the current edited prompt."
+    ]
+
+
+def test_recent_pending_avoid_prompts_bounds_dedupes_and_summary_stays_private(
+    session: Session,
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    job = _generation_job_for_diversity_test(
+        session, teacher=teacher, revision=revision, idempotency_key="diversity-request"
+    )
+    reference_job = _generation_job_for_diversity_test(
+        session, teacher=teacher, revision=revision, idempotency_key="diversity-references"
+    )
+    now = datetime.now(UTC)
+    for ordinal in range(1, 22):
+        prompt: object = f"Prompt {ordinal}"
+        if ordinal == 21:
+            prompt = "Oldest prompt outside scan"
+        elif ordinal == 5:
+            prompt = " " * 3
+        elif ordinal == 4:
+            prompt = 99
+        elif ordinal == 3:
+            prompt = "  prompt 2  "
+        elif ordinal == 1:
+            prompt = "x" * 1_205
+        _add_draft_revision_for_diversity_test(
+            session,
+            job=reference_job,
+            ordinal=ordinal,
+            current_prompt=prompt,
+            created_at=now + timedelta(seconds=22 - ordinal),
+        )
+
+    avoid_prompts = generation_service._recent_pending_avoid_prompts(session, job=job)
+
+    assert avoid_prompts == [
+        "x" * 1_200,
+        "Prompt 2",
+        "Prompt 6",
+        "Prompt 7",
+        "Prompt 8",
+        "Prompt 9",
+        "Prompt 10",
+        "Prompt 11",
+    ]
+    assert "Oldest prompt outside scan" not in avoid_prompts
+
+    request = _provider_request(session, job, teacher_constraint=None)
+    template = resolve_prompt_template(
+        request.prompt_version, [item.question_type for item in request.items]
+    )
+    summary = _request_summary(request, requested_count=job.requested_count, template=template)
+
+    assert request.avoid_prompts == avoid_prompts
+    assert summary["avoid_prompt_count"] == 8
+    assert summary["avoid_prompt_max_length"] == 1_200
+    serialized_summary = str(summary)
+    assert "Prompt 2" not in serialized_summary
+    assert "x" * 20 not in serialized_summary
+
+
+def test_recent_pending_avoid_prompts_skips_stored_pii(session: Session) -> None:
+    teacher, revision = teacher_and_objective(session)
+    job = _generation_job_for_diversity_test(
+        session, teacher=teacher, revision=revision, idempotency_key="diversity-pii-request"
+    )
+    reference_job = _generation_job_for_diversity_test(
+        session, teacher=teacher, revision=revision, idempotency_key="diversity-pii-reference"
+    )
+    now = datetime.now(UTC)
+    _add_draft_revision_for_diversity_test(
+        session,
+        job=reference_job,
+        ordinal=1,
+        current_prompt="Call 13800138000 before solving.",
+        created_at=now,
+    )
+    _add_draft_revision_for_diversity_test(
+        session,
+        job=reference_job,
+        ordinal=2,
+        current_prompt="Use a number line to compare values.",
+        created_at=now - timedelta(seconds=1),
+    )
+
+    assert generation_service._recent_pending_avoid_prompts(session, job=job) == [
+        "Use a number line to compare values."
+    ]

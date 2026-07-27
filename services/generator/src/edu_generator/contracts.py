@@ -1,17 +1,19 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from edu_grader_processor_policy import (
     ProcessorPolicyError,
     assert_deidentified_payload,
+    assert_deidentified_text,
 )
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 
 QuestionType = Literal["M1", "M2", "E1", "E2", "E3", "E4"]
 DifficultyBand = Literal["foundation", "standard", "stretch"]
+AvoidPrompt = Annotated[str, Field(min_length=1, max_length=1_200)]
 
 
 class ProviderFailure(RuntimeError):
@@ -48,12 +50,27 @@ class GenerationRequest(BaseModel):
     policy_version: str = Field(min_length=1, max_length=100)
     prompt_version: str = Field(min_length=1, max_length=100)
     teacher_constraint: str | None = Field(default=None, max_length=1_000)
+    avoid_prompts: list[AvoidPrompt] = Field(default_factory=list, max_length=8)
 
     @model_validator(mode="after")
     def _validate_item_count(self) -> "GenerationRequest":
         if len(self.items) != self.requested_count:
             raise ValueError("generation plan item count must equal requested_count")
         return self
+
+    @model_validator(mode="after")
+    def _validate_avoid_prompts_are_deidentified(self) -> "GenerationRequest":
+        self.assert_deidentified_avoid_prompts()
+        return self
+
+    def assert_deidentified_avoid_prompts(self) -> None:
+        """Recheck free-text diversity context before an external model send."""
+
+        try:
+            for avoid_prompt in self.avoid_prompts:
+                assert_deidentified_text(avoid_prompt)
+        except ProcessorPolicyError as exc:
+            raise ValueError("generation request must be de-identified") from exc
 
     def model_post_init(self, __context: object) -> None:
         try:

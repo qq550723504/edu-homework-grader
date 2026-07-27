@@ -69,6 +69,15 @@ class OpenAIResponsesProvider:
                 "Prompt template is not available for this request",
             ) from exc
         try:
+            request = GenerationRequest.model_validate(
+                request.model_dump(mode="python", warnings="none")
+            )
+        except (ValidationError, ValueError) as exc:
+            raise ProviderFailure(
+                "invalid_generation_request", "generation request failed validation"
+            ) from exc
+        request_input = json.dumps(request.model_dump(mode="json"), ensure_ascii=True)
+        try:
             from openai import OpenAI
             from openai.lib._pydantic import to_strict_json_schema
         except ImportError as exc:
@@ -89,7 +98,7 @@ class OpenAIResponsesProvider:
             response = client.responses.create(
                 model=self.model_version,
                 instructions=template.system_instructions,
-                input=json.dumps(request.model_dump(mode="json"), ensure_ascii=True),
+                input=request_input,
                 text={
                     "format": {
                         "type": "json_schema",

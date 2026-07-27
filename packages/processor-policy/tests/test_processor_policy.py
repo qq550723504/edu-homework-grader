@@ -33,6 +33,12 @@ def test_allows_a_minimal_grading_payload() -> None:
     )
 
 
+def test_payload_guard_does_not_apply_free_text_rules_to_leaf_values() -> None:
+    assert_deidentified_payload(
+        {"avoid_prompts": ["Contact 13800138000 before solving."]}
+    )
+
+
 @pytest.mark.parametrize(
     "text",
     [

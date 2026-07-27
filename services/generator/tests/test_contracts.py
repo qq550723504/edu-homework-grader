@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import openai
 import pytest
+from pydantic import ValidationError
 
 import edu_generator.prompt_templates as prompt_templates
 from edu_generator.contracts import (
@@ -62,6 +63,78 @@ def test_template_fingerprint_is_stable_across_question_type_order() -> None:
 def test_template_resolver_rejects_unknown_versions() -> None:
     with pytest.raises(ValueError, match="unknown prompt template version"):
         resolve_prompt_template("generator-v5", ["M1"])
+
+
+def test_generation_request_rejects_more_than_eight_or_overlong_avoid_prompts() -> None:
+    base = {
+        "objective_revision_id": uuid4(),
+        "objective_text": "Use whole numbers under 100.",
+        "difficulty_min": 0,
+        "difficulty_max": 1,
+        "grade": "Grade 5",
+        "subject": "mathematics",
+        "items": [
+            {
+                "question_type": "M1",
+                "difficulty_band": "standard",
+                "target_difficulty": 0.5,
+            }
+        ],
+        "requested_count": 1,
+        "policy_version": "1",
+        "prompt_version": "generator-v1",
+    }
+
+    assert GenerationRequest(**base).avoid_prompts == []
+    with pytest.raises(ValidationError):
+        GenerationRequest(**base, avoid_prompts=["x"] * 9)
+    with pytest.raises(ValidationError):
+        GenerationRequest(**base, avoid_prompts=["x" * 1201])
+
+
+def test_generation_request_rejects_pii_in_avoid_prompts() -> None:
+    with pytest.raises(ValueError, match="generation request must be de-identified"):
+        GenerationRequest(
+            objective_revision_id=uuid4(),
+            objective_text="Use whole numbers under 100.",
+            difficulty_min=0,
+            difficulty_max=1,
+            grade="Grade 5",
+            subject="mathematics",
+            items=[
+                GenerationPlanItem(
+                    question_type="M1",
+                    difficulty_band="standard",
+                    target_difficulty=0.5,
+                )
+            ],
+            requested_count=1,
+            policy_version="1",
+            prompt_version="generator-v1",
+            avoid_prompts=["Contact 13800138000 before solving."],
+        )
+
+
+def test_active_generator_requires_materially_different_context_and_reasoning() -> None:
+    template = resolve_prompt_template("generator-v1", ["M1"])
+
+    assert template.version == "generator-v1"
+    assert "avoid_prompts" in template.system_instructions
+    assert (
+        "not merely replace names, objects, or one number"
+        in template.system_instructions
+    )
+    assert (
+        "Each candidate must differ materially from every other candidate in the same "
+        "response in at least two of: context or objects, key values or conditions, "
+        "and the cognitive action or solution structure."
+        in template.system_instructions
+    )
+    assert (
+        "Candidates with the same question_type must differ in both context or objects "
+        "and the cognitive action or solution structure."
+        in template.system_instructions
+    )
 
 
 def test_template_resolver_rejects_question_types_outside_template_scope() -> None:
@@ -408,6 +481,102 @@ def test_openai_provider_rejects_a_normal_request_outside_template_scope_before_
         provider.generate(request)
 
     assert exc_info.value.code == "provider_prompt_template_unavailable"
+    assert not provider_called
+
+
+def test_openai_provider_rejects_pii_in_model_copy_avoid_prompts_before_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = GenerationRequest(
+        objective_revision_id=uuid4(),
+        objective_text="Use whole numbers under 100.",
+        difficulty_min=0,
+        difficulty_max=1,
+        grade="Grade 5",
+        subject="mathematics",
+        items=[
+            GenerationPlanItem(
+                question_type="M1",
+                difficulty_band="standard",
+                target_difficulty=0.5,
+            )
+        ],
+        requested_count=1,
+        policy_version="1",
+        prompt_version="generator-v1",
+    ).model_copy(update={"avoid_prompts": ["Call 13800138000 before solving."]})
+    provider = OpenAIResponsesProvider(
+        api_key="test-key",
+        model="gpt-test-2025-08-07",
+        base_url="https://api.openai.com",
+        allowed_hosts=frozenset({"api.openai.com"}),
+    )
+    provider_called = False
+
+    def unexpected_provider_client(**_kwargs: object) -> SimpleNamespace:
+        nonlocal provider_called
+        provider_called = True
+        raise AssertionError("de-identification validation must precede SDK calls")
+
+    monkeypatch.setattr(openai, "OpenAI", unexpected_provider_client)
+
+    with pytest.raises(ProviderFailure) as exc_info:
+        provider.generate(request)
+
+    assert exc_info.value.code == "invalid_generation_request"
+    assert not provider_called
+
+
+@pytest.mark.parametrize(
+    "avoid_prompts",
+    [
+        ["x"] * 9,
+        ["x" * 1_201],
+        [123],
+    ],
+    ids=["too-many", "item-too-long", "invalid-item-type"],
+)
+def test_openai_provider_rejects_model_copy_invalid_avoid_prompts_before_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+    avoid_prompts: list[object],
+) -> None:
+    request = GenerationRequest(
+        objective_revision_id=uuid4(),
+        objective_text="Use whole numbers under 100.",
+        difficulty_min=0,
+        difficulty_max=1,
+        grade="Grade 5",
+        subject="mathematics",
+        items=[
+            GenerationPlanItem(
+                question_type="M1",
+                difficulty_band="standard",
+                target_difficulty=0.5,
+            )
+        ],
+        requested_count=1,
+        policy_version="1",
+        prompt_version="generator-v1",
+    ).model_copy(update={"avoid_prompts": avoid_prompts})
+    provider = OpenAIResponsesProvider(
+        api_key="test-key",
+        model="gpt-test-2025-08-07",
+        base_url="https://api.openai.com",
+        allowed_hosts=frozenset({"api.openai.com"}),
+    )
+    provider_called = False
+
+    def unexpected_provider_client(**_kwargs: object) -> SimpleNamespace:
+        nonlocal provider_called
+        provider_called = True
+        raise AssertionError("request validation must precede SDK calls")
+
+    monkeypatch.setattr(openai, "OpenAI", unexpected_provider_client)
+
+    with pytest.raises(ProviderFailure) as exc_info:
+        provider.generate(request)
+
+    assert exc_info.value.code == "invalid_generation_request"
     assert not provider_called
 
 
