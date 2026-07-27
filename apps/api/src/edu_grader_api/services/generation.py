@@ -51,7 +51,7 @@ class GenerationServiceError(ValueError):
 
 
 GENERATION_POLICY_CATALOG_VERSION = "2026.07"
-GENERATION_PROMPT_VERSION = "generator-v3"
+GENERATION_PROMPT_VERSION = "generator-v4"
 _DIFFICULTY_BAND_FRACTIONS = {"foundation": 0.2, "standard": 0.5, "stretch": 0.8}
 # Provider-authored estimates within five percentage points remain aligned to the plan target.
 _TARGET_DIFFICULTY_TOLERANCE = 0.05
@@ -406,7 +406,15 @@ def _persist_valid_candidates(
             job=job,
         )
         if rejection_code is not None:
-            candidate_rejections.append({"ordinal": ordinal, "code": rejection_code})
+            rejection: dict[str, int | str] = {"ordinal": ordinal, "code": rejection_code}
+            if rejection_code == "policy_rule_invalid":
+                policy_errors = validate_policy(
+                    candidate.question_type, candidate.policy_version, candidate.rule_json
+                )
+                if policy_errors:
+                    rejection["rule_path"] = policy_errors[0]["path"]
+                    rejection["rule_keyword"] = _policy_error_keyword(policy_errors[0]["message"])
+            candidate_rejections.append(rejection)
             continue
         content = candidate.model_dump(mode="json")
         draft = GeneratedQuestionDraft(
@@ -453,6 +461,18 @@ def _candidate_rejection_code(
     if validate_policy(candidate.question_type, candidate.policy_version, candidate.rule_json):
         return "policy_rule_invalid"
     return None
+
+
+def _policy_error_keyword(message: str) -> str:
+    """Return an allowlisted schema keyword without retaining candidate values."""
+
+    if "required property" in message:
+        return "required"
+    if "Additional properties" in message:
+        return "additionalProperties"
+    if "is not of type" in message:
+        return "type"
+    return "schema"
 
 
 def _request_digest(request: GenerationJobRequest) -> str:

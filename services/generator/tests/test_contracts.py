@@ -72,7 +72,7 @@ def test_generator_v2_requires_ordered_candidate_for_each_plan_item() -> None:
 
 def test_template_resolver_rejects_unknown_versions() -> None:
     with pytest.raises(ValueError, match="unknown prompt template version"):
-        resolve_prompt_template("generator-v4", ["M1"])
+        resolve_prompt_template("generator-v5", ["M1"])
 
 
 def test_generator_v3_requires_structured_m1_m2_assertions() -> None:
@@ -100,6 +100,15 @@ def test_generator_v3_requires_structured_m1_m2_assertions() -> None:
 
     assert template.schema_version == "generated_question_candidates-v2"
     assert "Final answer:" in template.system_instructions
+
+
+def test_generator_v4_instructs_e1_policy_v2_schema() -> None:
+    template = resolve_prompt_template("generator-v4", ["E1"])
+
+    assert template.schema_version == "generated_question_candidates-v2"
+    assert 'set policy_version to "2"' in template.system_instructions
+    assert "accepted_answers" in template.system_instructions
+    assert "normalization" in template.system_instructions
 
 
 def test_template_resolver_rejects_question_types_outside_template_scope() -> None:

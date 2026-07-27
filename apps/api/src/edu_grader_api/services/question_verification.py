@@ -403,7 +403,7 @@ def _evaluate_candidate(
             policy_version,
             explanation,
             candidate.get("verification_assertions"),
-            job.prompt_version == "generator-v3",
+            job.prompt_version in {"generator-v3", "generator-v4"},
             grader_client,
         )
 
@@ -459,7 +459,7 @@ def _evaluate_candidate(
                 policy_version,
                 explanation,
                 candidate.get("verification_assertions"),
-                job.prompt_version == "generator-v3",
+                job.prompt_version in {"generator-v3", "generator-v4"},
                 grader_client,
             )
         )

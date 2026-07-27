@@ -674,6 +674,60 @@ def test_generation_records_safe_reason_when_candidate_misses_objective(
     assert "private invalid prompt" not in str(job.attempts[0].response_summary)
 
 
+def test_generation_records_safe_policy_schema_diagnostic_for_e1(
+    session: Session,
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    revision.allowed_question_types = ["E1"]
+    request = GenerationJobRequest(
+        curriculum_objective_revision_id=revision.id,
+        items=[
+            GenerationPlanItem(
+                question_type="E1",
+                difficulty_band="standard",
+                target_difficulty=0.5,
+            )
+        ],
+        requested_count=1,
+        idempotency_key="rejection-reason-e1-policy",
+    )
+    job = create_or_get_job(session, request=request, actor=teacher)
+    candidate = (
+        valid_single_candidate(revision)
+        .candidates[0]
+        .model_copy(
+            update={
+                "question_type": "E1",
+                "policy_version": "2",
+                "prompt": "Name the color of the sky on a clear day.",
+                "rule_json": {"accepted_answers": ["blue"], "ignore_case": True},
+                "explanation": "A clear daytime sky is blue.",
+            }
+        )
+    )
+    result = GeneratedCandidateEnvelope(
+        provider_name="fake",
+        model_version="fake-v1",
+        candidates=[candidate],
+    )
+
+    run_generation_job(session, job=job, provider=CapturingProvider(result))
+
+    assert job.status is GenerationJobStatus.FAILED
+    assert job.attempts[0].response_summary == {
+        "candidate_count": 1,
+        "candidate_rejections": [
+            {
+                "ordinal": 1,
+                "code": "policy_rule_invalid",
+                "rule_path": "/",
+                "rule_keyword": "additionalProperties",
+            }
+        ],
+    }
+    assert "blue" not in str(job.attempts[0].response_summary)
+
+
 def test_successful_attempt_records_template_audit_metadata_without_prompt_body(
     session: Session,
 ) -> None:

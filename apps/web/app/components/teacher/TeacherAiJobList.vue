@@ -9,6 +9,13 @@ const failureSummaryLabels: Record<string, string> = {
   unexpected_candidate_ordinal: '返回了计划外的候选题',
 }
 
+const schemaKeywordLabels: Record<string, string> = {
+  required: '缺少必填字段',
+  additionalProperties: '包含不允许字段',
+  type: '字段类型不正确',
+  schema: '规则结构不符合要求',
+}
+
 defineProps<{
   jobs: TeacherAiGenerationJob[]
   selectedJobId?: string | null
@@ -35,6 +42,9 @@ const emit = defineEmits<{
           <span>失败 {{ job.failed_count ?? 0 }}</span>
           <span v-for="code in job.failure_summary ?? []" :key="code">
             原因：{{ failureSummaryLabels[code] }}
+          </span>
+          <span v-for="detail in job.failure_details ?? []" :key="`${detail.path}:${detail.keyword}`">
+            规则：{{ detail.path }} · {{ schemaKeywordLabels[detail.keyword] ?? '规则结构不符合要求' }}
           </span>
         </button>
       </li>

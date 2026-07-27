@@ -23,6 +23,7 @@ export interface TeacherAiGenerationJob {
   failed_count?: number
   failure_code?: string | null
   failure_summary?: string[]
+  failure_details?: Array<{ path: string; keyword: string }>
   created_at?: string
   started_at?: string | null
   finished_at?: string | null

@@ -344,8 +344,18 @@ def test_list_jobs_exposes_safe_candidate_validation_summary(
     attempt.response_summary = {
         "candidate_count": 1,
         "candidate_rejections": [
-            {"ordinal": 1, "code": "policy_rule_invalid"},
-            {"ordinal": 2, "code": "policy_rule_invalid"},
+            {
+                "ordinal": 1,
+                "code": "policy_rule_invalid",
+                "rule_path": "/",
+                "rule_keyword": "additionalProperties",
+            },
+            {
+                "ordinal": 2,
+                "code": "policy_rule_invalid",
+                "rule_path": "/accepted_answers",
+                "rule_keyword": "required",
+            },
             {"ordinal": 3, "code": "untrusted_provider_detail"},
         ],
     }
@@ -357,6 +367,10 @@ def test_list_jobs_exposes_safe_candidate_validation_summary(
     item = next(item for item in response.json()["items"] if item["id"] == str(job.id))
     assert item["failure_code"] == "candidate_validation_failed"
     assert item["failure_summary"] == ["policy_rule_invalid"]
+    assert item["failure_details"] == [
+        {"path": "/", "keyword": "additionalProperties"},
+        {"path": "/accepted_answers", "keyword": "required"},
+    ]
 
 
 def test_created_job_has_initial_validation_run(
