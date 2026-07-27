@@ -357,7 +357,8 @@ def test_creation_derives_course_and_versions_from_active_objective(session: Ses
     assert job.grade == revision.objective.grade_mapping.internal_level
     assert job.subject == revision.objective.subject
     assert job.policy_version == "2026.07"
-    assert job.prompt_version == GENERATION_PROMPT_VERSION
+    assert GENERATION_PROMPT_VERSION == "generator-v1"
+    assert job.prompt_version == "generator-v1"
 
 
 def test_creation_persists_server_owned_difficulty_plan(session: Session) -> None:

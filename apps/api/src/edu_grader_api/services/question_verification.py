@@ -32,6 +32,7 @@ from ..models import (
 )
 from ..policies import validate_policy
 from ..settings import settings
+from .generation import GENERATION_PROMPT_VERSION
 from .candidate_content_policy import (
     CONTENT_POLICY_VERSION,
     find_candidate_content_matches,
@@ -403,7 +404,7 @@ def _evaluate_candidate(
             policy_version,
             explanation,
             candidate.get("verification_assertions"),
-            job.prompt_version in {"generator-v3", "generator-v4"},
+            job.prompt_version == GENERATION_PROMPT_VERSION,
             grader_client,
         )
 
@@ -459,7 +460,7 @@ def _evaluate_candidate(
                 policy_version,
                 explanation,
                 candidate.get("verification_assertions"),
-                job.prompt_version in {"generator-v3", "generator-v4"},
+                job.prompt_version == GENERATION_PROMPT_VERSION,
                 grader_client,
             )
         )
