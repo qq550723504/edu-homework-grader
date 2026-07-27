@@ -37,7 +37,7 @@
     ]
   },
   "generation_contract": {
-    "prompt_version": "generator-v3",
+    "prompt_version": "generator-v4",
     "validator_version": "verification-v8",
     "ruleset_version": "rules-v8",
     "grade_complexity_rules_version": "grade-complexity-v1",

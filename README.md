@@ -87,7 +87,7 @@ make docs-check
 
 教师工作台支持查看 `passed` / `warning` / `blocked` 证据、编辑后重新验证、拒绝、单题重新生成和原子批量接受。`blocked` 不可接受，`warning` 必须明确确认；接受后只创建 `QuestionVersion` 草稿，仍须通过原有题目测试和发布门禁。AI 没有直接发布旁路。
 
-本地默认 `GENERATION_PROVIDER=fake`，不会访问外部模型。受控环境使用固定、已批准的 Provider/模型 ID 和 `generator-v3` Prompt；全局/租户治理支持 `active`、`canary`、`paused` 和 `retired`，全局暂停或退役不可由租户覆盖。真实 M1、M2、E1、E4 Provider 验收只在 `ai-provider-acceptance` 受保护 Environment 中运行。
+本地默认 `GENERATION_PROVIDER=fake`，不会访问外部模型。受控环境使用固定、已批准的 Provider/模型 ID 和 `generator-v4` Prompt；全局/租户治理支持 `active`、`canary`、`paused` 和 `retired`，全局暂停或退役不可由租户覆盖。真实 M1、M2、E1、E4 Provider 验收只在 `ai-provider-acceptance` 受保护 Environment 中运行。
 
 离线质量门禁使用 `make ai-evaluation`。生产形态的只读事实导出与显式 baseline/candidate 比较使用：
 
