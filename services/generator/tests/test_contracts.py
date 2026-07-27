@@ -82,7 +82,7 @@ def test_generation_request_rejects_more_than_eight_or_overlong_avoid_prompts() 
         ],
         "requested_count": 1,
         "policy_version": "1",
-        "prompt_version": "generator-v3",
+        "prompt_version": "generator-v1",
     }
 
     assert GenerationRequest(**base).avoid_prompts == []
@@ -110,15 +110,15 @@ def test_generation_request_rejects_pii_in_avoid_prompts() -> None:
             ],
             requested_count=1,
             policy_version="1",
-            prompt_version="generator-v3",
+            prompt_version="generator-v1",
             avoid_prompts=["Contact 13800138000 before solving."],
         )
 
 
-def test_generator_v3_requires_materially_different_context_and_reasoning() -> None:
-    template = resolve_prompt_template("generator-v3", ["M1"])
+def test_active_generator_requires_materially_different_context_and_reasoning() -> None:
+    template = resolve_prompt_template("generator-v1", ["M1"])
 
-    assert template.version == "generator-v3"
+    assert template.version == "generator-v1"
     assert "avoid_prompts" in template.system_instructions
     assert (
         "not merely replace names, objects, or one number"

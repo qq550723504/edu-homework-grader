@@ -4,13 +4,13 @@
 
 **Goal:** 让同一课程目标的连续 AI 出题主动避开近期候选，并将跨批待审核近似题在验证阶段阻断。
 
-**Architecture:** 保持唯一活跃的 `generator-v3`，通过 `GenerationRequest.avoid_prompts` 向模型传递有限且去标识化的近期题干，要求改变场景、条件与考查动作。服务端继续是最终裁判：重复检测扩展为同租户、同课程目标的跨批 `pending_review` 当前修订比较，既有已发布题和批内比较保持不变。
+**Architecture:** 保持唯一活跃的 `generator-v1`，通过 `GenerationRequest.avoid_prompts` 向模型传递有限且去标识化的近期题干，要求改变场景、条件与考查动作。服务端继续是最终裁判：重复检测扩展为同租户、同课程目标的跨批 `pending_review` 当前修订比较，既有已发布题和批内比较保持不变。
 
 **Tech Stack:** Python 3、Pydantic v2、SQLAlchemy 2、FastAPI 服务层、现有 Grader 语义相似度契约、pytest。
 
 ## Global Constraints
 
-- 保持唯一活跃运行时版本 `generator-v3`；不得新增提示词版本或教师端版本选择。
+- 保持唯一活跃运行时版本 `generator-v1`；不得新增提示词版本或教师端版本选择。
 - 不改变题型、难度、课程目标、内容安全、答案正确性、审核、发布或重试状态机。
 - 避重参考只能来自去标识化的候选题干；不得包含教师补充要求、用户身份信息或原始模型提示。
 - 每次模型请求最多 8 条避重题干，每条最多 1,200 字符；公开 API payload 与尝试摘要不得包含题干原文。
@@ -22,14 +22,14 @@
 ## File Structure
 
 - Modify: `services/generator/src/edu_generator/contracts.py` — 为模型输入增加严格、去标识化的 `avoid_prompts`。
-- Modify: `services/generator/src/edu_generator/prompt_templates.py` — 在现有 `generator-v3` 中声明不可仅替换人名/物品/数值的多样性规则。
+- Modify: `services/generator/src/edu_generator/prompt_templates.py` — 在现有 `generator-v1` 中声明不可仅替换人名/物品/数值的多样性规则。
 - Modify: `services/generator/tests/test_contracts.py` — 约束、提示版本和 OpenAI 输入契约测试。
 - Modify: `apps/api/src/edu_grader_api/services/generation.py` — 收集近期待审核题干、构造模型请求、记录仅含数量的尝试摘要。
 - Modify: `apps/api/tests/test_generation_service.py` — 同租户/同目标过滤、截断、去重和隐私投影测试。
 - Modify: `apps/api/src/edu_grader_api/services/question_verification.py` — 新增跨批待审核比较器与计数类别。
 - Modify: `apps/api/tests/test_question_verification.py` — 跨批近似题阻断和排除范围测试。
 
-### Task 1: 为 `generator-v3` 增加避重输入契约和多样性指令
+### Task 1: 为 `generator-v1` 增加避重输入契约和多样性指令
 
 **Files:**
 - Modify: `services/generator/src/edu_generator/contracts.py`
@@ -38,7 +38,7 @@
 
 **Interfaces:**
 - Produces: `GenerationRequest.avoid_prompts: list[str]`，默认空列表，最多 8 项，每项长度 1 至 1,200。
-- Produces: 仍名为 `generator-v3` 的模板，要求候选不能仅替换人名、物品或单个数值。
+- Produces: 仍名为 `generator-v1` 的模板，要求候选不能仅替换人名、物品或单个数值。
 - Consumes: 现有 `GenerationRequest.model_post_init` 的去标识化检查和 OpenAI `request.model_dump(mode="json")` 输入。
 
 - [ ] **Step 1: 写出契约与模板失败测试**
@@ -52,9 +52,9 @@ def test_generation_request_rejects_more_than_eight_or_overlong_avoid_prompts() 
         GenerationRequest(**base, avoid_prompts=["x" * 1201])
 
 
-def test_generator_v3_requires_materially_different_context_and_reasoning() -> None:
-    template = resolve_prompt_template("generator-v3", ["M1"])
-    assert template.version == "generator-v3"
+def test_active_generator_requires_materially_different_context_and_reasoning() -> None:
+    template = resolve_prompt_template("generator-v1", ["M1"])
+    assert template.version == "generator-v1"
     assert "avoid_prompts" in template.system_instructions
     assert "not merely replace names, objects, or one number" in template.system_instructions
 ```
@@ -92,7 +92,7 @@ class GenerationRequest(BaseModel):
 
 Keep the existing item-count validator and `assert_deidentified_payload(self.model_dump(mode="json"))` unchanged so every supplied reference receives the same PII guard as all other model-bound fields.
 
-- [ ] **Step 4: Extend only the existing `generator-v3` instructions**
+- [ ] **Step 4: Extend only the existing `generator-v1` instructions**
 
 ```python
 "The request may include avoid_prompts containing recent de-identified questions. "
@@ -103,7 +103,7 @@ Keep the existing item-count validator and `assert_deidentified_payload(self.mod
 "Candidates in the same response must follow the same diversity rule. "
 ```
 
-Append this text to `_GENERATOR_V3.system_instructions`; retain its `version="generator-v3"`, schema version and all existing question-type requirements.
+Append this text to `_GENERATOR_V1.system_instructions`; retain its `version="generator-v1"`, schema version and all existing question-type requirements.
 
 - [ ] **Step 5: Run the generator contract tests**
 
@@ -115,7 +115,7 @@ Expected: PASS。
 
 ```bash
 git add services/generator/src/edu_generator/contracts.py services/generator/src/edu_generator/prompt_templates.py services/generator/tests/test_contracts.py
-git commit -m "feat: add diversity boundaries to generator v3"
+git commit -m "feat: add diversity boundaries to active generator"
 ```
 
 ### Task 2: 从近期同目标待审核候选构造私有避重参考
@@ -146,7 +146,7 @@ def test_provider_request_uses_only_recent_same_objective_pending_prompts(sessio
 
 def test_request_summary_does_not_contain_avoid_prompt_text(session: Session) -> None:
     request = request_with_avoid_prompts(["Do not persist this prompt."])
-    summary = _request_summary(request, requested_count=1, template=resolve_prompt_template("generator-v3", ["M1"]))
+    summary = _request_summary(request, requested_count=1, template=resolve_prompt_template("generator-v1", ["M1"]))
     assert summary["avoid_prompt_count"] == 1
     assert summary["avoid_prompt_max_length"] == 1200
     assert "Do not persist this prompt." not in str(summary)
@@ -352,7 +352,7 @@ git commit -m "test: cover generation diversity controls"
 
 ## Self-Review
 
-- [x] 多样性主动约束、8 条/1,200 字符上限和 `generator-v3` 单版本要求由 Task 1、Task 2 覆盖。
+- [x] 多样性主动约束、8 条/1,200 字符上限和 `generator-v1` 单版本要求由 Task 1、Task 2 覆盖。
 - [x] 同租户/同课程目标/不同任务/待审核/20 条上限的跨批范围由 Task 2、Task 3 覆盖。
 - [x] 公开 payload 与尝试摘要不泄漏历史题干由 Task 2 覆盖。
 - [x] 已发布题、批内题、阈值阻断和 fail-closed 语义服务行为由 Task 3、Task 4 保留并回归验证。
