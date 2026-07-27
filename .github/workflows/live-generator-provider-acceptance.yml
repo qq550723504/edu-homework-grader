@@ -44,7 +44,12 @@ jobs:
                 core.setFailed('target_ref is required');
                 return;
               }
-              core.setOutput('target_ref', targetRef.trim());
+              const commit = await github.rest.repos.getCommit({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: targetRef.trim(),
+              });
+              core.setOutput('target_ref', commit.data.sha);
               core.setOutput('pull_request_number', '');
               return;
             }
