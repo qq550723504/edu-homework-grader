@@ -635,6 +635,45 @@ def test_difficulty_plan_discards_candidates_that_miss_their_ordinal_plan(
     assert [draft.ordinal for draft in job.drafts] == [2]
 
 
+def test_generation_records_safe_reason_when_candidate_misses_objective(
+    session: Session,
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    request = GenerationJobRequest(
+        curriculum_objective_revision_id=revision.id,
+        items=[
+            GenerationPlanItem(
+                question_type="M1",
+                difficulty_band="standard",
+                target_difficulty=0.5,
+            )
+        ],
+        requested_count=1,
+        idempotency_key="rejection-reason-objective",
+    )
+    job = create_or_get_job(session, request=request, actor=teacher)
+    candidate = (
+        valid_single_candidate(revision)
+        .candidates[0]
+        .model_copy(update={"objective_revision_id": uuid4(), "prompt": "private invalid prompt"})
+    )
+    result = GeneratedCandidateEnvelope(
+        provider_name="fake",
+        model_version="fake-v1",
+        candidates=[candidate],
+    )
+
+    run_generation_job(session, job=job, provider=CapturingProvider(result))
+
+    assert job.status is GenerationJobStatus.FAILED
+    assert job.failure_code == "candidate_validation_failed"
+    assert job.attempts[0].response_summary == {
+        "candidate_count": 1,
+        "candidate_rejections": [{"ordinal": 1, "code": "objective_revision_mismatch"}],
+    }
+    assert "private invalid prompt" not in str(job.attempts[0].response_summary)
+
+
 def test_successful_attempt_records_template_audit_metadata_without_prompt_body(
     session: Session,
 ) -> None:

@@ -302,10 +302,16 @@ def run_generation_job(
             return job
         _finish_attempt(attempt, status="succeeded", failure_code=None, started_at=started_at)
         job.status = GenerationJobStatus.VALIDATING
-        generated = _persist_valid_candidates(
+        generated, candidate_rejections = _persist_valid_candidates(
             session, job=job, attempt=attempt, candidates=result.candidates
         )
+        attempt.response_summary = {
+            "candidate_count": len(result.candidates),
+            "candidate_rejections": candidate_rejections,
+        }
         job.succeeded_count += generated
+        if result.candidates and generated == 0:
+            job.failure_code = "candidate_validation_failed"
         session.flush()
         break
 
@@ -388,25 +394,19 @@ def _persist_valid_candidates(
     job: GenerationJob,
     attempt: GenerationAttempt,
     candidates: list[GeneratedCandidate],
-) -> int:
+) -> tuple[int, list[dict[str, int | str]]]:
     valid_count = 0
+    candidate_rejections: list[dict[str, int | str]] = []
     plan_items = _generation_plan_items(job)
     for ordinal, candidate in enumerate(candidates, start=1):
-        if valid_count + job.succeeded_count >= job.requested_count:
-            break
-        if ordinal > len(plan_items):
-            break
-        plan_item = plan_items[ordinal - 1]
-        if candidate.objective_revision_id != job.curriculum_objective_revision_id:
-            continue
-        if candidate.question_type != plan_item.question_type:
-            continue
-        difficulty_delta = abs(
-            Decimal(str(candidate.difficulty)) - Decimal(str(plan_item.target_difficulty))
+        plan_item = plan_items[ordinal - 1] if ordinal <= len(plan_items) else None
+        rejection_code = _candidate_rejection_code(
+            candidate=candidate,
+            plan_item=plan_item,
+            job=job,
         )
-        if difficulty_delta > Decimal(str(_TARGET_DIFFICULTY_TOLERANCE)):
-            continue
-        if validate_policy(candidate.question_type, candidate.policy_version, candidate.rule_json):
+        if rejection_code is not None:
+            candidate_rejections.append({"ordinal": ordinal, "code": rejection_code})
             continue
         content = candidate.model_dump(mode="json")
         draft = GeneratedQuestionDraft(
@@ -430,7 +430,29 @@ def _persist_valid_candidates(
             )
         )
         valid_count += 1
-    return valid_count
+    return valid_count, candidate_rejections
+
+
+def _candidate_rejection_code(
+    *,
+    candidate: GeneratedCandidate,
+    plan_item: GenerationPlanItem | None,
+    job: GenerationJob,
+) -> str | None:
+    if plan_item is None:
+        return "unexpected_candidate_ordinal"
+    if candidate.objective_revision_id != job.curriculum_objective_revision_id:
+        return "objective_revision_mismatch"
+    if candidate.question_type != plan_item.question_type:
+        return "question_type_mismatch"
+    difficulty_delta = abs(
+        Decimal(str(candidate.difficulty)) - Decimal(str(plan_item.target_difficulty))
+    )
+    if difficulty_delta > Decimal(str(_TARGET_DIFFICULTY_TOLERANCE)):
+        return "difficulty_out_of_tolerance"
+    if validate_policy(candidate.question_type, candidate.policy_version, candidate.rule_json):
+        return "policy_rule_invalid"
+    return None
 
 
 def _request_digest(request: GenerationJobRequest) -> str:
