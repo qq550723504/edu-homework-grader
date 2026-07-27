@@ -28,7 +28,7 @@
 | Core API | 课程目录、题库、作业、审核、隐私、名册、监护人同意、Generator、验证、治理和生产评估导出已实现 | 发布环境中的身份、数据库、审计和故障降级仍需统一验证 |
 | Grader | M1/M2、E1–E4、受限 MathJSON、LanguageTool 和固定英语嵌入模型已实现；E3/E4 保持教师最终复核；内部 HTTP 调用已有显式超时 | 细分依赖预算、P95/P99、学校网络和发布环境持续运行由 #83/#31/#33 验收 |
 | OIDC/BFF | Nuxt BFF、CSRF、HttpOnly 会话和开发 Keycloak 路径已实现 | 学校托管 HTTPS OIDC、真实角色映射和会话策略需 #31/#33 |
-| AI 出题 | 课程约束、真实 Provider、`generator-v4`、候选验证、编辑/重验、拒绝/重生成、原子批量接受和安全转草稿已实现；生产验证入口已加入年级复杂度、Objective prerequisite、数学语义和 `verification-capacity-v1` 载荷预检 | 未经审核直接发布仍禁止；总验证预算、P95 基线、正式阈值、生产报告和发布环境验收仍缺 |
+| AI 出题 | 课程约束、真实 Provider、`generator-v1`、候选验证、编辑/重验、拒绝/重生成、原子批量接受和安全转草稿已实现；生产验证入口已加入年级复杂度、Objective prerequisite、数学语义和 `verification-capacity-v1` 载荷预检 | 未经审核直接发布仍禁止；总验证预算、P95 基线、正式阈值、生产报告和发布环境验收仍缺 |
 | AI 治理 | 全局/租户 `active`、`canary`、`paused`、`retired`、Kill Switch、权限和审计基础已实现 | #43 仍需默认版本晋级/回滚、预算、Provider 合规、版权下架和事故手册 |
 | AI 评估 | 离线 fail-closed 门禁和生产形态只读导出/显式版本比较已实现 | #99 需首次真实只读数据库报告；#42 需教师黄金集、最终阈值、线上反馈和 shadow/canary 证据 |
 | 部署 | Compose、Kubernetes 清单和 SHA 镜像发布工作流存在 | 清单存在不等于环境已部署；#33 的实际 rollout、监控、备份恢复和回滚尚未验收 |
@@ -62,7 +62,7 @@ AI evaluation gate Run #238（Run ID `30106268417`）成功。最终文档同步
 受保护环境的 Live generator Provider acceptance Run `30024119371` 已对精确 PR head 验证：
 
 ```text
-generator-v3
+generator-v1
 ├── M1
 ├── M2
 ├── E1
@@ -75,7 +75,7 @@ generator-v3
 
 | 项目 | 当前值 |
 | --- | --- |
-| Prompt | `generator-v4` |
+| Prompt | `generator-v1` |
 | Core Validator | `verification-v8` |
 | Core Ruleset | `rules-v8` |
 | Capacity-aware production Validator | `verification-v9` |

@@ -18,7 +18,7 @@ def _policy() -> evaluation.EvaluationPolicy:
         {
             "policy_id": "ai-evaluation-policy-v1",
             "approved_model_ids": ["gpt-5.6-terra"],
-            "approved_prompt_versions": ["generator-v4"],
+            "approved_prompt_versions": ["fixture-v1"],
             "thresholds": {
                 "schema_pass_rate_min": 0.98,
                 "math_answer_error_rate_max": 0.005,
@@ -53,7 +53,7 @@ def _passing_records() -> list[evaluation.EvaluationRecord]:
                         "subject": "mathematics" if question_type.startswith("M") else "english",
                         "question_type": question_type,
                         "model_id": "gpt-5.6-terra",
-                        "prompt_version": "generator-v4",
+                        "prompt_version": "fixture-v1",
                         "validator_version": "verification-v5",
                         "difficulty_band": "standard",
                         "seed": index,
@@ -189,12 +189,12 @@ def test_evaluate_records_blocks_unapproved_versions_and_publication(mutate, cod
 def test_evaluate_records_reports_versioned_strata_and_comparisons() -> None:
     records = _passing_records()
     records[0] = records[0].model_copy(
-        update={"model_id": "gpt-5.6-sol", "prompt_version": "generator-v4"}
+        update={"model_id": "gpt-5.6-sol", "prompt_version": "fixture-v1"}
     )
     policy = _policy().model_copy(
         update={
             "approved_model_ids": ["gpt-5.6-sol", "gpt-5.6-terra"],
-            "approved_prompt_versions": ["generator-v3", "generator-v4"],
+            "approved_prompt_versions": ["fixture-v0", "fixture-v1"],
         }
     )
 
