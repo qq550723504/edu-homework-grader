@@ -82,7 +82,7 @@ class GenerationJobRequest(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=128)
     teacher_constraint: str | None = Field(default=None, max_length=1_000)
 
-    def model_post_init(self, __context: object) -> None:
+    def model_post_init(self, __context: object, /) -> None:
         try:
             assert_deidentified_payload(self.model_dump(mode="json"))
         except ValueError as exc:
