@@ -6,6 +6,7 @@ from uuid import UUID
 from edu_grader_processor_policy import (
     ProcessorPolicyError,
     assert_deidentified_payload,
+    assert_deidentified_text,
 )
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -55,6 +56,15 @@ class GenerationRequest(BaseModel):
     def _validate_item_count(self) -> "GenerationRequest":
         if len(self.items) != self.requested_count:
             raise ValueError("generation plan item count must equal requested_count")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_avoid_prompts_are_deidentified(self) -> "GenerationRequest":
+        try:
+            for avoid_prompt in self.avoid_prompts:
+                assert_deidentified_text(avoid_prompt)
+        except ProcessorPolicyError as exc:
+            raise ValueError("generation request must be de-identified") from exc
         return self
 
     def model_post_init(self, __context: object) -> None:

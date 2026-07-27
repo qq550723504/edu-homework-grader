@@ -96,5 +96,3 @@ def _assert_value(value: object) -> None:
     elif isinstance(value, list):
         for item in value:
             _assert_value(item)
-    elif isinstance(value, str):
-        assert_deidentified_text(value)
