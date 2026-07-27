@@ -22,6 +22,7 @@ export interface TeacherAiGenerationJob {
   succeeded_count?: number
   failed_count?: number
   failure_code?: string | null
+  failure_summary?: string[]
   created_at?: string
   started_at?: string | null
   finished_at?: string | null

@@ -54,6 +54,7 @@ from ..services.generation import (
     generation_plan_item_for_ordinal,
     run_generation_job,
 )
+from ..services.budget_aware_verification import run_budget_aware_candidate_verification
 from ..services.grader import HttpGraderClient
 from ..settings import settings
 
@@ -165,6 +166,7 @@ def create_generation_job_route(
                 provider=_generation_provider(),
                 teacher_constraint=request.teacher_constraint,
             )
+            _validate_generated_drafts(session, job=job)
             append_audit_event(
                 session,
                 tenant_id=job.tenant_id,
@@ -396,6 +398,7 @@ def regenerate_draft_route(
                 provider=_generation_provider(),
                 teacher_constraint=body.teacher_constraint,
             )
+            _validate_generated_drafts(session, job=job)
             append_audit_event(
                 session,
                 tenant_id=job.tenant_id,
@@ -591,6 +594,28 @@ def _generation_provider() -> GenerationProvider:
             timeout_seconds=settings.generator_timeout_seconds,
         )
     raise ProviderFailure("provider_not_configured", "generation provider is not configured")
+
+
+def _validate_generated_drafts(session: Session, *, job: GenerationJob) -> None:
+    drafts = list(job.drafts)
+    if not drafts:
+        return
+    grader_client = HttpGraderClient(settings.grader_base_url)
+    for draft in drafts:
+        revision = draft.current_revision
+        existing = session.scalar(
+            select(GenerationValidationRun).where(
+                GenerationValidationRun.generated_question_draft_id == draft.id,
+                GenerationValidationRun.draft_revision_id == revision.id,
+            )
+        )
+        if existing is None:
+            run_budget_aware_candidate_verification(
+                session,
+                draft=draft,
+                revision=revision,
+                grader_client=grader_client,
+            )
 
 
 def _provider_name() -> str:
@@ -896,10 +921,47 @@ def _job_payload(job: GenerationJob) -> dict[str, object]:
         "succeeded_count": job.succeeded_count,
         "failed_count": job.failed_count,
         "failure_code": job.failure_code,
+        "failure_summary": _job_failure_summary(job),
         "created_at": job.created_at.isoformat(),
         "started_at": job.started_at.isoformat() if job.started_at else None,
         "finished_at": job.finished_at.isoformat() if job.finished_at else None,
     }
+
+
+_CANDIDATE_REJECTION_CODES = frozenset(
+    {
+        "objective_revision_mismatch",
+        "question_type_mismatch",
+        "difficulty_out_of_tolerance",
+        "policy_rule_invalid",
+        "unexpected_candidate_ordinal",
+    }
+)
+
+
+def _job_failure_summary(job: GenerationJob) -> list[str]:
+    if job.failure_code != "candidate_validation_failed":
+        return []
+    summary: list[str] = []
+    for attempt in sorted(job.attempts, key=lambda item: item.attempt_number):
+        response_summary = attempt.response_summary
+        if not isinstance(response_summary, dict):
+            continue
+        rejections = response_summary.get("candidate_rejections")
+        if not isinstance(rejections, list):
+            continue
+        for rejection in rejections:
+            if not isinstance(rejection, dict):
+                continue
+            code = rejection.get("code")
+            if (
+                not isinstance(code, str)
+                or code not in _CANDIDATE_REJECTION_CODES
+                or code in summary
+            ):
+                continue
+            summary.append(code)
+    return summary
 
 
 def _draft_payload(draft: GeneratedQuestionDraft) -> dict[str, object]:

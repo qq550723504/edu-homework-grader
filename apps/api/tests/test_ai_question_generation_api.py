@@ -86,6 +86,7 @@ def session() -> Session:
 def client(session: Session, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(settings, "oidc_issuer", ISSUER)
     monkeypatch.setattr(settings, "oidc_tenant_slug", "pilot")
+    monkeypatch.setattr(generation_router, "HttpGraderClient", DeterministicM2Client)
     app.dependency_overrides[get_session] = lambda: session
     with TestClient(app) as test_client:
         yield test_client
@@ -326,6 +327,79 @@ def create_generation_job(
     return headers, response.json()
 
 
+def test_list_jobs_exposes_safe_candidate_validation_summary(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client, teacher, revision, idempotency_key="candidate-validation-summary"
+    )
+    job = session.get(GenerationJob, UUID(str(created["id"])))
+    assert job is not None
+    attempt = job.attempts[0]
+    job.status = GenerationJobStatus.FAILED
+    job.failure_code = "candidate_validation_failed"
+    job.succeeded_count = 0
+    job.failed_count = 1
+    attempt.response_summary = {
+        "candidate_count": 1,
+        "candidate_rejections": [
+            {"ordinal": 1, "code": "policy_rule_invalid"},
+            {"ordinal": 2, "code": "policy_rule_invalid"},
+            {"ordinal": 3, "code": "untrusted_provider_detail"},
+        ],
+    }
+    session.commit()
+
+    response = client.get("/v1/ai-question-generation/jobs", headers=headers)
+
+    assert response.status_code == 200
+    item = next(item for item in response.json()["items"] if item["id"] == str(job.id))
+    assert item["failure_code"] == "candidate_validation_failed"
+    assert item["failure_summary"] == ["policy_rule_invalid"]
+
+
+def test_created_job_has_initial_validation_run(
+    client: TestClient, session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    monkeypatch.setattr(generation_router, "HttpGraderClient", DeterministicM2Client)
+    headers, created = create_generation_job(
+        client, teacher, revision, idempotency_key="initial-generation-validation"
+    )
+    draft = fetch_only_draft(client, headers, created["id"])
+
+    response = client.get(
+        f"/v1/ai-generated-questions/{draft['id']}/validation-runs", headers=headers
+    )
+
+    assert response.status_code == 200
+    assert [item["revision_number"] for item in response.json()["items"]] == [1]
+
+
+def test_regenerated_job_has_initial_validation_run(client: TestClient, session: Session) -> None:
+    teacher, revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client, teacher, revision, idempotency_key="regeneration-initial-validation-source"
+    )
+    source_draft = fetch_only_draft(client, headers, created["id"])
+
+    regenerated = client.post(
+        f"/v1/ai-generated-questions/{source_draft['id']}/regenerate",
+        headers=headers | {"Idempotency-Key": "regeneration-initial-validation"},
+        json={},
+    )
+    assert regenerated.status_code == 201
+    draft = fetch_only_draft(client, headers, regenerated.json()["id"])
+
+    response = client.get(
+        f"/v1/ai-generated-questions/{draft['id']}/validation-runs", headers=headers
+    )
+
+    assert response.status_code == 200
+    assert [item["revision_number"] for item in response.json()["items"]] == [1]
+
+
 def fetch_only_draft(
     client: TestClient, headers: dict[str, str], job_id: object
 ) -> dict[str, object]:
@@ -361,7 +435,7 @@ def create_generation_draft_with_passed_validation(
             generated_question_draft_id=draft.id,
             draft_revision_id=draft.current_revision_id,
             generation_job_id=draft.job_id,
-            run_number=1,
+            run_number=2,
             validator_version="api-test",
             ruleset_version="api-test",
             status=ValidationRunStatus.PASSED,
@@ -1096,7 +1170,7 @@ def test_old_validation_run_is_not_current_after_edit(
     assert "teacher-only" not in str(difficulty_signal)
     assert current_run.status_code == 201
     assert current_run.json()["revision_number"] == 2
-    assert [item["revision_number"] for item in history.json()["items"]] == [2, 1]
+    assert [item["revision_number"] for item in history.json()["items"]] == [2, 1, 1]
     assert fetched.json()["revision_number"] == 1
     assert fetched.json()["findings"] == []
 
@@ -1262,7 +1336,7 @@ def test_cross_tenant_actor_cannot_discover_jobs_drafts_or_validation_runs(
         generated_question_draft_id=draft.id,
         draft_revision_id=draft.current_revision_id,
         generation_job_id=draft.job_id,
-        run_number=1,
+        run_number=2,
         validator_version="api-test",
         ruleset_version="api-test",
         status=ValidationRunStatus.PASSED,
@@ -1328,7 +1402,7 @@ def test_validation_finding_response_uses_explicit_safe_projection(
         generated_question_draft_id=draft.id,
         draft_revision_id=draft.current_revision_id,
         generation_job_id=draft.job_id,
-        run_number=1,
+        run_number=2,
         validator_version="api-test",
         ruleset_version="api-test",
         status=ValidationRunStatus.WARNING,
@@ -1485,7 +1559,7 @@ def test_reject_api_replays_exact_action_and_conflicts_with_different_action_or_
             generated_question_draft_id=persisted_draft.id,
             draft_revision_id=persisted_draft.current_revision_id,
             generation_job_id=persisted_draft.job_id,
-            run_number=1,
+            run_number=2,
             validator_version="api-test",
             ruleset_version="api-test",
             status=ValidationRunStatus.PASSED,
@@ -1548,7 +1622,7 @@ def test_accept_api_requires_current_validation_and_replays_accepted_version(
         generated_question_draft_id=blocked_draft.id,
         draft_revision_id=blocked_draft.current_revision_id,
         generation_job_id=blocked_draft.job_id,
-        run_number=1,
+        run_number=2,
         validator_version="api-test",
         ruleset_version="api-test",
         status=ValidationRunStatus.BLOCKED,
@@ -1577,7 +1651,7 @@ def test_accept_api_requires_current_validation_and_replays_accepted_version(
         generated_question_draft_id=accepted_draft.id,
         draft_revision_id=accepted_draft.current_revision_id,
         generation_job_id=accepted_draft.job_id,
-        run_number=1,
+        run_number=2,
         validator_version="api-test",
         ruleset_version="api-test",
         status=ValidationRunStatus.PASSED,
@@ -1633,7 +1707,7 @@ def test_bulk_accept_api_replays_exact_request_and_rejects_changed_body(
             generated_question_draft_id=draft.id,
             draft_revision_id=draft.current_revision_id,
             generation_job_id=draft.job_id,
-            run_number=1,
+            run_number=2,
             validator_version="api-test",
             ruleset_version="api-test",
             status=ValidationRunStatus.PASSED,
@@ -1710,7 +1784,7 @@ def test_bulk_accept_api_recovers_a_committed_idempotency_collision(
             generated_question_draft_id=draft.id,
             draft_revision_id=draft.current_revision_id,
             generation_job_id=draft.job_id,
-            run_number=1,
+            run_number=2,
             validator_version="api-test",
             ruleset_version="api-test",
             status=ValidationRunStatus.PASSED,
@@ -1876,7 +1950,7 @@ def test_bulk_accept_api_rolls_back_all_items_when_one_validation_is_blocked(
                 generated_question_draft_id=first.id,
                 draft_revision_id=first.current_revision_id,
                 generation_job_id=first.job_id,
-                run_number=1,
+                run_number=2,
                 validator_version="api-test",
                 ruleset_version="api-test",
                 status=ValidationRunStatus.PASSED,
@@ -1886,7 +1960,7 @@ def test_bulk_accept_api_rolls_back_all_items_when_one_validation_is_blocked(
                 generated_question_draft_id=second.id,
                 draft_revision_id=second.current_revision_id,
                 generation_job_id=second.job_id,
-                run_number=1,
+                run_number=2,
                 validator_version="api-test",
                 ruleset_version="api-test",
                 status=ValidationRunStatus.BLOCKED,
@@ -1946,7 +2020,7 @@ def test_bulk_accept_api_rejects_a_draft_from_another_job(
             generated_question_draft_id=first.id,
             draft_revision_id=first.current_revision_id,
             generation_job_id=first.job_id,
-            run_number=1,
+            run_number=2,
             validator_version="api-test",
             ruleset_version="api-test",
             status=ValidationRunStatus.PASSED,
@@ -1998,7 +2072,7 @@ def test_accept_api_requires_warning_confirmation_then_persists_confirmed_decisi
             generated_question_draft_id=draft.id,
             draft_revision_id=draft.current_revision_id,
             generation_job_id=draft.job_id,
-            run_number=1,
+            run_number=2,
             validator_version="api-test",
             ruleset_version="api-test",
             status=ValidationRunStatus.WARNING,
