@@ -320,6 +320,10 @@ function Initialize-ReleaseKustomization {
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: edu-homework-grader
+labels:
+  - includeSelectors: true
+    pairs:
+      app.kubernetes.io/part-of: edu-homework-grader
 resources:
   - application.yaml
   - student-activation-expiry.yaml
@@ -398,7 +402,11 @@ function Apply-RenderedRelease {
 
     $null = Invoke-NativeTool `
         -Tool 'kubectl' `
-        -Arguments @('apply', '--server-side', '--filename', $ManifestPath)
+        -Arguments @(
+            'apply', '--server-side',
+            '--field-manager', 'github-production-deployer',
+            '--force-conflicts', '--filename', $ManifestPath
+        )
 }
 
 function Wait-DeploymentRollouts {
