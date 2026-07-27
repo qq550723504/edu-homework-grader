@@ -7,6 +7,7 @@ from pathlib import Path
 
 from edu_grader_api.services import ai_evaluation
 from edu_grader_api.services import ai_evaluation_gate
+from edu_grader_api.services.generation import GENERATION_PROMPT_VERSION
 
 
 _FIXTURE_DIRECTORY = Path(__file__).parent / "fixtures" / "ai_evaluation"
@@ -23,6 +24,14 @@ def _records() -> list[ai_evaluation.EvaluationRecord]:
 
 def _codes(report: ai_evaluation.EvaluationReport) -> set[str]:
     return {violation.code for violation in report.violations}
+
+
+def test_release_gate_fixture_matches_active_generation_prompt_version() -> None:
+    policy = _policy()
+    records = _records()
+
+    assert policy.approved_prompt_versions == [GENERATION_PROMPT_VERSION]
+    assert {record.prompt_version for record in records} == {GENERATION_PROMPT_VERSION}
 
 
 def test_gate_accepts_complete_six_type_baseline() -> None:

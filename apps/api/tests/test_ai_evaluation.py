@@ -18,7 +18,7 @@ def _policy() -> evaluation.EvaluationPolicy:
         {
             "policy_id": "ai-evaluation-policy-v1",
             "approved_model_ids": ["gpt-5.6-terra"],
-            "approved_prompt_versions": ["generator-v3"],
+            "approved_prompt_versions": ["generator-v4"],
             "thresholds": {
                 "schema_pass_rate_min": 0.98,
                 "math_answer_error_rate_max": 0.005,
@@ -53,7 +53,7 @@ def _passing_records() -> list[evaluation.EvaluationRecord]:
                         "subject": "mathematics" if question_type.startswith("M") else "english",
                         "question_type": question_type,
                         "model_id": "gpt-5.6-terra",
-                        "prompt_version": "generator-v3",
+                        "prompt_version": "generator-v4",
                         "validator_version": "verification-v5",
                         "difficulty_band": "standard",
                         "seed": index,
