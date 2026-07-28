@@ -11,6 +11,7 @@
 
 - [K–13 课程约束型 AI 出题实施计划](ai-question-generation-plan.md)：课程模型、生成服务、验证门禁、教师审核、质量指标和 12 周实施安排。
 - [学生知识画像与自适应练习实施计划](adaptive-learning-plan.md)：交付顺序、系统边界和 16 周实施安排。其早期数据模型草图已由 Learning Event v1 数据契约取代；迁移、Schema 和消费者必须以该契约为准。
+- [题库、智能组卷与开放能力平台](question-bank-paper-platform.md)：多来源题库、教材目录、智能组卷、导出与开放 API 的产品边界、授权要求和 Epic 拆分。
 
 ## AI 出题运行与质量
 
