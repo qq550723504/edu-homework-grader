@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
-from typing import Protocol
 import unicodedata
+from collections.abc import Mapping
+from copy import deepcopy
+from dataclasses import dataclass
+from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -11,8 +13,10 @@ from sqlalchemy.orm import Session
 
 from ..audit import append_audit_event
 from ..models import (
+    ExternalContentReference,
     GradingPolicy,
     Question,
+    QuestionMediaAsset,
     QuestionTestCase,
     QuestionTestCaseRun,
     QuestionTestRun,
@@ -22,10 +26,17 @@ from ..models import (
     utc_now,
 )
 from ..policies import POLICY_SCHEMAS, validate_new_question_policy, validate_policy
-
+from .question_content import (
+    QUESTION_CONTENT_SCHEMA_VERSION,
+    QuestionContentValidationError,
+    legacy_projection,
+    legacy_question_content,
+    validate_question_content,
+)
 
 _WHITESPACE = re.compile(r"\s+")
 _TERMINAL_PUNCTUATION = re.compile(r"[.!?。！？]+$")
+_UNSET = object()
 
 
 class QuestionVersionAccessError(PermissionError):
@@ -78,6 +89,7 @@ def create_question(
     policy_version: str,
     rule_json: dict[str, object],
     reading_material: str | None = None,
+    content_json: Mapping[str, object] | None = None,
 ) -> QuestionVersion:
     """Create a tenant question and its first mutable version."""
 
@@ -106,12 +118,15 @@ def create_question(
     question = Question(tenant_id=tenant_id, created_by_user_id=actor_user_id, title=title)
     session.add(question)
     session.flush()
+    content = _synchronized_content(prompt, reading_material, content_json)
     version = QuestionVersion(
         question_id=question.id,
         version_number=1,
         status=VersionStatus.DRAFT,
         prompt=prompt,
         reading_material=reading_material,
+        content_schema_version=QUESTION_CONTENT_SCHEMA_VERSION,
+        content_json=content,
         question_type=question_type,
         grading_policy_id=policy.id,
         rule_json=rule_json,
@@ -153,6 +168,8 @@ def create_successor_draft(
         status=VersionStatus.DRAFT,
         prompt=published_version.prompt,
         reading_material=published_version.reading_material,
+        content_schema_version=published_version.content_schema_version,
+        content_json=deepcopy(published_version.content_json),
         question_type=published_version.question_type,
         grading_policy_id=published_version.grading_policy_id,
         rule_json=published_version.rule_json.copy(),
@@ -160,6 +177,7 @@ def create_successor_draft(
     )
     session.add(successor)
     session.flush()
+    copy_question_content_snapshot(session, published_version, successor)
     for test_case in published_version.test_cases:
         session.add(
             QuestionTestCase(
@@ -181,13 +199,21 @@ def update_draft(
     actor_user_id: UUID,
     prompt: str,
     rule_json: dict[str, object] | None = None,
+    reading_material: str | None | object = _UNSET,
+    content_json: Mapping[str, object] | None = None,
 ) -> None:
     """Update mutable draft content without allowing history rewrites."""
 
     _require_author(session, draft, actor_user_id)
     if draft.status is not VersionStatus.DRAFT:
         raise QuestionVersionStateError("only draft versions can be edited")
-    changed_fields = ["prompt"]
+    new_reading_material = (
+        draft.reading_material if reading_material is _UNSET else reading_material
+    )
+    if new_reading_material is not None and not isinstance(new_reading_material, str):
+        raise QuestionContentValidationError("question_content_invalid")
+    content = _synchronized_content(prompt, new_reading_material, content_json)
+    changed_fields = ["prompt", "content"]
     if rule_json is not None:
         policy = session.get(GradingPolicy, draft.grading_policy_id)
         if policy is None:
@@ -198,6 +224,9 @@ def update_draft(
         draft.rule_json = rule_json
         changed_fields.append("rule")
     draft.prompt = prompt
+    draft.reading_material = new_reading_material
+    draft.content_schema_version = QUESTION_CONTENT_SCHEMA_VERSION
+    draft.content_json = content
     session.add(draft)
     question = session.get(Question, draft.question_id)
     if question is not None:
@@ -460,6 +489,11 @@ def publish_question_version(
     _require_author(session, draft, actor_user_id)
     if draft.status is not VersionStatus.DRAFT:
         raise PublishConflict("only draft versions can be published")
+    if any(
+        not source.allow_persist or not source.allow_student_display
+        for source in draft.external_content_references
+    ):
+        raise PublishConflict("external content license does not permit publication")
 
     latest_run = session.scalar(
         select(QuestionTestRun)
@@ -507,3 +541,57 @@ def _require_author(session: Session, version: QuestionVersion, actor_user_id: U
     )
     if author_id != actor_user_id:
         raise QuestionVersionAccessError("only the original author can edit this question")
+
+
+def _synchronized_content(
+    prompt: str,
+    reading_material: str | None,
+    content_json: Mapping[str, object] | None,
+) -> dict[str, object]:
+    if content_json is None:
+        return legacy_question_content(prompt, reading_material)
+    content = validate_question_content(content_json)
+    if legacy_projection(content) != (prompt, reading_material):
+        raise QuestionContentValidationError("question_content_legacy_mismatch")
+    return content
+
+
+def copy_question_content_snapshot(
+    session: Session,
+    source: QuestionVersion,
+    target: QuestionVersion,
+) -> None:
+    """Copy snapshot child records so a successor never shares mutable rows."""
+    target.content_schema_version = source.content_schema_version
+    target.content_json = deepcopy(source.content_json)
+    for asset in source.media_assets:
+        session.add(
+            QuestionMediaAsset(
+                question_version_id=target.id,
+                kind=asset.kind,
+                storage_key=asset.storage_key,
+                mime_type=asset.mime_type,
+                byte_size=asset.byte_size,
+                content_hash=asset.content_hash,
+                alt_text=asset.alt_text,
+                position=asset.position,
+            )
+        )
+    for reference in source.external_content_references:
+        session.add(
+            ExternalContentReference(
+                question_version_id=target.id,
+                provider=reference.provider,
+                external_id=reference.external_id,
+                source_version=reference.source_version,
+                content_hash=reference.content_hash,
+                license_code=reference.license_code,
+                license_snapshot_json=deepcopy(reference.license_snapshot_json),
+                tenant_scope_id=reference.tenant_scope_id,
+                allow_persist=reference.allow_persist,
+                allow_student_display=reference.allow_student_display,
+                allow_ai_processing=reference.allow_ai_processing,
+                allow_redistribution=reference.allow_redistribution,
+                contract_expires_at=reference.contract_expires_at,
+            )
+        )
