@@ -12,8 +12,8 @@ const supervisorPath = join(e2eDirectory, 'e2e-api-supervisor.mjs')
 const fakeApiPath = join(e2eDirectory, 'fake-e2e-api.mjs')
 const launcherPath = join(e2eDirectory, 'start-e2e-api.mjs')
 
-async function waitUntil(predicate, message) {
-  const deadline = Date.now() + 10_000
+async function waitUntil(predicate, message, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (await predicate()) return
     await new Promise((resolveWait) => setTimeout(resolveWait, 25))
@@ -173,7 +173,11 @@ test('polluted parent identity environment cannot change the real E2E identity',
   }, 'launcher did not start its independent API supervisor')
 
   const { databasePath } = JSON.parse(await readFile(statePath, 'utf8'))
-  await waitUntil(() => pathExists(databasePath), 'E2E API did not create its SQLite database')
+  await waitUntil(
+    () => pathExists(databasePath),
+    'E2E API did not create its SQLite database',
+    30_000,
+  )
   await waitUntil(async () => {
     try {
       const response = await fetch('http://127.0.0.1:18000/v1/student/assignments', {

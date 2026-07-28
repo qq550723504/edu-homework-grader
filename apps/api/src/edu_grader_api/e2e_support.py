@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from copy import deepcopy
-from decimal import Decimal, InvalidOperation
-from datetime import datetime, timedelta, timezone
 import unicodedata
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
+from typing import ClassVar
 from uuid import UUID
 
 from edu_generator.contracts import GenerationPlanItem
+from edu_generator.prompt_templates import resolve_prompt_template
 from edu_generator.providers import FakeGenerationProvider
 from jwt.exceptions import InvalidTokenError
 from sqlalchemy import select
@@ -17,8 +19,8 @@ from .models import (
     Assignment,
     AssignmentItem,
     AssignmentStatus,
-    ClassTeacher,
     Classroom,
+    ClassTeacher,
     CurriculumActivityType,
     CurriculumGradeMapping,
     CurriculumObjective,
@@ -29,10 +31,14 @@ from .models import (
     CurriculumSourceRecord,
     Enrollment,
     GeneratedQuestionDraftRevision,
+    GenerationDefaultChangeRequest,
+    GenerationDefaultChangeStatus,
+    GenerationDefaultConfiguration,
+    GenerationDefaultSelection,
     GenerationJob,
     GenerationValidationRun,
-    GuardianConsentStatus,
     GradingPolicy,
+    GuardianConsentStatus,
     Question,
     QuestionVersion,
     Role,
@@ -54,9 +60,10 @@ from .services.generation import (
 from .services.grader import EmbeddingDependencyVersion, SemanticSimilarityResult
 from .services.questions import GradeResult
 
-
 STUDENT_TOKEN = "e2e-student-token"
 TEACHER_TOKEN = "e2e-teacher-token"
+PLATFORM_ADMIN_A_TOKEN = "e2e-platform-admin-a-token"
+PLATFORM_ADMIN_B_TOKEN = "e2e-platform-admin-b-token"
 E2E_ISSUER = "http://localhost:8080/realms/edu-grader"
 AI_REVIEW_JOB_KEY = "e2e-ai-review-batch-v1"
 AI_REVIEW_OBJECTIVE_REVISION_ID = UUID("00000000-0000-0000-0000-000000000037")
@@ -89,7 +96,7 @@ M2_EVIDENCE = {
 
 
 class StaticE2EVerifier:
-    _identities = {
+    _identities: ClassVar[dict[str, VerifiedIdentity]] = {
         STUDENT_TOKEN: VerifiedIdentity(
             issuer=E2E_ISSUER,
             subject="e2e-student",
@@ -98,6 +105,16 @@ class StaticE2EVerifier:
         TEACHER_TOKEN: VerifiedIdentity(
             issuer=E2E_ISSUER,
             subject="e2e-teacher",
+            school_id=None,
+        ),
+        PLATFORM_ADMIN_A_TOKEN: VerifiedIdentity(
+            issuer=E2E_ISSUER,
+            subject="e2e-platform-admin-a",
+            school_id=None,
+        ),
+        PLATFORM_ADMIN_B_TOKEN: VerifiedIdentity(
+            issuer=E2E_ISSUER,
+            subject="e2e-platform-admin-b",
             school_id=None,
         ),
     }
@@ -300,6 +317,49 @@ class DeterministicE2EGraderClient:
 DeterministicM2Client = DeterministicE2EGraderClient
 
 
+def _seed_generation_default(session: Session, actor: User, now: datetime) -> None:
+    """Seed a real, active default so ordinary E2E generation starts fail-closed."""
+
+    template = resolve_prompt_template("generator-v1", ("M1", "M2", "E1", "E2", "E3", "E4"))
+    configuration = GenerationDefaultConfiguration(
+        provider_name="fake",
+        model_version="fake-v1",
+        prompt_version="generator-v1",
+        prompt_template_fingerprint=template.fingerprint,
+        created_by_user_id=actor.id,
+    )
+    session.add(configuration)
+    session.flush()
+    initial_request = GenerationDefaultChangeRequest(
+        configuration_id=configuration.id,
+        status=GenerationDefaultChangeStatus.APPLIED,
+        request_reason="E2E baseline default",
+        application_reason="E2E fixture initialization",
+        idempotency_key="e2e-initial-generation-default",
+        request_digest="0" * 64,
+        evaluation_report_sha256="0" * 64,
+        evaluation_record_digest="0" * 64,
+        evaluation_run_id="e2e-baseline-run",
+        evaluation_spec_id="e2e-baseline-spec",
+        evaluation_watermark=now,
+        evaluation_summary_json={},
+        submitted_by_user_id=actor.id,
+        approved_by_user_id=actor.id,
+        applied_by_user_id=actor.id,
+        approved_at=now,
+        applied_at=now,
+    )
+    session.add(initial_request)
+    session.flush()
+    session.add(
+        GenerationDefaultSelection(
+            scope="global",
+            configuration_id=configuration.id,
+            applied_change_request_id=initial_request.id,
+        )
+    )
+
+
 def seed_demo_assignment(session: Session) -> None:
     tenant = session.scalar(select(Tenant).where(Tenant.slug == "pilot"))
     if tenant is not None:
@@ -341,6 +401,20 @@ def seed_demo_assignment(session: Session) -> None:
         oidc_issuer=E2E_ISSUER,
         oidc_subject="e2e-student",
         display_name="E2E Student",
+    )
+    platform_admin_a = User(
+        tenant=tenant,
+        role=Role.ADMIN,
+        oidc_issuer=E2E_ISSUER,
+        oidc_subject="e2e-platform-admin-a",
+        display_name="E2E Platform Admin A",
+    )
+    platform_admin_b = User(
+        tenant=tenant,
+        role=Role.ADMIN,
+        oidc_issuer=E2E_ISSUER,
+        oidc_subject="e2e-platform-admin-b",
+        display_name="E2E Platform Admin B",
     )
     classroom = Classroom(
         tenant=tenant,
@@ -418,6 +492,8 @@ def seed_demo_assignment(session: Session) -> None:
             tenant,
             teacher,
             student,
+            platform_admin_a,
+            platform_admin_b,
             classroom,
             policy,
             text_policy,
@@ -430,6 +506,7 @@ def seed_demo_assignment(session: Session) -> None:
         ]
     )
     session.flush()
+    _seed_generation_default(session, platform_admin_a, now)
     version.published_by_user_id = teacher.id
     text_version.published_by_user_id = teacher.id
     session.add_all(

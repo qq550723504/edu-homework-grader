@@ -34,6 +34,7 @@ const supervisorEnvironment = {
   OIDC_ISSUER: 'http://localhost:8080/realms/edu-grader',
   OIDC_SCHOOL_ID_CLAIM: 'school_id',
   OIDC_TENANT_SLUG: 'pilot',
+  GENERATION_GOVERNANCE_ADMIN_SUBJECTS: 'e2e-platform-admin-a,e2e-platform-admin-b',
   PYTHONPATH: pythonPath,
 }
 await writeFile(

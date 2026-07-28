@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 
 from edu_grader_api.main import app
+from edu_grader_api.services.generation_default_governance import GenerationDefaultGovernanceError
 
 
 def test_health() -> None:
@@ -14,11 +15,34 @@ def test_health() -> None:
 
 def test_ready_reports_database_availability(monkeypatch) -> None:
     monkeypatch.setattr("edu_grader_api.main.engine", create_engine("sqlite+pysqlite:///:memory:"))
+    monkeypatch.setattr("edu_grader_api.main.resolve_active_default", lambda _session: object())
 
     response = TestClient(app).get("/ready")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ready", "database": "ready"}
+    assert response.json() == {
+        "status": "ready",
+        "database": "ready",
+        "generation_default": "ready",
+    }
+
+
+def test_ready_fails_closed_without_an_active_generation_default(monkeypatch) -> None:
+    monkeypatch.setattr("edu_grader_api.main.engine", create_engine("sqlite+pysqlite:///:memory:"))
+
+    def unconfigured(_session):
+        raise GenerationDefaultGovernanceError("generation_default_not_configured")
+
+    monkeypatch.setattr("edu_grader_api.main.resolve_active_default", unconfigured)
+
+    response = TestClient(app).get("/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "degraded",
+        "database": "ready",
+        "generation_default": "unconfigured",
+    }
 
 
 def test_capabilities_include_english_and_mathematics() -> None:

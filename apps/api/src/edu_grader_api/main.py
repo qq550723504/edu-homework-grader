@@ -3,6 +3,7 @@ import logging
 from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from .auth import CurrentPrincipal, get_current_principal
 from .db import engine
@@ -13,20 +14,23 @@ from .routers.ai_question_generation import router as ai_question_generation_rou
 from .routers.ai_question_validation import router as ai_question_validation_router
 from .routers.appeals import router as appeals_router
 from .routers.appeals import teacher_router as teacher_appeals_router
+from .routers.assignments import router as assignments_router
+from .routers.assignments import student_router as student_assignments_router
 from .routers.classes import router as classes_router
 from .routers.curriculum import admin_router as curriculum_admin_router
 from .routers.curriculum import router as curriculum_router
 from .routers.guardian_consents import router as guardian_consents_router
-from .routers.assignments import router as assignments_router
-from .routers.assignments import student_router as student_assignments_router
-from .routers.questions import router as questions_router
-from .routers.questions import policy_catalog_router
-from .routers.questions import version_router as question_versions_router
 from .routers.privacy_requests import router as privacy_requests_router
+from .routers.questions import policy_catalog_router
+from .routers.questions import router as questions_router
+from .routers.questions import version_router as question_versions_router
+from .routers.reviews import metrics_router, publication_router
 from .routers.reviews import router as reviews_router
-from .routers.reviews import publication_router
-from .routers.reviews import metrics_router
 from .routers.teacher import router as teacher_router
+from .services.generation_default_governance import (
+    GenerationDefaultGovernanceError,
+    resolve_active_default,
+)
 from .settings import settings
 
 app = FastAPI(
@@ -73,7 +77,40 @@ def ready() -> dict[str, str] | JSONResponse:
         return JSONResponse(
             status_code=503, content={"status": "degraded", "database": "unavailable"}
         )
-    return {"status": "ready", "database": "ready"}
+    try:
+        with Session(engine) as session:
+            resolve_active_default(session)
+    except GenerationDefaultGovernanceError as exc:
+        if exc.code == "generation_default_not_configured":
+            logger.warning("readiness check failed", extra={"component": "generation_default"})
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "degraded",
+                    "database": "ready",
+                    "generation_default": "unconfigured",
+                },
+            )
+        logger.warning("readiness check failed", extra={"component": "generation_default"})
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "degraded",
+                "database": "ready",
+                "generation_default": "unavailable",
+            },
+        )
+    except Exception:
+        logger.warning("readiness check failed", extra={"component": "generation_default"})
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "degraded",
+                "database": "ready",
+                "generation_default": "unavailable",
+            },
+        )
+    return {"status": "ready", "database": "ready", "generation_default": "ready"}
 
 
 @app.get("/v1/meta/capabilities", tags=["meta"])
