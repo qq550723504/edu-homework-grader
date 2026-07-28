@@ -7,8 +7,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from edu_generator.contracts import GeneratedCandidate, ProviderFailure
-from edu_generator.openai_provider import OpenAIResponsesProvider
-from edu_generator.providers import FakeGenerationProvider, GenerationProvider
+from edu_generator.providers import GenerationProvider
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, func, or_, select, update
@@ -56,6 +55,7 @@ from ..services.generation import (
 )
 from ..services.budget_aware_verification import run_budget_aware_candidate_verification
 from ..services.grader import HttpGraderClient
+from ..services.generation_provider_registry import generation_provider
 from ..settings import settings
 
 
@@ -589,17 +589,7 @@ def accept_review_draft_route(
 def _generation_provider(
     provider_name: str | None, model_version: str | None
 ) -> GenerationProvider:
-    if provider_name == "fake" and model_version == "fake-v1":
-        return FakeGenerationProvider(seed=0)
-    if provider_name == "openai" and model_version is not None:
-        return OpenAIResponsesProvider(
-            api_key=settings.openai_api_key,
-            model=model_version,
-            base_url=settings.generator_openai_base_url,
-            allowed_hosts=settings.allowed_generator_provider_hosts,
-            timeout_seconds=settings.generator_timeout_seconds,
-        )
-    raise ProviderFailure("provider_not_configured", "generation provider is not configured")
+    return generation_provider(provider_name, model_version)
 
 
 def _validate_generated_drafts(session: Session, *, job: GenerationJob) -> None:

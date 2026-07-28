@@ -24,6 +24,7 @@ from ..models import (
     utc_now,
 )
 from .generation_governance import controls_for_target
+from .generation_provider_registry import supports_generation_provider
 
 
 class GenerationDefaultGovernanceError(ValueError):
@@ -63,6 +64,8 @@ def submit_change_request(
         model_version=model_version,
         prompt_version=prompt_version,
     )
+    if not supports_generation_provider(provider_name, model_version):
+        raise GenerationDefaultGovernanceError("default_provider_not_configured")
     if provider_name == "openai":
         try:
             validate_immutable_openai_model_id(model_version)
@@ -381,7 +384,15 @@ def _validated_report(payload: dict[str, object]):
         report = OperationalEvaluationReport.model_validate(payload)
     except ValidationError as exc:
         raise GenerationDefaultGovernanceError("evaluation_report_invalid") from exc
-    if not report.promotion_eligible:
+    gates = (report.baseline_gate, report.candidate_gate)
+    evidence_is_eligible = (
+        report.promotion_eligible
+        and report.export_manifest.issue_count == 0
+        and not report.violations
+        and all(gate is not None and gate.promotion_eligible for gate in gates)
+        and all(comparison.state != "fail" for comparison in report.metric_comparisons.values())
+    )
+    if not evidence_is_eligible:
         raise GenerationDefaultGovernanceError("evaluation_not_promotion_eligible")
     return report
 

@@ -123,6 +123,24 @@ def test_platform_governance_admin_submits_redacted_default_change(
             "record_digest": "a" * 64,
             "source_counts": {"accepted_directly": 1},
         },
+        "baseline_gate": {
+            "policy_id": "governance-v1",
+            "promotion_eligible": True,
+            "metrics": {},
+            "violations": [],
+            "rejection_reason_counts": {},
+            "cost_per_final_accepted_question": None,
+            "end_to_end_duration_ms": {},
+        },
+        "candidate_gate": {
+            "policy_id": "governance-v1",
+            "promotion_eligible": True,
+            "metrics": {},
+            "violations": [],
+            "rejection_reason_counts": {},
+            "cost_per_final_accepted_question": None,
+            "end_to_end_duration_ms": {},
+        },
     }
 
     response = client.post(

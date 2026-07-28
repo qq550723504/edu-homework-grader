@@ -42,7 +42,16 @@ def platform_admin(session: Session, *, subject: str = "platform-admin") -> User
     return user
 
 
-def passing_report(*, model_id: str = "fake-v1") -> dict[str, object]:
+def passing_report(*, model_id: str = "fake-v1", provider_name: str = "fake") -> dict[str, object]:
+    passing_gate = {
+        "policy_id": "generation-default-governance-v1",
+        "promotion_eligible": True,
+        "metrics": {},
+        "violations": [],
+        "rejection_reason_counts": {},
+        "cost_per_final_accepted_question": None,
+        "end_to_end_duration_ms": {},
+    }
     return OperationalEvaluationReport(
         spec_id="generation-default-governance-v1",
         exporter_version="operational-export-v1",
@@ -56,7 +65,7 @@ def passing_report(*, model_id: str = "fake-v1") -> dict[str, object]:
             "validator_version": "verification-v1",
         },
         candidate={
-            "provider_name": "fake",
+            "provider_name": provider_name,
             "model_id": model_id,
             "prompt_version": "generator-v1",
             "validator_version": "verification-v1",
@@ -72,6 +81,8 @@ def passing_report(*, model_id: str = "fake-v1") -> dict[str, object]:
             "record_digest": "a" * 64,
             "source_counts": {"accepted_directly": 12},
         },
+        baseline_gate=passing_gate,
+        candidate_gate=passing_gate,
     ).model_dump(mode="json")
 
 
@@ -99,6 +110,46 @@ def test_submit_rejects_evaluation_for_a_different_candidate(
         )
 
     assert error.value.code == "evaluation_candidate_mismatch"
+
+
+def test_submit_rejects_provider_pair_missing_from_runtime_registry(session: Session) -> None:
+    service = governance_service()
+    admin = platform_admin(session)
+
+    with pytest.raises(service.GenerationDefaultGovernanceError) as error:
+        service.submit_change_request(
+            session,
+            actor=admin,
+            provider_name="fake",
+            model_version="fake-v2",
+            prompt_version="generator-v1",
+            request_reason="Promote unsupported candidate",
+            evaluation_report=passing_report(model_id="fake-v2"),
+            idempotency_key="unsupported-provider-pair",
+        )
+
+    assert error.value.code == "default_provider_not_configured"
+
+
+def test_submit_rejects_promotion_flag_without_passing_gate_evidence(session: Session) -> None:
+    service = governance_service()
+    admin = platform_admin(session)
+    report = passing_report()
+    report["candidate_gate"] = None
+
+    with pytest.raises(service.GenerationDefaultGovernanceError) as error:
+        service.submit_change_request(
+            session,
+            actor=admin,
+            provider_name="fake",
+            model_version="fake-v1",
+            prompt_version="generator-v1",
+            request_reason="Promote unverified candidate",
+            evaluation_report=report,
+            idempotency_key="missing-gate-evidence",
+        )
+
+    assert error.value.code == "evaluation_not_promotion_eligible"
 
 
 def test_submitter_cannot_approve_own_change_request(session: Session) -> None:
@@ -150,10 +201,10 @@ def test_apply_selects_new_default_and_supersedes_previous_request(session: Sess
         session,
         actor=submitter,
         provider_name="fake",
-        model_version="fake-v2",
+        model_version="fake-v1",
         prompt_version="generator-v1",
         request_reason="Upgrade governed default",
-        evaluation_report=passing_report(model_id="fake-v2"),
+        evaluation_report=passing_report(),
         idempotency_key="promote-4",
     )
     service.approve_change_request(
@@ -163,7 +214,7 @@ def test_apply_selects_new_default_and_supersedes_previous_request(session: Sess
         session, request_id=replacement.id, actor=submitter, application_reason="Release"
     )
 
-    assert service.resolve_active_default(session).model_version == "fake-v2"
+    assert service.resolve_active_default(session).model_version == "fake-v1"
     assert original.status is GenerationDefaultChangeStatus.SUPERSEDED
     assert replacement.status is GenerationDefaultChangeStatus.APPLIED
 
@@ -192,10 +243,10 @@ def test_rollback_is_a_new_approved_change_request(session: Session) -> None:
         session,
         actor=submitter,
         provider_name="fake",
-        model_version="fake-v2",
+        model_version="fake-v1",
         prompt_version="generator-v1",
         request_reason="Upgrade governed default",
-        evaluation_report=passing_report(model_id="fake-v2"),
+        evaluation_report=passing_report(),
         idempotency_key="promote-6",
     )
     service.approve_change_request(

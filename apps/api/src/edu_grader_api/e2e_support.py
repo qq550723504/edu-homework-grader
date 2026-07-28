@@ -623,6 +623,11 @@ def _seed_ai_review_batch(session: Session, *, tenant: Tenant, teacher: User) ->
             subject="E2E G7 M1 M2 review batch",
             policy_catalog_version="2026.07",
             prompt_version="generator-v1",
+            provider_name="fake",
+            model_version="fake-v1",
+            prompt_template_fingerprint=resolve_prompt_template(
+                "generator-v1", ("M1", "M2")
+            ).fingerprint,
         ),
     )
     run_generation_job(session, job=job, provider=FakeGenerationProvider(seed=0))

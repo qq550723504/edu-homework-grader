@@ -120,6 +120,9 @@ spec:
             - name: OIDC_TENANT_SLUG
               valueFrom:
                 secretKeyRef: {name: edu-grader-runtime, key: OIDC_TENANT_SLUG}
+            - name: GENERATION_GOVERNANCE_ADMIN_SUBJECTS
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: GENERATION_GOVERNANCE_ADMIN_SUBJECTS}
             - name: AUDIT_HMAC_KEY
               valueFrom:
                 secretKeyRef: {name: edu-grader-runtime, key: AUDIT_HMAC_KEY}

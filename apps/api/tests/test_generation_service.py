@@ -885,6 +885,24 @@ def test_historical_job_with_unavailable_template_fails_without_creating_an_atte
     assert provider.calls == 0
 
 
+def test_job_with_changed_prompt_fingerprint_fails_without_creating_an_attempt(
+    session: Session,
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    job = create_or_get_job(session, request=generation_request(revision), actor=teacher)
+    job.prompt_template_fingerprint = "0" * 64
+    session.flush()
+
+    provider = FailIfCalledProvider()
+    run_generation_job(session, job=job, provider=provider)
+
+    assert job.status is GenerationJobStatus.FAILED
+    assert job.failure_code == "prompt_template_changed"
+    assert job.failed_count == job.requested_count
+    assert job.attempts == []
+    assert provider.calls == 0
+
+
 def test_cancellation_after_provider_returns_does_not_persist_a_draft(session: Session) -> None:
     teacher, revision = teacher_and_objective(session)
     job = create_or_get_job(session, request=generation_request(revision), actor=teacher)

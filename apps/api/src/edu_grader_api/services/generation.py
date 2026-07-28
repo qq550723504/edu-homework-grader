@@ -290,6 +290,13 @@ def run_generation_job(
         job.finished_at = utc_now()
         session.flush()
         return job
+    if template.fingerprint != job.prompt_template_fingerprint:
+        job.status = GenerationJobStatus.FAILED
+        job.failure_code = "prompt_template_changed"
+        job.failed_count = max(job.requested_count - job.succeeded_count, 0)
+        job.finished_at = utc_now()
+        session.flush()
+        return job
     job.status = GenerationJobStatus.GENERATING
     job.started_at = job.started_at or utc_now()
     session.flush()
