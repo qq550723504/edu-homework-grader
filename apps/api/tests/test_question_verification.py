@@ -43,6 +43,7 @@ from edu_grader_api.services.grader import (
 )
 from edu_grader_api.services.question_fingerprints import fingerprint_prompt
 from edu_grader_api.services.questions import GradeResult
+from edu_grader_api.services.verification_budget import VerificationDependencyTimeout
 
 DEFAULT_EMBEDDING = EmbeddingDependencyVersion(
     id="local-model",
@@ -1300,6 +1301,39 @@ def test_pending_semantic_comparator_failure_fails_closed(session: Session) -> N
     finding = finding_by_code(run, "duplicate_semantic_check_unavailable")
     assert run.status is ValidationRunStatus.BLOCKED
     assert finding.evidence_json == {"category": "similarity_unavailable"}
+
+
+def test_duplicate_check_propagates_budgeted_similarity_timeout(session: Session) -> None:
+    draft = generation_draft(session, candidate_json=valid_m1_candidate("Calculate two plus two."))
+    grader = SemanticGrader([VerificationDependencyTimeout("similarity")])
+    comparator_prompt = "What is the sum of two and two?"
+    snapshot = verification._DuplicateSnapshot(
+        threshold=0.92,
+        candidate_fingerprints=fingerprint_prompt("Calculate two plus two."),
+        exact_category=None,
+        normalized_category=None,
+        comparators=(
+            verification._PromptComparator(
+                category="published_question",
+                prompt=comparator_prompt,
+                normalized_hash=fingerprint_prompt(comparator_prompt).normalized_hash,
+            ),
+        ),
+    )
+
+    with pytest.raises(VerificationDependencyTimeout, match="similarity"):
+        verification._duplicate_findings(
+            session,
+            draft=draft,
+            tenant_id=draft.job.tenant_id,
+            prompt="Calculate two plus two.",
+            grader_client=grader,
+            _snapshot=snapshot,
+        )
+
+    assert grader.semantic_requests == [
+        ("Calculate two plus two.", ["What is the sum of two and two?"])
+    ]
 
 
 def test_cross_tenant_published_questions_are_never_queried(session: Session) -> None:
