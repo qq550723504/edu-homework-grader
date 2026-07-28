@@ -3,6 +3,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ImageSha,
 
+    [string]$ImageDigestsJson,
+
     [switch]$SkipPublicHealthCheck,
 
     [ValidateRange(0, 3600)]
@@ -33,6 +35,42 @@ function Assert-ImageSha {
 
     if ($Value -notmatch '^[0-9a-f]{40}$') {
         throw 'ImageSha must be a 40-character lower-case Git SHA.'
+    }
+}
+
+function ConvertTo-ReleaseImagesFromDigests {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$DigestsJson
+    )
+
+    try {
+        $digests = $DigestsJson | ConvertFrom-Json -AsHashtable
+    }
+    catch {
+        throw 'ImageDigestsJson must be a JSON object.'
+    }
+
+    $expectedKeys = @('api', 'grader', 'web', 'languagetool')
+    if ($null -eq $digests -or $digests.Count -ne $expectedKeys.Count) {
+        throw 'ImageDigestsJson must contain exactly api, grader, web and languagetool.'
+    }
+    foreach ($key in $expectedKeys) {
+        if (-not $digests.ContainsKey($key)) {
+            throw 'ImageDigestsJson must contain exactly api, grader, web and languagetool.'
+        }
+        if ([string]$digests[$key] -notmatch '^sha256:[0-9a-f]{64}$') {
+            throw "Image digest for $key is not a SHA-256 digest."
+        }
+    }
+
+    return [ordered]@{
+        ApiInit        = "$($ManagedRepositories.Api)@$($digests.api)"
+        Api            = "$($ManagedRepositories.Api)@$($digests.api)"
+        Grader         = "$($ManagedRepositories.Grader)@$($digests.grader)"
+        Web            = "$($ManagedRepositories.Web)@$($digests.web)"
+        LanguageTool   = "$($ManagedRepositories.LanguageTool)@$($digests.languagetool)"
+        ExpiryCronJob  = "$($ManagedRepositories.Api)@$($digests.api)"
     }
 }
 
@@ -587,9 +625,18 @@ try {
     New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
     $previousImages = Get-ManagedImages
 
-    $targetManifest = New-RenderedRelease `
-        -Sha $ImageSha `
-        -Destination (Join-Path $temporaryRoot 'target')
+    $targetDestination = Join-Path $temporaryRoot 'target'
+    if ([string]::IsNullOrWhiteSpace($ImageDigestsJson)) {
+        $targetManifest = New-RenderedRelease `
+            -Sha $ImageSha `
+            -Destination $targetDestination
+    }
+    else {
+        $targetImages = ConvertTo-ReleaseImagesFromDigests -DigestsJson $ImageDigestsJson
+        $targetManifest = New-RenderedRelease `
+            -ExactImages $targetImages `
+            -Destination $targetDestination
+    }
     $applyAttempted = $true
     Apply-RenderedRelease -ManifestPath $targetManifest
     Wait-ProductionHealthy

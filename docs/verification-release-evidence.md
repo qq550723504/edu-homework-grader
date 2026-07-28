@@ -154,15 +154,10 @@ Docker and migration output remains operational CI logging; the uploaded JSON an
 
 ## Workflow
 
-`.github/workflows/verification-release-evidence.yml` supports `workflow_dispatch` and relevant pull-request changes. Pull-request runs are observational and non-blocking; manual and release-candidate invocations fail when the evidence runner detects an infrastructure failure or product regression.
+`.github/workflows/verification-release-evidence.yml` supports `workflow_dispatch`, `workflow_call` and relevant pull-request changes. Pull-request runs are observational and non-blocking. The protected production-candidate path calls the workflow after the four immutable SHA-tagged images are published and before production approval; a failing evidence run prevents the deploy job from becoming eligible for approval.
 
-Artifacts use the source SHA in their name and are retained for 14 days.
+For a release-candidate call, the artifact includes `release-manifest.json`, containing only the immutable 40-character source SHA and the SHA-256 digests of the API, Grader, Web and LanguageTool images. Artifacts use the source SHA in their name and are retained for 14 days.
 
 ## Current limitations
 
-Version 1 does not yet provide:
-
-- a reusable RC workflow callable from the milestone signing pipeline;
-- full OIDC browser acceptance.
-
-Those remain follow-up slices in Issue #122. Performance threshold policy remains separate from this evidence contract.
+Performance threshold policy remains separate from this evidence contract.

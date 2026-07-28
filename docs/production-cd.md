@@ -62,12 +62,15 @@ pwsh -NoProfile -File ./scripts/k8s/bootstrap-production-deployer.ps1 `
 2. 合并后的准确 revision 运行 `CI`。只有 CI 成功，发布工作流才继续；纯
    `docs/**` 或 Markdown 变更会跳过镜像与部署。
 3. `Publish production images` 为 API、Grader、Web 和 LanguageTool 构建同一个
-   40 位 CI head SHA 标签的四个 GHCR 镜像。
-4. `deploy` job 在 `production` Environment 等待 Required reviewer。审批者核对
-   commit、PR、CI 和四个镜像后批准。
-5. job 在取得集群凭据前及实际部署前各检查一次：若 `main` 已出现更晚的代码
+   40 位 CI head SHA 标签的四个 GHCR 镜像，并收集每个不可变镜像 digest。
+4. 发布工作流将该 SHA 和四个 digest 交给真实 PostgreSQL、Grader 与
+   LanguageTool 的发布证据工作流。证据 Artifact 通过前，部署 job 不会创建。
+5. `deploy` job 在 `production` Environment 等待 Required reviewer。审批者核对
+   commit、PR、CI 和四个镜像后批准；部署脚本以相同 digest 渲染实际的
+   `repository@sha256:…` 镜像引用。
+6. job 在取得集群凭据前及实际部署前各检查一次：若 `main` 已出现更晚的代码
    变更，旧版本拒绝部署；仅有文档后继时仍可部署该待审版本。
-6. 部署脚本使用准确 SHA 渲染临时 Kustomize release，应用命名空间内工作负载，
+7. 部署脚本使用准确 SHA 渲染临时 Kustomize release，应用命名空间内工作负载，
    等待四个 Deployment、API Service ready endpoint 和公网
    `https://edu.getkr.com/`。结果写入 GitHub Actions step summary。
 
