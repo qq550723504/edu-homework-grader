@@ -141,4 +141,4 @@ This contract does not yet claim:
 - throughput or concurrency objectives;
 - release-environment fault-injection completion.
 
-Those items remain in #108 and later release-hardening work. Performance evidence must be generated before any percentile threshold becomes a protected release gate.
+The #108 release-evidence portion is complete: the protected RC exercised the timeout and recovery boundaries twice against real services. Performance evidence remains observational until repeated reports support an agreed percentile comparison policy; no percentile threshold is a protected release gate yet.

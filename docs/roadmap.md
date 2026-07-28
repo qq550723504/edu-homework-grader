@@ -57,7 +57,7 @@ Epic：[#36](https://github.com/qq550723504/edu-homework-grader/issues/36)
 → 多题作业
 ```
 
-### 当前实施状态（2026-07-24）
+### 当前实施状态（2026-07-28）
 
 - [x] #37、#38：课程目录、年级映射、Objective Revision、导入、审核、激活、来源和 prerequisite 图基础；
 - [x] #39：结构化 Generator、真实 Provider、任务状态机、配额和幂等；
@@ -70,7 +70,7 @@ Epic：[#36](https://github.com/qq550723504/edu-homework-grader/issues/36)
 - [x] PR #105：`objective-prerequisite-v1` 传递先修图门禁与 `verification-v7` / `rules-v7`；
 - [x] PR #107 / #106：`math-semantics-v1` 显式支持矩阵与专用阻断门禁；
 - [x] PR #109 / #108：`verification-capacity-v1` 载荷预检、脱敏容量证据和显式 Grader HTTP timeout；
-- [ ] #83 / #108：剩余总验证预算、细分依赖超时和 P95/P99 性能基线；
+- [x] #83 / #108 / #122：总验证预算、细分依赖超时、性能基线和发布前 RC 证据已完成；受保护 RC 在两次真实服务运行中覆盖 28 个场景，并绑定 source SHA 与镜像 digest；
 - [ ] #99：首次真实只读数据库报告、成本/usage 完整性和发布后修正映射；
 - [ ] #42：教师校准黄金集、正式 Blocking Threshold、线上反馈和 Shadow/Canary 证据；
 - [ ] #43：默认版本晋级/回滚、预算、Provider 合规、版权下架和事故响应；
@@ -104,7 +104,7 @@ Epic：[#36](https://github.com/qq550723504/edu-homework-grader/issues/36)
 
 ```text
 #37 → #38 → #39 → #40 → #41
-                         ├→ #83/#108 总预算与性能 ┐
+                         ├→ 已完成：#83/#108/#122 验证、性能与 RC 证据 ┐
                          ├→ #99 生产评估事实 ──────┼→ #42 教师阈值与线上证据 ─┐
                          └→ #43 运营治理 ──────────┘                          ├→ #31 真实全栈验收
 #29、#30 ────────────────────────────────────────────────────────────────────┘

@@ -142,4 +142,4 @@ Version 1 does not yet provide:
 - real PostgreSQL, Grader or LanguageTool fault-injection evidence;
 - release-environment acceptance evidence for #31.
 
-Those remain follow-up slices in #119 and #108. Performance thresholds must not become protected release gates until repeated reports demonstrate stable variance and an agreed comparison policy.
+The #108 release-evidence portion is complete: the protected RC exercised its real-service timeout and recovery scenarios twice. The remaining #119 work is concurrent-load and historical-baseline analysis; performance thresholds must not become protected release gates until repeated reports demonstrate stable variance and an agreed comparison policy.
