@@ -165,6 +165,22 @@ describe('student assignment question rendering', () => {
     wrapper.unmount()
   })
 
+  it('retries one rate-limited save using Retry-After without a tight loop', async () => {
+    const wrapper = await mountAssignmentPage(null, [
+      { response: { status: 429, headers: { get: () => '0' } } },
+      undefined
+    ])
+    const input = wrapper.get('textarea[aria-label="答案"]')
+    ;(input.element as HTMLTextAreaElement).value = 'synthetic answer'
+    await (wrapper.vm.$ as { setupState: { saveDraft: (event: Event) => Promise<void> } }).setupState.saveDraft({ target: input.element } as Event)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await flushPromises()
+
+    expect(requestedUrls.filter((url) => url.startsWith('/api/core/v1/student/attempts/'))).toHaveLength(2)
+    wrapper.unmount()
+  })
+
   it('removes named browser listeners when the assignment page unmounts', async () => {
     const removeEventListener = vi.spyOn(window, 'removeEventListener')
     const wrapper = await mountAssignmentPage(null)
