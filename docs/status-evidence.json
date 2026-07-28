@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "status_as_of": "2026-07-24",
-  "evidence_base_commit": "1dbe669d97c81cf815e81f5d2cb5f20b1e5e9611",
+  "status_as_of": "2026-07-28",
+  "evidence_base_commit": "6a15843c21fd7191efd780e0708245a7363617d5",
   "latest_full_ci": {
-    "tested_head": "1dbe669d97c81cf815e81f5d2cb5f20b1e5e9611",
+    "tested_head": "6a15843c21fd7191efd780e0708245a7363617d5",
     "workflow": "CI",
-    "run_number": 459,
-    "run_id": 30106268432,
+    "run_number": 656,
+    "run_id": 30329115969,
     "conclusion": "success",
     "required_jobs": [
       "changes",
@@ -65,6 +65,15 @@
     "container_build_verified": true,
     "live_grader_http_verified": true
   },
+  "release_evidence_rc": {
+    "workflow": "Publish production images",
+    "run_id": 30329286394,
+    "source_commit": "6a15843c21fd7191efd780e0708245a7363617d5",
+    "conclusion": "success",
+    "repetitions": 2,
+    "scenario_count": 28,
+    "deployment_approval": "pending_protected_production_approval"
+  },
   "release_state": {
     "code_implemented": true,
     "repository_ci_verified": true,
@@ -79,9 +88,6 @@
     42,
     43,
     76,
-    83,
-    99,
-    108,
-    122
+    99
   ]
 }
