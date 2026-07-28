@@ -1,11 +1,12 @@
 // @vitest-environment happy-dom
 
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import AssignmentPage from '../app/pages/student/assignments/[assignmentId].vue'
 import '../app/assets/css/main.css'
+import { resetDraftDatabase } from '../app/lib/drafts'
 
 function assignmentDetail(readingMaterial: string | null) {
   return {
@@ -27,10 +28,17 @@ function assignmentDetail(readingMaterial: string | null) {
   }
 }
 
-async function mountAssignmentPage(readingMaterial: string | null): Promise<VueWrapper> {
+let requestedUrls: string[] = []
+
+async function mountAssignmentPage(readingMaterial: string | null, saveFailure?: unknown): Promise<VueWrapper> {
   vi.stubGlobal('$fetch', vi.fn(async (url: string) => {
+    requestedUrls.push(url)
     if (url === '/api/auth/session') {
       return { id: 'student-1', tenant_id: 'tenant-1', csrf_token: 'csrf-token' }
+    }
+    if (url.startsWith('/api/core/v1/student/attempts/')) {
+      if (saveFailure) throw saveFailure
+      return { version: 2 }
     }
     return assignmentDetail(readingMaterial)
   }))
@@ -50,7 +58,10 @@ async function mountAssignmentPage(readingMaterial: string | null): Promise<VueW
 
 describe('student assignment question rendering', () => {
   beforeEach(() => {
+    requestedUrls = []
     vi.stubGlobal('computed', computed)
+    vi.stubGlobal('onBeforeUnmount', onBeforeUnmount)
+    vi.stubGlobal('navigator', { onLine: true })
     vi.stubGlobal('onMounted', onMounted)
     vi.stubGlobal('ref', ref)
     vi.stubGlobal('useRoute', () => ({ params: { assignmentId: 'assignment-1' } }))
@@ -59,6 +70,10 @@ describe('student assignment question rendering', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+  })
+
+  afterEach(async () => {
+    await resetDraftDatabase()
   })
 
   it('renders multiline reading material before the question prompt', async () => {
@@ -83,5 +98,50 @@ describe('student assignment question rendering', () => {
     expect(wrapper.get('h2').text()).toBe('Why did the students arrive late?')
 
     wrapper.unmount()
+  })
+
+  it('shows a safe validation message and keeps the answer editable', async () => {
+    const wrapper = await mountAssignmentPage(null, {
+      statusCode: 422,
+      data: { detail: { code: 'mathjson_invalid', message: 'internal parser secret' } }
+    })
+
+    const input = wrapper.get('textarea[aria-label="答案"]')
+    expect(input.attributes('disabled')).toBeUndefined()
+    ;(input.element as HTMLTextAreaElement).value = 'synthetic answer'
+    await (wrapper.vm.$ as { setupState: { saveDraft: (event: Event) => Promise<void> } }).setupState.saveDraft({ target: input.element } as Event)
+    await flushPromises()
+
+    expect(requestedUrls).toContain('/api/core/v1/student/attempts/attempt-1/answers/item-1')
+    expect(wrapper.text()).toContain('答案格式需要修改后再同步。')
+    expect(wrapper.get('textarea[aria-label="答案"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.text()).not.toContain('secret')
+    wrapper.unmount()
+  })
+
+  it('blocks additional writes after a processing restriction', async () => {
+    const wrapper = await mountAssignmentPage(null, { statusCode: 403 })
+
+    const input = wrapper.get('textarea[aria-label="答案"]')
+    expect(input.attributes('disabled')).toBeUndefined()
+    ;(input.element as HTMLTextAreaElement).value = 'synthetic answer'
+    await (wrapper.vm.$ as { setupState: { saveDraft: (event: Event) => Promise<void> } }).setupState.saveDraft({ target: input.element } as Event)
+    await flushPromises()
+
+    expect(requestedUrls).toContain('/api/core/v1/student/attempts/attempt-1/answers/item-1')
+    expect(wrapper.text()).toContain('当前无法处理作答，请联系教师或管理员。')
+    expect(wrapper.get('textarea[aria-label="答案"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('removes named browser listeners when the assignment page unmounts', async () => {
+    const removeEventListener = vi.spyOn(window, 'removeEventListener')
+    const wrapper = await mountAssignmentPage(null)
+
+    wrapper.unmount()
+
+    expect(removeEventListener).toHaveBeenCalledWith('online', expect.any(Function))
+    expect(removeEventListener).toHaveBeenCalledWith('offline', expect.any(Function))
+    expect(removeEventListener).toHaveBeenCalledWith('visibilitychange', expect.any(Function))
   })
 })
