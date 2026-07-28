@@ -212,7 +212,12 @@ def update_draft(
     )
     if new_reading_material is not None and not isinstance(new_reading_material, str):
         raise QuestionContentValidationError("question_content_invalid")
-    content = _synchronized_content(prompt, new_reading_material, content_json)
+    content = _synchronized_content(
+        prompt,
+        new_reading_material,
+        content_json,
+        existing_content=draft.content_json,
+    )
     changed_fields = ["prompt", "content"]
     if rule_json is not None:
         policy = session.get(GradingPolicy, draft.grading_policy_id)
@@ -547,8 +552,16 @@ def _synchronized_content(
     prompt: str,
     reading_material: str | None,
     content_json: Mapping[str, object] | None,
+    *,
+    existing_content: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     if content_json is None:
+        if existing_content is not None:
+            content = deepcopy(validate_question_content(existing_content))
+            legacy_content = legacy_question_content(prompt, reading_material)
+            content["stem"] = legacy_content["stem"]
+            content["reading_material"] = legacy_content["reading_material"]
+            return content
         return legacy_question_content(prompt, reading_material)
     content = validate_question_content(content_json)
     if legacy_projection(content) != (prompt, reading_material):

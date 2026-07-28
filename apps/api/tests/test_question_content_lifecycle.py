@@ -130,6 +130,47 @@ def test_successor_copies_independent_content_media_and_source_rows() -> None:
         )
 
 
+def test_guard_only_draft_update_preserves_existing_rich_content() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        tenant, teacher = _tenant_teacher(session)
+        version = create_question(
+            session,
+            tenant_id=tenant.id,
+            actor_user_id=teacher.id,
+            title="Addition",
+            prompt="What is 2 + 3?",
+            question_type="M1",
+            policy_version="1",
+            rule_json={"expected": 5},
+        )
+        session.flush()
+        version.content_json["explanation"] = [{"kind": "text", "text": "Add the two numbers."}]
+        version.content_json["metadata"] = {
+            "grade": "7",
+            "difficulty": "easy",
+            "estimated_minutes": 2,
+        }
+
+        update_draft(
+            session,
+            version,
+            actor_user_id=teacher.id,
+            prompt=version.prompt,
+        )
+
+        assert version.content_json["explanation"] == [
+            {"kind": "text", "text": "Add the two numbers."}
+        ]
+        assert version.content_json["metadata"] == {
+            "grade": "7",
+            "difficulty": "easy",
+            "estimated_minutes": 2,
+        }
+
+
 def _tenant_teacher(session: Session) -> tuple[Tenant, User]:
     tenant = Tenant(slug="pilot", name="Pilot")
     teacher = User(tenant=tenant, role=Role.TEACHER, display_name="Teacher")
