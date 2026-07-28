@@ -30,14 +30,16 @@ function assignmentDetail(readingMaterial: string | null) {
 
 let requestedUrls: string[] = []
 
-async function mountAssignmentPage(readingMaterial: string | null, saveFailure?: unknown): Promise<VueWrapper> {
+async function mountAssignmentPage(readingMaterial: string | null, saveFailure?: unknown | unknown[]): Promise<VueWrapper> {
+  const saveFailures = Array.isArray(saveFailure) ? [...saveFailure] : [saveFailure]
   vi.stubGlobal('$fetch', vi.fn(async (url: string) => {
     requestedUrls.push(url)
     if (url === '/api/auth/session') {
       return { id: 'student-1', tenant_id: 'tenant-1', csrf_token: 'csrf-token' }
     }
     if (url.startsWith('/api/core/v1/student/attempts/')) {
-      if (saveFailure) throw saveFailure
+      const failure = saveFailures.shift()
+      if (failure) throw failure
       return { version: 2 }
     }
     return assignmentDetail(readingMaterial)
@@ -147,6 +149,19 @@ describe('student assignment question rendering', () => {
     expect(wrapper.get('[data-testid="use-server-answer"]').text()).toBe('采用服务器答案')
     expect(wrapper.get('[data-testid="keep-local-answer"]').text()).toBe('保留我的答案')
     expect(wrapper.text()).not.toContain('server answer')
+    wrapper.unmount()
+  })
+
+  it('refreshes the BFF session once before retrying a 401 save', async () => {
+    const wrapper = await mountAssignmentPage(null, [{ statusCode: 401 }, undefined])
+    const input = wrapper.get('textarea[aria-label="答案"]')
+    ;(input.element as HTMLTextAreaElement).value = 'synthetic answer'
+    await (wrapper.vm.$ as { setupState: { saveDraft: (event: Event) => Promise<void> } }).setupState.saveDraft({ target: input.element } as Event)
+    await flushPromises()
+
+    expect(requestedUrls.filter((url) => url === '/api/auth/session')).toHaveLength(2)
+    expect(requestedUrls.filter((url) => url.startsWith('/api/core/v1/student/attempts/'))).toHaveLength(2)
+    expect(wrapper.text()).toContain('已同步。')
     wrapper.unmount()
   })
 
