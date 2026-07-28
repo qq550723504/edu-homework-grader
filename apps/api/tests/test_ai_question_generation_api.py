@@ -517,6 +517,34 @@ def test_regenerated_job_has_initial_validation_run(client: TestClient, session:
     assert [item["revision_number"] for item in response.json()["items"]] == [1]
 
 
+def test_legacy_regeneration_without_a_default_returns_a_stable_rejection(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client, teacher, revision, idempotency_key="legacy-regeneration-source"
+    )
+    source = session.get(GenerationJob, UUID(str(created["id"])))
+    selection = session.get(GenerationDefaultSelection, "global")
+    assert source is not None
+    assert selection is not None
+    source.provider_name = None
+    source.model_version = None
+    source.prompt_template_fingerprint = None
+    session.delete(selection)
+    session.commit()
+    source_draft = fetch_only_draft(client, headers, created["id"])
+
+    response = client.post(
+        f"/v1/ai-generated-questions/{source_draft['id']}/regenerate",
+        headers=headers | {"Idempotency-Key": "legacy-regeneration-without-default"},
+        json={},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": {"code": "generation_request_rejected"}}
+
+
 def fetch_only_draft(
     client: TestClient, headers: dict[str, str], job_id: object
 ) -> dict[str, object]:

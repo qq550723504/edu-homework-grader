@@ -583,7 +583,11 @@ def _application_replay(
         return False
     if request.application_request_digest != digest:
         raise GenerationDefaultGovernanceError("default_change_idempotency_conflict")
-    return request.status is GenerationDefaultChangeStatus.APPLIED
+    return request.status in {
+        GenerationDefaultChangeStatus.APPLIED,
+        GenerationDefaultChangeStatus.SUPERSEDED,
+        GenerationDefaultChangeStatus.ROLLED_BACK,
+    }
 
 
 def _create_or_load_configuration(

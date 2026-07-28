@@ -384,9 +384,9 @@ def regenerate_draft_route(
         idempotency_key=key,
         teacher_constraint=body.teacher_constraint,
     )
-    snapshot = snapshot_for_regeneration(session, original)
     existing = _find_job_by_idempotency(session, actor=actor, idempotency_key=key)
     try:
+        snapshot = snapshot_for_regeneration(session, original)
         reserved = False
         if existing is None:
             reserved = _enforce_generation_quota(

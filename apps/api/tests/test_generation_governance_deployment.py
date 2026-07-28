@@ -28,3 +28,12 @@ def test_production_passes_governance_admin_allowlist_to_api() -> None:
     environment = api["spec"]["template"]["spec"]["containers"][0]["env"]
 
     assert any(item["name"] == "GENERATION_GOVERNANCE_ADMIN_SUBJECTS" for item in environment)
+    assert any(
+        item["name"] == "OPENAI_API_KEY"
+        and item["valueFrom"]["secretKeyRef"]
+        == {
+            "name": "edu-grader-runtime",
+            "key": "OPENAI_API_KEY",
+        }
+        for item in environment
+    )
