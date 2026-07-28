@@ -134,6 +134,22 @@ describe('student assignment question rendering', () => {
     wrapper.unmount()
   })
 
+  it('requires an explicit choice when the server has a newer answer', async () => {
+    const wrapper = await mountAssignmentPage(null, {
+      statusCode: 409,
+      data: { current: { answer: { format: 'text-v1', text: 'server answer' }, version: 2 } }
+    })
+    const input = wrapper.get('textarea[aria-label="答案"]')
+    ;(input.element as HTMLTextAreaElement).value = 'local answer'
+    await (wrapper.vm.$ as { setupState: { saveDraft: (event: Event) => Promise<void> } }).setupState.saveDraft({ target: input.element } as Event)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="use-server-answer"]').text()).toBe('采用服务器答案')
+    expect(wrapper.get('[data-testid="keep-local-answer"]').text()).toBe('保留我的答案')
+    expect(wrapper.text()).not.toContain('server answer')
+    wrapper.unmount()
+  })
+
   it('removes named browser listeners when the assignment page unmounts', async () => {
     const removeEventListener = vi.spyOn(window, 'removeEventListener')
     const wrapper = await mountAssignmentPage(null)
