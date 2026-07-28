@@ -14,6 +14,12 @@ PUBLISH_WORKFLOW_PATH = (
 ROLLBACK_WORKFLOW_PATH = (
     Path(__file__).resolve().parents[3] / ".github" / "workflows" / "rollback-production.yml"
 )
+RELEASE_EVIDENCE_WORKFLOW_PATH = (
+    Path(__file__).resolve().parents[3]
+    / ".github"
+    / "workflows"
+    / "verification-release-evidence.yml"
+)
 LIVE_GENERATOR_PROVIDER_ACCEPTANCE_WORKFLOW_PATH = (
     Path(__file__).resolve().parents[3]
     / ".github"
@@ -34,6 +40,9 @@ REVIEWED_ACTION_REFS = {
     "docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8",
     "docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9",
     "imranismail/setup-kustomize@53f941b41dca13ed61874bbc6b4b6e1562877530",
+    "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
+    "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+    "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
 }
 
 
@@ -157,7 +166,7 @@ def test_release_deploy_is_approved_pinned_and_rejects_superseded_main() -> None
     final_guard = named_step(deploy_data, "Recheck release immediately before deploy")
     deploy_step = named_step(deploy_data, "Deploy approved production release")
 
-    assert "needs: [eligibility, publish]" in deploy
+    assert "needs: [eligibility, publish, release-manifest, release-evidence]" in deploy
     assert "needs.eligibility.outputs.release_eligible == 'true'" in deploy
     assert "needs.publish.result == 'success'" in deploy
     assert re.search(
@@ -176,6 +185,8 @@ def test_release_deploy_is_approved_pinned_and_rejects_superseded_main() -> None
     assert "imranismail/setup-kustomize@" in deploy
     assert "deploy-production.ps1" in deploy
     assert '-ImageSha "${{ github.event.workflow_run.head_sha }}"' in deploy
+    assert "IMAGE_DIGESTS_JSON: ${{ needs.release-manifest.outputs.image_digests }}" in deploy
+    assert '-ImageDigestsJson "$env:IMAGE_DIGESTS_JSON"' in deploy
     assert steps.index(final_guard) == steps.index(deploy_step) - 1
     assert steps.index(first_guard) < steps.index(
         named_step(deploy_data, "Configure production kubeconfig")
@@ -232,12 +243,16 @@ def test_release_guard_allows_docs_only_descendant_but_rejects_code_descendant(
 
 
 def test_production_workflows_pin_every_action_to_an_immutable_commit() -> None:
-    for path in (PUBLISH_WORKFLOW_PATH, ROLLBACK_WORKFLOW_PATH):
+    for path in (
+        PUBLISH_WORKFLOW_PATH,
+        ROLLBACK_WORKFLOW_PATH,
+        RELEASE_EVIDENCE_WORKFLOW_PATH,
+    ):
         workflow = workflow_data(path)
         action_refs = [
             step["uses"]
             for job in workflow["jobs"].values()
-            for step in job["steps"]
+            for step in job.get("steps", [])
             if "uses" in step
         ]
 

@@ -278,6 +278,37 @@ BeforeEach {
         }
     }
 
+    It 'deploys the release-evidence image digests rather than mutable SHA tags' {
+        $digests = @{
+            api = 'sha256:' + ('a' * 64)
+            grader = 'sha256:' + ('b' * 64)
+            web = 'sha256:' + ('c' * 64)
+            languagetool = 'sha256:' + ('d' * 64)
+        } | ConvertTo-Json -Compress
+
+        & $scriptPath `
+            -ImageSha $validSha `
+            -ImageDigestsJson $digests `
+            -SkipPublicHealthCheck
+
+        $global:DeployProductionTestState.KustomizeCalls |
+            Should -Not -Match '^edit set image '
+        $images = @(
+            Get-WorkloadImages -Resources @(
+                Get-ManifestResources `
+                    -Content $global:DeployProductionTestState.AppliedManifests[0]
+            )
+        )
+        $apiImage = 'ghcr.io/qq550723504/edu-homework-grader-api@sha256:' + ('a' * 64)
+        $graderImage = 'ghcr.io/qq550723504/edu-homework-grader-grader@sha256:' + ('b' * 64)
+        $webImage = 'ghcr.io/qq550723504/edu-homework-grader-web@sha256:' + ('c' * 64)
+        $languageToolImage = 'ghcr.io/qq550723504/edu-homework-grader-languagetool@sha256:' + ('d' * 64)
+        $images | Should -Contain $apiImage
+        $images | Should -Contain $graderImage
+        $images | Should -Contain $webImage
+        $images | Should -Contain $languageToolImage
+    }
+
     It 'preserves existing selector labels and force-adopts legacy image ownership' {
         & $scriptPath -ImageSha $validSha -SkipPublicHealthCheck
 
