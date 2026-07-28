@@ -5,6 +5,7 @@ const ADMIN_A_TOKEN = 'e2e-platform-admin-a-token'
 const ADMIN_B_TOKEN = 'e2e-platform-admin-b-token'
 const candidateProvider = 'openai'
 const candidateModel = 'gpt-5.6-terra'
+const generatorV1Fingerprint = '2c62d68956fe618bb81e72742984c8b626fbcea5645697b80929752bcfd17b5d'
 const passingGate = {
   policy_id: 'e2e-default-governance-policy-v1',
   promotion_eligible: true,
@@ -22,10 +23,10 @@ const evaluationReport = JSON.stringify({
   tenant_id: 'pilot',
   watermark: '2026-07-28T00:00:00Z',
   baseline: {
-    provider_name: 'fake', model_id: 'fake-v1', prompt_version: 'generator-v1', validator_version: 'verification-v1',
+    provider_name: 'fake', model_id: 'fake-v1', prompt_version: 'generator-v1', prompt_template_fingerprint: generatorV1Fingerprint, validator_version: 'verification-v1',
   },
   candidate: {
-    provider_name: candidateProvider, model_id: candidateModel, prompt_version: 'generator-v1', validator_version: 'verification-v1',
+    provider_name: candidateProvider, model_id: candidateModel, prompt_version: 'generator-v1', prompt_template_fingerprint: generatorV1Fingerprint, validator_version: 'verification-v1',
   },
   promotion_eligible: true,
   export_manifest: {

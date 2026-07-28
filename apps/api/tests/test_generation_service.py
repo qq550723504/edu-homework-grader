@@ -1011,13 +1011,10 @@ def test_generation_pipeline_blocks_provider_and_model_for_governed_entries(
         is_global=True,
     )
 
-    job = create_or_get_job(session, request=generation_request(revision), actor=teacher)
-    provider = FailIfCalledProvider()
-    run_generation_job(session, job=job, provider=provider)
+    with pytest.raises(GenerationServiceError) as error:
+        create_or_get_job(session, request=generation_request(revision), actor=teacher)
 
-    assert job.status is GenerationJobStatus.FAILED
-    assert job.failure_code in {"provider_control_blocked", "model_control_blocked"}
-    assert provider.calls == 0
+    assert str(error.value) in {"provider_control_blocked", "model_control_blocked"}
 
 
 def _generation_job_for_diversity_test(

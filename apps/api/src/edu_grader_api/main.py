@@ -29,7 +29,7 @@ from .routers.reviews import router as reviews_router
 from .routers.teacher import router as teacher_router
 from .services.generation_default_governance import (
     GenerationDefaultGovernanceError,
-    resolve_active_default,
+    validate_active_default,
 )
 from .settings import settings
 
@@ -79,7 +79,7 @@ def ready() -> dict[str, str] | JSONResponse:
         )
     try:
         with Session(engine) as session:
-            resolve_active_default(session)
+            validate_active_default(session)
     except GenerationDefaultGovernanceError as exc:
         if exc.code == "generation_default_not_configured":
             if settings.generation_governance_admin_subject_set:

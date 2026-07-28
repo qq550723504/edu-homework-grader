@@ -16,8 +16,8 @@ describe('admin generation default governance API', () => {
       provider_name: 'openai', model_version: 'gpt-4.1-2025-04-14', prompt_version: 'generator-v1',
       request_reason: '本周评估通过', evaluation_report: report,
     })
-    await decideGenerationDefaultChange(request, 'csrf-token', 'change-1', 'approve', '双人复核通过')
-    await decideGenerationDefaultChange(request, 'csrf-token', 'change-1', 'apply', '切换默认配置')
+    await decideGenerationDefaultChange(request, 'csrf-token', 'approval-key', 'change-1', 'approve', '双人复核通过')
+    await decideGenerationDefaultChange(request, 'csrf-token', 'apply-key', 'change-1', 'apply', '切换默认配置')
     await rollbackGenerationDefaultChange(request, 'csrf-token', 'rollback-key', 'change-1', '质量回退')
 
     expect(request).toHaveBeenNthCalledWith(1, '/api/core/v1/admin/ai-generation-default-change-requests', {
@@ -28,10 +28,10 @@ describe('admin generation default governance API', () => {
       },
     })
     expect(request).toHaveBeenNthCalledWith(2, '/api/core/v1/admin/ai-generation-default-change-requests/change-1/approve', {
-      method: 'POST', headers: { 'X-CSRF-Token': 'csrf-token' }, body: { reason: '双人复核通过' },
+      method: 'POST', headers: { 'X-CSRF-Token': 'csrf-token', 'Idempotency-Key': 'approval-key' }, body: { reason: '双人复核通过' },
     })
     expect(request).toHaveBeenNthCalledWith(3, '/api/core/v1/admin/ai-generation-default-change-requests/change-1/apply', {
-      method: 'POST', headers: { 'X-CSRF-Token': 'csrf-token' }, body: { reason: '切换默认配置' },
+      method: 'POST', headers: { 'X-CSRF-Token': 'csrf-token', 'Idempotency-Key': 'apply-key' }, body: { reason: '切换默认配置' },
     })
     expect(request).toHaveBeenNthCalledWith(4, '/api/core/v1/admin/ai-generation-default-change-requests/change-1/rollback', {
       method: 'POST', headers: { 'X-CSRF-Token': 'csrf-token', 'Idempotency-Key': 'rollback-key' }, body: { reason: '质量回退' },

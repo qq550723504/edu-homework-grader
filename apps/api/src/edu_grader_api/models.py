@@ -864,6 +864,9 @@ class GenerationDefaultChangeRequest(Base):
     evaluation_run_id: Mapped[str] = mapped_column(String(200), nullable=False)
     evaluation_spec_id: Mapped[str] = mapped_column(String(200), nullable=False)
     evaluation_watermark: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    evaluated_against_selection_request_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("generation_default_change_requests.id")
+    )
     evaluation_summary_json: Mapped[dict[str, object]] = mapped_column(
         JSON().with_variant(JSONB, "postgresql"), default=dict
     )
@@ -873,6 +876,10 @@ class GenerationDefaultChangeRequest(Base):
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    decision_request_digest: Mapped[str | None] = mapped_column(String(64))
+    application_idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    application_request_digest: Mapped[str | None] = mapped_column(String(64))
 
     configuration: Mapped[GenerationDefaultConfiguration] = relationship()
     rollback_source_change_request: Mapped[GenerationDefaultChangeRequest | None] = relationship(

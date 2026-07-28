@@ -45,13 +45,13 @@ from ..services.ai_question_review import (
 )
 from ..services.generation import (
     GenerationJobRequest,
-    GenerationJobSnapshot,
     GenerationServiceError,
     cancel_generation_job,
     create_or_get_job,
     derive_generation_plan,
     generation_plan_item_for_ordinal,
     run_generation_job,
+    snapshot_for_regeneration,
 )
 from ..services.budget_aware_verification import run_budget_aware_candidate_verification
 from ..services.grader import HttpGraderClient
@@ -178,7 +178,8 @@ def create_generation_job_route(
                     "status": job.status.value,
                     "requested_count": job.requested_count,
                     "succeeded_count": job.succeeded_count,
-                    "provider": _provider_name(),
+                    "provider": job.provider_name,
+                    "model_version": job.model_version,
                 },
             )
         session.commit()
@@ -383,7 +384,7 @@ def regenerate_draft_route(
         idempotency_key=key,
         teacher_constraint=body.teacher_constraint,
     )
-    snapshot = GenerationJobSnapshot.from_job(original)
+    snapshot = snapshot_for_regeneration(session, original)
     existing = _find_job_by_idempotency(session, actor=actor, idempotency_key=key)
     try:
         reserved = False
@@ -410,7 +411,12 @@ def regenerate_draft_route(
                 event_type="ai_generation.regenerated",
                 target_type="generation_job",
                 target_id=job.id,
-                metadata={"source_draft_id": str(draft.id), "status": job.status.value},
+                metadata={
+                    "source_draft_id": str(draft.id),
+                    "status": job.status.value,
+                    "provider": job.provider_name,
+                    "model_version": job.model_version,
+                },
             )
         session.commit()
     except GenerationServiceError as exc:
@@ -612,10 +618,6 @@ def _validate_generated_drafts(session: Session, *, job: GenerationJob) -> None:
                 revision=revision,
                 grader_client=grader_client,
             )
-
-
-def _provider_name() -> str:
-    return settings.generation_provider
 
 
 def _actor(session: Session, principal: CurrentPrincipal) -> User:

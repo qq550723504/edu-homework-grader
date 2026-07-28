@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
+from edu_generator.prompt_templates import resolve_prompt_template
 
 from edu_grader_api.auth import VerifiedIdentity, get_token_verifier
 from edu_grader_api.db import Base, get_session
@@ -104,12 +105,18 @@ def test_platform_governance_admin_submits_redacted_default_change(
             "provider_name": "fake",
             "model_id": "fake-v0",
             "prompt_version": "generator-v1",
+            "prompt_template_fingerprint": resolve_prompt_template(
+                "generator-v1", ("M1", "M2", "E1", "E2", "E3", "E4")
+            ).fingerprint,
             "validator_version": "verification-v1",
         },
         "candidate": {
             "provider_name": "fake",
             "model_id": "fake-v1",
             "prompt_version": "generator-v1",
+            "prompt_template_fingerprint": resolve_prompt_template(
+                "generator-v1", ("M1", "M2", "E1", "E2", "E3", "E4")
+            ).fingerprint,
             "validator_version": "verification-v1",
         },
         "promotion_eligible": True,

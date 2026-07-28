@@ -5,6 +5,7 @@ from importlib.util import find_spec
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
+from edu_generator.prompt_templates import resolve_prompt_template
 
 from edu_grader_api.models import (
     Base,
@@ -62,12 +63,18 @@ def passing_report(*, model_id: str = "fake-v1", provider_name: str = "fake") ->
             "provider_name": "fake",
             "model_id": "fake-v0",
             "prompt_version": "generator-v1",
+            "prompt_template_fingerprint": resolve_prompt_template(
+                "generator-v1", ("M1", "M2", "E1", "E2", "E3", "E4")
+            ).fingerprint,
             "validator_version": "verification-v1",
         },
         candidate={
             "provider_name": provider_name,
             "model_id": model_id,
             "prompt_version": "generator-v1",
+            "prompt_template_fingerprint": resolve_prompt_template(
+                "generator-v1", ("M1", "M2", "E1", "E2", "E3", "E4")
+            ).fingerprint,
             "validator_version": "verification-v1",
         },
         promotion_eligible=True,
@@ -392,3 +399,90 @@ def test_apply_rechecks_governance_controls(session: Session) -> None:
         )
 
     assert error.value.code == "default_component_not_active"
+
+
+def test_submit_binds_evidence_to_the_resolved_prompt_fingerprint(session: Session) -> None:
+    service = governance_service()
+    report = passing_report()
+    report["candidate"]["prompt_template_fingerprint"] = "0" * 64
+
+    with pytest.raises(service.GenerationDefaultGovernanceError) as error:
+        service.submit_change_request(
+            session,
+            actor=platform_admin(session),
+            provider_name="fake",
+            model_version="fake-v1",
+            prompt_version="generator-v1",
+            request_reason="Promote stale evidence",
+            evaluation_report=report,
+            idempotency_key="stale-evidence",
+        )
+
+    assert error.value.code == "evaluation_prompt_template_mismatch"
+
+
+def test_approval_is_timestamped_and_exact_retries_are_replayed(session: Session) -> None:
+    service = governance_service()
+    submitter = platform_admin(session)
+    approver = platform_admin(session, subject="platform-approver")
+    change_request = service.submit_change_request(
+        session,
+        actor=submitter,
+        provider_name="fake",
+        model_version="fake-v1",
+        prompt_version="generator-v1",
+        request_reason="Promote verified candidate",
+        evaluation_report=passing_report(),
+        idempotency_key="approval-retry-request",
+    )
+
+    approved = service.approve_change_request(
+        session,
+        request_id=change_request.id,
+        actor=approver,
+        approval_reason="Verified",
+        idempotency_key="approval-retry",
+    )
+    replay = service.approve_change_request(
+        session,
+        request_id=change_request.id,
+        actor=approver,
+        approval_reason="Verified",
+        idempotency_key="approval-retry",
+    )
+
+    assert approved.approved_at is not None
+    assert replay.id == approved.id
+
+
+def test_rollback_rejects_the_active_default_as_its_own_target(session: Session) -> None:
+    service = governance_service()
+    submitter = platform_admin(session)
+    approver = platform_admin(session, subject="platform-approver")
+    current = service.submit_change_request(
+        session,
+        actor=submitter,
+        provider_name="fake",
+        model_version="fake-v1",
+        prompt_version="generator-v1",
+        request_reason="Initial governed default",
+        evaluation_report=passing_report(),
+        idempotency_key="active-default",
+    )
+    service.approve_change_request(
+        session, request_id=current.id, actor=approver, approval_reason="Verified"
+    )
+    service.apply_change_request(
+        session, request_id=current.id, actor=submitter, application_reason="Release"
+    )
+
+    with pytest.raises(service.GenerationDefaultGovernanceError) as error:
+        service.submit_rollback_request(
+            session,
+            actor=submitter,
+            target_request_id=current.id,
+            request_reason="No-op rollback",
+            idempotency_key="active-default-rollback",
+        )
+
+    assert error.value.code == "default_rollback_target_invalid"

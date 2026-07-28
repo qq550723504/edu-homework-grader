@@ -15,7 +15,7 @@ def test_health() -> None:
 
 def test_ready_reports_database_availability(monkeypatch) -> None:
     monkeypatch.setattr("edu_grader_api.main.engine", create_engine("sqlite+pysqlite:///:memory:"))
-    monkeypatch.setattr("edu_grader_api.main.resolve_active_default", lambda _session: object())
+    monkeypatch.setattr("edu_grader_api.main.validate_active_default", lambda _session: object())
 
     response = TestClient(app).get("/ready")
 
@@ -33,7 +33,7 @@ def test_ready_fails_closed_without_an_active_generation_default(monkeypatch) ->
     def unconfigured(_session):
         raise GenerationDefaultGovernanceError("generation_default_not_configured")
 
-    monkeypatch.setattr("edu_grader_api.main.resolve_active_default", unconfigured)
+    monkeypatch.setattr("edu_grader_api.main.validate_active_default", unconfigured)
 
     response = TestClient(app).get("/ready")
 
@@ -54,7 +54,7 @@ def test_ready_allows_an_authorized_initialization_path(monkeypatch) -> None:
     def unconfigured(_session):
         raise GenerationDefaultGovernanceError("generation_default_not_configured")
 
-    monkeypatch.setattr("edu_grader_api.main.resolve_active_default", unconfigured)
+    monkeypatch.setattr("edu_grader_api.main.validate_active_default", unconfigured)
 
     response = TestClient(app).get("/ready")
 

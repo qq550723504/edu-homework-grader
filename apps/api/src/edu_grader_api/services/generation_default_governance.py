@@ -10,7 +10,8 @@ from uuid import UUID
 from edu_generator.model_snapshots import validate_immutable_openai_model_id
 from edu_generator.prompt_templates import resolve_prompt_template
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..audit import append_audit_event
@@ -75,6 +76,10 @@ def submit_change_request(
         template = resolve_prompt_template(prompt_version, _SUPPORTED_QUESTION_TYPES)
     except ValueError as exc:
         raise GenerationDefaultGovernanceError("default_prompt_template_unavailable") from exc
+    if report.candidate.prompt_template_fingerprint != template.fingerprint:
+        raise GenerationDefaultGovernanceError("evaluation_prompt_template_mismatch")
+    if not request_reason.strip():
+        raise GenerationDefaultGovernanceError("default_change_request_reason_required")
     _assert_global_default_components_active(
         session,
         tenant_id=actor.tenant_id,
@@ -114,15 +119,16 @@ def submit_change_request(
         )
     )
     if configuration is None:
-        configuration = GenerationDefaultConfiguration(
+        configuration = _create_or_load_configuration(
+            session,
+            actor=actor,
             provider_name=provider_name,
             model_version=model_version,
             prompt_version=prompt_version,
             prompt_template_fingerprint=template.fingerprint,
-            created_by_user_id=actor.id,
         )
-        session.add(configuration)
-        session.flush()
+
+    selection = session.get(GenerationDefaultSelection, "global")
 
     change_request = GenerationDefaultChangeRequest(
         configuration=configuration,
@@ -135,9 +141,21 @@ def submit_change_request(
         evaluation_run_id=report.run_id,
         evaluation_spec_id=report.spec_id,
         evaluation_watermark=report.watermark,
+        evaluated_against_selection_request_id=(
+            selection.applied_change_request_id if selection is not None else None
+        ),
         evaluation_summary_json={
             "candidate": report.candidate.model_dump(mode="json"),
             "promotion_eligible": report.promotion_eligible,
+            "record_count": report.export_manifest.record_count,
+            "issue_count": report.export_manifest.issue_count,
+            "baseline_gate": report.baseline_gate.model_dump(mode="json"),
+            "candidate_gate": report.candidate_gate.model_dump(mode="json"),
+            "metric_comparisons": {
+                key: comparison.model_dump(mode="json")
+                for key, comparison in report.metric_comparisons.items()
+            },
+            "violations": [violation.model_dump(mode="json") for violation in report.violations],
             "record_digest": report.export_manifest.record_digest,
             "run_id": report.run_id,
             "spec_id": report.spec_id,
@@ -145,8 +163,22 @@ def submit_change_request(
         },
         submitted_by_user_id=actor.id,
     )
-    session.add(change_request)
-    session.flush()
+    try:
+        with session.begin_nested():
+            session.add(change_request)
+            session.flush()
+    except IntegrityError:
+        existing = session.scalar(
+            select(GenerationDefaultChangeRequest).where(
+                GenerationDefaultChangeRequest.submitted_by_user_id == actor.id,
+                GenerationDefaultChangeRequest.idempotency_key == idempotency_key,
+            )
+        )
+        if existing is None:
+            raise GenerationDefaultGovernanceError("default_change_request_conflict") from None
+        if existing.request_digest != request_digest:
+            raise GenerationDefaultGovernanceError("default_change_idempotency_conflict")
+        return existing
     append_audit_event(
         session,
         tenant_id=actor.tenant_id,
@@ -171,12 +203,16 @@ def approve_change_request(
     request_id: UUID,
     actor: User,
     approval_reason: str,
+    idempotency_key: str | None = None,
 ) -> GenerationDefaultChangeRequest:
-    change_request = session.get(GenerationDefaultChangeRequest, request_id)
+    change_request = _locked_change_request(session, request_id)
     if change_request is None:
         raise GenerationDefaultGovernanceError("default_change_not_found")
     if change_request.submitted_by_user_id == actor.id:
         raise GenerationDefaultGovernanceError("default_change_self_approval_forbidden")
+    digest = _decision_digest("approve", approval_reason)
+    if _decision_replay(change_request, idempotency_key=idempotency_key, digest=digest):
+        return change_request
     if change_request.status is not GenerationDefaultChangeStatus.PENDING_APPROVAL:
         raise GenerationDefaultGovernanceError("default_change_not_pending_approval")
     if not approval_reason.strip():
@@ -185,6 +221,9 @@ def approve_change_request(
     change_request.status = GenerationDefaultChangeStatus.APPROVED
     change_request.approval_reason = approval_reason
     change_request.approved_by_user_id = actor.id
+    change_request.approved_at = utc_now()
+    change_request.decision_idempotency_key = idempotency_key
+    change_request.decision_request_digest = digest if idempotency_key is not None else None
     append_audit_event(
         session,
         tenant_id=actor.tenant_id,
@@ -204,12 +243,16 @@ def reject_change_request(
     request_id: UUID,
     actor: User,
     rejection_reason: str,
+    idempotency_key: str | None = None,
 ) -> GenerationDefaultChangeRequest:
-    change_request = session.get(GenerationDefaultChangeRequest, request_id)
+    change_request = _locked_change_request(session, request_id)
     if change_request is None:
         raise GenerationDefaultGovernanceError("default_change_not_found")
     if change_request.submitted_by_user_id == actor.id:
         raise GenerationDefaultGovernanceError("default_change_self_approval_forbidden")
+    digest = _decision_digest("reject", rejection_reason)
+    if _decision_replay(change_request, idempotency_key=idempotency_key, digest=digest):
+        return change_request
     if change_request.status is not GenerationDefaultChangeStatus.PENDING_APPROVAL:
         raise GenerationDefaultGovernanceError("default_change_not_pending_approval")
     if not rejection_reason.strip():
@@ -218,6 +261,8 @@ def reject_change_request(
     change_request.approval_reason = rejection_reason
     change_request.approved_by_user_id = actor.id
     change_request.approved_at = utc_now()
+    change_request.decision_idempotency_key = idempotency_key
+    change_request.decision_request_digest = digest if idempotency_key is not None else None
     session.flush()
     append_audit_event(
         session,
@@ -237,6 +282,7 @@ def apply_change_request(
     request_id: UUID,
     actor: User,
     application_reason: str,
+    idempotency_key: str | None = None,
 ) -> GenerationDefaultChangeRequest:
     if not application_reason.strip():
         raise GenerationDefaultGovernanceError("default_change_application_reason_required")
@@ -247,9 +293,14 @@ def apply_change_request(
     )
     if change_request is None:
         raise GenerationDefaultGovernanceError("default_change_not_found")
+    digest = _decision_digest("apply", application_reason)
+    if _application_replay(change_request, idempotency_key=idempotency_key, digest=digest):
+        return change_request
     if change_request.status is not GenerationDefaultChangeStatus.APPROVED:
         raise GenerationDefaultGovernanceError("default_change_not_approved")
     configuration = change_request.configuration
+    if not supports_generation_provider(configuration.provider_name, configuration.model_version):
+        raise GenerationDefaultGovernanceError("default_provider_not_configured")
     _assert_global_default_components_active(
         session,
         tenant_id=actor.tenant_id,
@@ -264,11 +315,10 @@ def apply_change_request(
     if template.fingerprint != configuration.prompt_template_fingerprint:
         raise GenerationDefaultGovernanceError("default_prompt_template_changed") from None
 
-    selection = session.scalar(
-        select(GenerationDefaultSelection)
-        .where(GenerationDefaultSelection.scope == "global")
-        .with_for_update()
-    )
+    selection = _locked_global_selection(session)
+    active_request_id = selection.applied_change_request_id if selection is not None else None
+    if change_request.evaluated_against_selection_request_id != active_request_id:
+        raise GenerationDefaultGovernanceError("default_change_stale_selection")
     if selection is not None:
         previous = session.get(GenerationDefaultChangeRequest, selection.applied_change_request_id)
         if previous is not None:
@@ -291,6 +341,8 @@ def apply_change_request(
     change_request.application_reason = application_reason
     change_request.applied_by_user_id = actor.id
     change_request.applied_at = utc_now()
+    change_request.application_idempotency_key = idempotency_key
+    change_request.application_request_digest = digest if idempotency_key is not None else None
     session.flush()
     append_audit_event(
         session,
@@ -313,10 +365,15 @@ def submit_rollback_request(
     idempotency_key: str,
 ) -> GenerationDefaultChangeRequest:
     target = session.get(GenerationDefaultChangeRequest, target_request_id)
-    if target is None or target.status not in {
-        GenerationDefaultChangeStatus.APPLIED,
-        GenerationDefaultChangeStatus.SUPERSEDED,
-    }:
+    if not request_reason.strip():
+        raise GenerationDefaultGovernanceError("default_rollback_reason_required")
+    selection = session.get(GenerationDefaultSelection, "global")
+    if (
+        target is None
+        or target.status not in {GenerationDefaultChangeStatus.SUPERSEDED}
+        or selection is None
+        or target.id == selection.applied_change_request_id
+    ):
         raise GenerationDefaultGovernanceError("default_rollback_target_invalid")
     request_digest = _canonical_sha256(
         {
@@ -347,6 +404,7 @@ def submit_rollback_request(
         evaluation_run_id=target.evaluation_run_id,
         evaluation_spec_id=target.evaluation_spec_id,
         evaluation_watermark=target.evaluation_watermark,
+        evaluated_against_selection_request_id=selection.applied_change_request_id,
         evaluation_summary_json=target.evaluation_summary_json,
         submitted_by_user_id=actor.id,
     )
@@ -375,6 +433,27 @@ def resolve_active_default(session: Session) -> ResolvedGenerationDefault:
         prompt_version=configuration.prompt_version,
         prompt_template_fingerprint=configuration.prompt_template_fingerprint,
     )
+
+
+def validate_active_default(session: Session) -> ResolvedGenerationDefault:
+    """Ensure the selected default is still executable before declaring readiness."""
+
+    default = resolve_active_default(session)
+    if not supports_generation_provider(default.provider_name, default.model_version):
+        raise GenerationDefaultGovernanceError("default_provider_not_configured")
+    try:
+        template = resolve_prompt_template(default.prompt_version, _SUPPORTED_QUESTION_TYPES)
+    except ValueError as exc:
+        raise GenerationDefaultGovernanceError("default_prompt_template_unavailable") from exc
+    if template.fingerprint != default.prompt_template_fingerprint:
+        raise GenerationDefaultGovernanceError("default_prompt_template_changed")
+    _assert_global_components_active(
+        session,
+        provider_name=default.provider_name,
+        model_version=default.model_version,
+        prompt_version=default.prompt_version,
+    )
+    return default
 
 
 def _validated_report(payload: dict[str, object]):
@@ -423,6 +502,27 @@ def _assert_global_default_components_active(
             raise GenerationDefaultGovernanceError("default_component_not_active")
 
 
+def _assert_global_components_active(
+    session: Session, *, provider_name: str, model_version: str, prompt_version: str
+) -> None:
+    from ..models import GenerationGovernanceEntry, GenerationGovernanceTargetType
+
+    for target_type, target_key in (
+        (GenerationGovernanceTargetType.PROVIDER, provider_name),
+        (GenerationGovernanceTargetType.MODEL, model_version),
+        (GenerationGovernanceTargetType.PROMPT_VERSION, prompt_version),
+    ):
+        entry = session.scalar(
+            select(GenerationGovernanceEntry).where(
+                GenerationGovernanceEntry.is_global.is_(True),
+                GenerationGovernanceEntry.target_type == target_type,
+                GenerationGovernanceEntry.target_key == target_key,
+            )
+        )
+        if entry is not None and entry.control_state is not GenerationControlState.ACTIVE:
+            raise GenerationDefaultGovernanceError("default_component_not_active")
+
+
 def _assert_candidate_matches(
     report: object,
     *,
@@ -437,6 +537,93 @@ def _assert_candidate_matches(
         or candidate.prompt_version != prompt_version
     ):
         raise GenerationDefaultGovernanceError("evaluation_candidate_mismatch")
+
+
+def _locked_change_request(
+    session: Session, request_id: UUID
+) -> GenerationDefaultChangeRequest | None:
+    return session.scalar(
+        select(GenerationDefaultChangeRequest)
+        .where(GenerationDefaultChangeRequest.id == request_id)
+        .with_for_update()
+    )
+
+
+def _locked_global_selection(session: Session) -> GenerationDefaultSelection | None:
+    # Row locks do not protect the initial insert because no selection row exists yet.
+    # A transaction-scoped advisory lock serializes that first apply on PostgreSQL;
+    # SQLite's single-writer behavior already provides the equivalent in local tests.
+    if session.bind is not None and session.bind.dialect.name == "postgresql":
+        session.execute(text("SELECT pg_advisory_xact_lock(896101)"))
+    return session.scalar(
+        select(GenerationDefaultSelection)
+        .where(GenerationDefaultSelection.scope == "global")
+        .with_for_update()
+    )
+
+
+def _decision_digest(action: str, reason: str) -> str:
+    return _canonical_sha256({"action": action, "reason": reason.strip()})
+
+
+def _decision_replay(
+    request: GenerationDefaultChangeRequest, *, idempotency_key: str | None, digest: str
+) -> bool:
+    if idempotency_key is None or request.decision_idempotency_key != idempotency_key:
+        return False
+    if request.decision_request_digest != digest:
+        raise GenerationDefaultGovernanceError("default_change_idempotency_conflict")
+    return request.status in {
+        GenerationDefaultChangeStatus.APPROVED,
+        GenerationDefaultChangeStatus.REJECTED,
+    }
+
+
+def _application_replay(
+    request: GenerationDefaultChangeRequest, *, idempotency_key: str | None, digest: str
+) -> bool:
+    if idempotency_key is None or request.application_idempotency_key != idempotency_key:
+        return False
+    if request.application_request_digest != digest:
+        raise GenerationDefaultGovernanceError("default_change_idempotency_conflict")
+    return request.status is GenerationDefaultChangeStatus.APPLIED
+
+
+def _create_or_load_configuration(
+    session: Session,
+    *,
+    actor: User,
+    provider_name: str,
+    model_version: str,
+    prompt_version: str,
+    prompt_template_fingerprint: str,
+) -> GenerationDefaultConfiguration:
+    configuration = GenerationDefaultConfiguration(
+        provider_name=provider_name,
+        model_version=model_version,
+        prompt_version=prompt_version,
+        prompt_template_fingerprint=prompt_template_fingerprint,
+        created_by_user_id=actor.id,
+    )
+    try:
+        with session.begin_nested():
+            session.add(configuration)
+            session.flush()
+        return configuration
+    except IntegrityError:
+        pass
+    existing = session.scalar(
+        select(GenerationDefaultConfiguration).where(
+            GenerationDefaultConfiguration.provider_name == provider_name,
+            GenerationDefaultConfiguration.model_version == model_version,
+            GenerationDefaultConfiguration.prompt_version == prompt_version,
+            GenerationDefaultConfiguration.prompt_template_fingerprint
+            == prompt_template_fingerprint,
+        )
+    )
+    if existing is None:
+        raise GenerationDefaultGovernanceError("default_configuration_conflict")
+    return existing
 
 
 def _canonical_sha256(payload: object) -> str:

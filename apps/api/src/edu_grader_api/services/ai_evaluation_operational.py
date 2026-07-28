@@ -97,6 +97,9 @@ class EvaluationVersionSelector(BaseModel):
     provider_name: str = Field(min_length=1, max_length=100)
     model_id: str = Field(min_length=1, max_length=200)
     prompt_version: str = Field(min_length=1, max_length=200)
+    # Older evaluation artifacts remain parseable, but cannot be promoted until
+    # their candidate Prompt fingerprint is present and verified by governance.
+    prompt_template_fingerprint: str = Field(default="", max_length=64)
     validator_version: str = Field(min_length=1, max_length=200)
 
 

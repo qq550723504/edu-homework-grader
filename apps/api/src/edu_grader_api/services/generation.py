@@ -184,6 +184,8 @@ def create_or_get_job(
             tenant_id=actor.tenant_id,
             curriculum_profile_id=str(resolved_profile_id),
             prompt_version=active_snapshot.prompt_version,
+            provider_name=active_snapshot.provider_name,
+            model_version=active_snapshot.model_version,
         )
     except GenerationGovernanceError as exc:
         raise GenerationServiceError(str(exc)) from exc
@@ -237,6 +239,25 @@ def _snapshot_from_active_revision(
         model_version=default.model_version,
         prompt_template_fingerprint=default.prompt_template_fingerprint,
     )
+
+
+def snapshot_for_regeneration(session: Session, job: GenerationJob) -> GenerationJobSnapshot:
+    """Preserve an existing governed snapshot, or safely upgrade legacy jobs."""
+
+    snapshot = GenerationJobSnapshot.from_job(job)
+    if all(
+        value != "unknown"
+        for value in (
+            snapshot.provider_name,
+            snapshot.model_version,
+            snapshot.prompt_template_fingerprint,
+        )
+    ):
+        return snapshot
+    revision = session.get(CurriculumObjectiveRevision, job.curriculum_objective_revision_id)
+    if revision is None:
+        raise GenerationServiceError("curriculum objective revision was not found")
+    return _snapshot_from_active_revision(session, revision)
 
 
 def run_generation_job(

@@ -21,7 +21,7 @@
           <button :disabled="saving" type="submit">提交晋级申请</button>
         </form>
         <h3>待审批</h3>
-        <ul><li v-for="item in summary?.pending" :key="item.id">{{ item.model_version }} / {{ item.prompt_version }}：{{ item.request_reason }} <button :disabled="saving" type="button" @click="decide(item.id, 'approve')">批准</button><button :disabled="saving" type="button" @click="decide(item.id, 'reject')">拒绝</button></li></ul>
+        <ul><li v-for="item in summary?.pending" :key="item.id">{{ item.model_version }} / {{ item.prompt_version }}：{{ item.request_reason }}<small v-if="item.evaluation_summary">评估：{{ item.evaluation_summary.promotion_eligible ? '可晋级' : '不可晋级' }}，{{ item.evaluation_summary.record_count ?? 0 }} 条样本，{{ item.evaluation_summary.issue_count ?? 0 }} 个导出问题，候选门禁 {{ item.evaluation_summary.candidate_gate?.violations?.length ?? 0 }} 项违规。</small> <button :disabled="saving" type="button" @click="decide(item.id, 'approve')">批准</button><button :disabled="saving" type="button" @click="decide(item.id, 'reject')">拒绝</button></li></ul>
         <h3>历史</h3>
         <ul><li v-for="item in summary?.history" :key="item.id">{{ item.status }}：{{ item.model_version }} / {{ item.prompt_version }} <button v-if="item.status === 'approved'" :disabled="saving" type="button" @click="apply(item.id)">应用</button><button v-if="item.status === 'applied' || item.status === 'superseded'" :disabled="saving" type="button" @click="rollback(item.id)">申请回滚</button></li></ul>
       </template>
@@ -43,8 +43,8 @@ const requestReason = ref('')
 const evaluationReport = ref('')
 async function load() { loading.value = true; try { summary.value = await fetchGenerationDefaults($fetch) } catch { message.value = '无法加载治理配置。' } finally { loading.value = false } }
 async function csrfToken(): Promise<string> { const principal = await fetchCurrentPrincipal($fetch); if (!principal.csrf_token) throw new Error('登录会话已过期，请重新登录。'); return principal.csrf_token }
-async function decide(id: string, action: 'approve' | 'reject') { const reason = window.prompt(action === 'approve' ? '审批说明' : '拒绝原因')?.trim(); if (!reason) return; saving.value = true; try { await decideGenerationDefaultChange($fetch, await csrfToken(), id, action, reason); message.value = '操作已保存。'; await load() } catch { message.value = '操作失败。' } finally { saving.value = false } }
-async function apply(id: string) { const reason = window.prompt('应用说明')?.trim(); if (!reason) return; saving.value = true; try { await decideGenerationDefaultChange($fetch, await csrfToken(), id, 'apply', reason); message.value = '默认配置已应用。'; await load() } catch { message.value = '应用失败。' } finally { saving.value = false } }
+async function decide(id: string, action: 'approve' | 'reject') { const reason = window.prompt(action === 'approve' ? '审批说明' : '拒绝原因')?.trim(); if (!reason) return; saving.value = true; try { await decideGenerationDefaultChange($fetch, await csrfToken(), crypto.randomUUID(), id, action, reason); message.value = '操作已保存。'; await load() } catch { message.value = '操作失败。' } finally { saving.value = false } }
+async function apply(id: string) { const reason = window.prompt('应用说明')?.trim(); if (!reason) return; saving.value = true; try { await decideGenerationDefaultChange($fetch, await csrfToken(), crypto.randomUUID(), id, 'apply', reason); message.value = '默认配置已应用。'; await load() } catch { message.value = '应用失败。' } finally { saving.value = false } }
 async function rollback(id: string) { const reason = window.prompt('回滚原因')?.trim(); if (!reason) return; saving.value = true; try { await rollbackGenerationDefaultChange($fetch, await csrfToken(), crypto.randomUUID(), id, reason); message.value = '已提交回滚申请。'; await load() } catch { message.value = '回滚申请失败。' } finally { saving.value = false } }
 async function submit() {
   let report: Record<string, unknown>

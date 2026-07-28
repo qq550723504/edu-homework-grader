@@ -262,13 +262,18 @@ def approve_ai_generation_default_change(
     body: GenerationDefaultDecisionRequest,
     principal: Annotated[CurrentPrincipal, Depends(require_role(Role.ADMIN))],
     session: Annotated[Session, Depends(get_session)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
 ) -> dict[str, object]:
     actor = _platform_governance_actor(session, principal)
     session.rollback()
     try:
         with session.begin():
             change_request = approve_change_request(
-                session, request_id=request_id, actor=actor, approval_reason=body.reason
+                session,
+                request_id=request_id,
+                actor=actor,
+                approval_reason=body.reason,
+                idempotency_key=idempotency_key,
             )
     except GenerationDefaultGovernanceError as exc:
         raise _generation_default_error(exc) from exc
@@ -281,13 +286,18 @@ def reject_ai_generation_default_change(
     body: GenerationDefaultDecisionRequest,
     principal: Annotated[CurrentPrincipal, Depends(require_role(Role.ADMIN))],
     session: Annotated[Session, Depends(get_session)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
 ) -> dict[str, object]:
     actor = _platform_governance_actor(session, principal)
     session.rollback()
     try:
         with session.begin():
             change_request = reject_change_request(
-                session, request_id=request_id, actor=actor, rejection_reason=body.reason
+                session,
+                request_id=request_id,
+                actor=actor,
+                rejection_reason=body.reason,
+                idempotency_key=idempotency_key,
             )
     except GenerationDefaultGovernanceError as exc:
         raise _generation_default_error(exc) from exc
@@ -300,13 +310,18 @@ def apply_ai_generation_default_change(
     body: GenerationDefaultDecisionRequest,
     principal: Annotated[CurrentPrincipal, Depends(require_role(Role.ADMIN))],
     session: Annotated[Session, Depends(get_session)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
 ) -> dict[str, object]:
     actor = _platform_governance_actor(session, principal)
     session.rollback()
     try:
         with session.begin():
             change_request = apply_change_request(
-                session, request_id=request_id, actor=actor, application_reason=body.reason
+                session,
+                request_id=request_id,
+                actor=actor,
+                application_reason=body.reason,
+                idempotency_key=idempotency_key,
             )
     except GenerationDefaultGovernanceError as exc:
         raise _generation_default_error(exc) from exc
@@ -511,6 +526,7 @@ def _default_change_request_payload(entry: GenerationDefaultChangeRequest) -> di
         "evaluation_record_digest": entry.evaluation_record_digest,
         "evaluation_run_id": entry.evaluation_run_id,
         "evaluation_spec_id": entry.evaluation_spec_id,
+        "evaluation_summary": entry.evaluation_summary_json,
         "submitted_at": entry.submitted_at.isoformat(),
         "approved_at": entry.approved_at.isoformat() if entry.approved_at else None,
         "applied_at": entry.applied_at.isoformat() if entry.applied_at else None,
@@ -528,8 +544,11 @@ def _generation_default_error(error: GenerationDefaultGovernanceError) -> HTTPEx
         "evaluation_candidate_mismatch",
         "evaluation_report_invalid",
         "evaluation_not_promotion_eligible",
+        "evaluation_prompt_template_mismatch",
         "default_model_not_immutable",
         "default_prompt_template_unavailable",
+        "default_change_request_reason_required",
+        "default_rollback_reason_required",
     }:
         return _api_error(status.HTTP_422_UNPROCESSABLE_CONTENT, error.code)
     return _api_error(status.HTTP_409_CONFLICT, error.code)
