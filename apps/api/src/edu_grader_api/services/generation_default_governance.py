@@ -23,7 +23,6 @@ from ..models import (
     User,
     utc_now,
 )
-from .ai_evaluation_operational import OperationalEvaluationReport
 from .generation_governance import controls_for_target
 
 
@@ -375,7 +374,9 @@ def resolve_active_default(session: Session) -> ResolvedGenerationDefault:
     )
 
 
-def _validated_report(payload: dict[str, object]) -> OperationalEvaluationReport:
+def _validated_report(payload: dict[str, object]):
+    from .ai_evaluation_operational import OperationalEvaluationReport
+
     try:
         report = OperationalEvaluationReport.model_validate(payload)
     except ValidationError as exc:
@@ -409,7 +410,7 @@ def _assert_global_default_components_active(
 
 
 def _assert_candidate_matches(
-    report: OperationalEvaluationReport,
+    report: object,
     *,
     provider_name: str,
     model_version: str,

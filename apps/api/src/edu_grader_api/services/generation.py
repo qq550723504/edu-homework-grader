@@ -47,6 +47,10 @@ from ..services.generation_governance import (
     assert_generation_configured_components_allowed,
     assert_generation_pipeline_allowed,
 )
+from ..services.generation_default_governance import (
+    GenerationDefaultGovernanceError,
+    resolve_active_default,
+)
 from .question_fingerprints import fingerprint_prompt
 
 
@@ -117,6 +121,9 @@ class GenerationJobSnapshot:
     policy_catalog_version: str
     prompt_version: str
     curriculum_profile_id: UUID | None = None
+    provider_name: str = "unknown"
+    model_version: str = "unknown"
+    prompt_template_fingerprint: str = "unknown"
 
     @classmethod
     def from_job(cls, job: GenerationJob) -> GenerationJobSnapshot:
@@ -126,6 +133,9 @@ class GenerationJobSnapshot:
             policy_catalog_version=job.policy_version or "unknown",
             prompt_version=job.prompt_version or "unknown",
             curriculum_profile_id=job.curriculum_profile_id,
+            provider_name=job.provider_name or "unknown",
+            model_version=job.model_version or "unknown",
+            prompt_template_fingerprint=job.prompt_template_fingerprint or "unknown",
         )
 
 
@@ -166,7 +176,7 @@ def create_or_get_job(
         raise GenerationServiceError("requested question types are not allowed by the objective")
     if len(request.items) != request.requested_count:
         raise GenerationServiceError("generation_distribution_invalid")
-    active_snapshot = snapshot or _snapshot_from_active_revision(revision)
+    active_snapshot = snapshot or _snapshot_from_active_revision(session, revision)
     resolved_profile_id = active_snapshot.curriculum_profile_id or revision.objective.profile_id
     try:
         assert_generation_configured_components_allowed(
@@ -196,7 +206,10 @@ def create_or_get_job(
         status=GenerationJobStatus.QUEUED,
         idempotency_key=request.idempotency_key,
         policy_version=active_snapshot.policy_catalog_version,
+        provider_name=active_snapshot.provider_name,
+        model_version=active_snapshot.model_version,
         prompt_version=active_snapshot.prompt_version,
+        prompt_template_fingerprint=active_snapshot.prompt_template_fingerprint,
         request_digest=request_digest,
     )
     session.add(job)
@@ -204,16 +217,25 @@ def create_or_get_job(
     return job
 
 
-def _snapshot_from_active_revision(revision: CurriculumObjectiveRevision) -> GenerationJobSnapshot:
+def _snapshot_from_active_revision(
+    session: Session, revision: CurriculumObjectiveRevision
+) -> GenerationJobSnapshot:
     grade_mapping = revision.objective.grade_mapping
     if grade_mapping is None:
         raise GenerationServiceError("curriculum objective revision requires a grade mapping")
+    try:
+        default = resolve_active_default(session)
+    except GenerationDefaultGovernanceError as exc:
+        raise GenerationServiceError(exc.code) from exc
     return GenerationJobSnapshot(
         grade=grade_mapping.internal_level,
         subject=revision.objective.subject,
         policy_catalog_version=GENERATION_POLICY_CATALOG_VERSION,
-        prompt_version=GENERATION_PROMPT_VERSION,
+        prompt_version=default.prompt_version,
         curriculum_profile_id=revision.objective.profile_id,
+        provider_name=default.provider_name,
+        model_version=default.model_version,
+        prompt_template_fingerprint=default.prompt_template_fingerprint,
     )
 
 

@@ -163,7 +163,7 @@ def create_generation_job_route(
             run_generation_job(
                 session,
                 job=job,
-                provider=_generation_provider(),
+                provider=_generation_provider(job.provider_name, job.model_version),
                 teacher_constraint=request.teacher_constraint,
             )
             _validate_generated_drafts(session, job=job)
@@ -399,7 +399,7 @@ def regenerate_draft_route(
             run_generation_job(
                 session,
                 job=job,
-                provider=_generation_provider(),
+                provider=_generation_provider(job.provider_name, job.model_version),
                 teacher_constraint=body.teacher_constraint,
             )
             _validate_generated_drafts(session, job=job)
@@ -586,13 +586,15 @@ def accept_review_draft_route(
     return _decision_payload(result.decision)
 
 
-def _generation_provider() -> GenerationProvider:
-    if settings.generation_provider == "fake":
+def _generation_provider(
+    provider_name: str | None, model_version: str | None
+) -> GenerationProvider:
+    if provider_name == "fake" and model_version == "fake-v1":
         return FakeGenerationProvider(seed=0)
-    if settings.generation_provider == "openai":
+    if provider_name == "openai" and model_version is not None:
         return OpenAIResponsesProvider(
             api_key=settings.openai_api_key,
-            model=settings.generator_openai_model,
+            model=model_version,
             base_url=settings.generator_openai_base_url,
             allowed_hosts=settings.allowed_generator_provider_hosts,
             timeout_seconds=settings.generator_timeout_seconds,

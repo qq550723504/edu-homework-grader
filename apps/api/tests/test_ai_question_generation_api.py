@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from queue import Queue
 from threading import Event, Thread
@@ -33,6 +34,10 @@ from edu_grader_api.models import (
     CurriculumRevisionStatus,
     CurriculumSourceRecord,
     GenerationControlState,
+    GenerationDefaultChangeRequest,
+    GenerationDefaultChangeStatus,
+    GenerationDefaultConfiguration,
+    GenerationDefaultSelection,
     GenerationGovernanceTargetType,
     GenerationJob,
     GenerationBatchAcceptance,
@@ -78,6 +83,38 @@ def session() -> Session:
     )
     Base.metadata.create_all(engine)
     session = Session(engine)
+    template = resolve_prompt_template("generator-v1", ("M1", "M2", "E1", "E2", "E3", "E4"))
+    configuration = GenerationDefaultConfiguration(
+        provider_name="fake",
+        model_version="fake-v1",
+        prompt_version="generator-v1",
+        prompt_template_fingerprint=template.fingerprint,
+        created_by_user_id=uuid4(),
+    )
+    change_request = GenerationDefaultChangeRequest(
+        configuration=configuration,
+        status=GenerationDefaultChangeStatus.APPLIED,
+        request_reason="Test default",
+        idempotency_key="test-default",
+        request_digest="a" * 64,
+        evaluation_report_sha256="b" * 64,
+        evaluation_record_digest="c" * 64,
+        evaluation_run_id="run",
+        evaluation_spec_id="spec",
+        evaluation_watermark=datetime.now(tz=timezone.utc),
+        evaluation_summary_json={},
+        submitted_by_user_id=uuid4(),
+    )
+    session.add_all(
+        [
+            configuration,
+            change_request,
+            GenerationDefaultSelection(
+                scope="global", configuration=configuration, applied_change_request=change_request
+            ),
+        ]
+    )
+    session.flush()
     yield session
     session.close()
 
@@ -618,7 +655,7 @@ def test_generation_create_with_globally_blocked_prompt_does_not_call_provider(
         is_global=True,
     )
     blocking_provider = FailIfCalledProvider()
-    monkeypatch.setattr(generation_router, "_generation_provider", lambda: blocking_provider)
+    monkeypatch.setattr(generation_router, "_generation_provider", lambda *_args: blocking_provider)
 
     response = client.post(
         "/v1/ai-question-generation/jobs",
@@ -659,7 +696,7 @@ def test_generation_create_with_tenant_canary_override_on_global_prompt_canary(
     monkeypatch.setattr(
         generation_router,
         "_generation_provider",
-        lambda: FakeGenerationProvider(seed=7),
+        lambda *_args: FakeGenerationProvider(seed=7),
     )
 
     response = client.post(

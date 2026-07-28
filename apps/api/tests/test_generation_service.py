@@ -31,6 +31,10 @@ from edu_grader_api.models import (
     GeneratedQuestionDraftRevision,
     GenerationAttempt,
     GenerationControlState,
+    GenerationDefaultChangeRequest,
+    GenerationDefaultChangeStatus,
+    GenerationDefaultConfiguration,
+    GenerationDefaultSelection,
     GenerationGovernanceEntry,
     GenerationGovernanceTargetType,
     GenerationJob,
@@ -59,6 +63,40 @@ def session() -> Session:
     engine = create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
+        template = resolve_prompt_template("generator-v1", ("M1", "M2", "E1", "E2", "E3", "E4"))
+        configuration = GenerationDefaultConfiguration(
+            provider_name="fake",
+            model_version="fake-v1",
+            prompt_version="generator-v1",
+            prompt_template_fingerprint=template.fingerprint,
+            created_by_user_id=uuid4(),
+        )
+        request = GenerationDefaultChangeRequest(
+            configuration=configuration,
+            status=GenerationDefaultChangeStatus.APPLIED,
+            request_reason="Test default",
+            idempotency_key="test-default",
+            request_digest="a" * 64,
+            evaluation_report_sha256="b" * 64,
+            evaluation_record_digest="c" * 64,
+            evaluation_run_id="run",
+            evaluation_spec_id="spec",
+            evaluation_watermark=utc_now(),
+            evaluation_summary_json={},
+            submitted_by_user_id=uuid4(),
+        )
+        session.add_all(
+            [
+                configuration,
+                request,
+                GenerationDefaultSelection(
+                    scope="global",
+                    configuration=configuration,
+                    applied_change_request=request,
+                ),
+            ]
+        )
+        session.flush()
         yield session
 
 
