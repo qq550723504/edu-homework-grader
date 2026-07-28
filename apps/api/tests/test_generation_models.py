@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from edu_generator.contracts import GeneratedCandidate
+import edu_grader_api.models as model_module
 from edu_grader_api.models import (
     Base,
     CurriculumActivityType,
@@ -44,6 +45,20 @@ def session() -> Session:
     Base.metadata.create_all(engine)
     with Session(engine) as session:
         yield session
+
+
+def test_generation_default_models_define_a_single_global_selection_boundary() -> None:
+    assert hasattr(model_module, "GenerationDefaultConfiguration")
+    assert hasattr(model_module, "GenerationDefaultChangeRequest")
+    assert hasattr(model_module, "GenerationDefaultSelection")
+
+    selection = model_module.GenerationDefaultSelection.__table__
+
+    assert list(selection.primary_key.columns.keys()) == ["scope"]
+    assert any(
+        constraint.name == "ck_generation_default_scope_global"
+        for constraint in selection.constraints
+    )
 
 
 def active_objective_revision_id(session: Session):

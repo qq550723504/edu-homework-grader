@@ -163,6 +163,15 @@ class GenerationGovernanceTargetType(StrEnum):
     MODEL = "model"
 
 
+class GenerationDefaultChangeStatus(StrEnum):
+    PENDING_APPROVAL = "pending_approval"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    APPLIED = "applied"
+    SUPERSEDED = "superseded"
+    ROLLED_BACK = "rolled_back"
+
+
 class ValidationRunStatus(StrEnum):
     PASSED = "passed"
     WARNING = "warning"
@@ -695,7 +704,10 @@ class GenerationJob(Base):
     )
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
     policy_version: Mapped[str | None] = mapped_column(String(100))
+    provider_name: Mapped[str | None] = mapped_column(String(100))
+    model_version: Mapped[str | None] = mapped_column(String(200))
     prompt_version: Mapped[str | None] = mapped_column(String(100))
+    prompt_template_fingerprint: Mapped[str | None] = mapped_column(String(64))
     request_digest: Mapped[str | None] = mapped_column(String(64))
     succeeded_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -792,6 +804,107 @@ class GenerationGovernanceEntry(Base):
 
     tenant: Mapped[Tenant | None] = relationship()
     created_by_user: Mapped[User | None] = relationship()
+
+
+class GenerationDefaultConfiguration(Base):
+    __tablename__ = "generation_default_configurations"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider_name",
+            "model_version",
+            "prompt_version",
+            "prompt_template_fingerprint",
+            name="uq_generation_default_configuration_identity",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    provider_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(200), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    prompt_template_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    created_by_user: Mapped[User] = relationship()
+
+
+class GenerationDefaultChangeRequest(Base):
+    __tablename__ = "generation_default_change_requests"
+    __table_args__ = (
+        UniqueConstraint(
+            "submitted_by_user_id",
+            "idempotency_key",
+            name="uq_generation_default_change_request_idempotency",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    configuration_id: Mapped[UUID] = mapped_column(
+        ForeignKey("generation_default_configurations.id"), nullable=False
+    )
+    rollback_source_change_request_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("generation_default_change_requests.id")
+    )
+    status: Mapped[GenerationDefaultChangeStatus] = mapped_column(
+        Enum(
+            GenerationDefaultChangeStatus,
+            native_enum=False,
+            values_callable=role_values,
+        ),
+        nullable=False,
+    )
+    request_reason: Mapped[str] = mapped_column(String(1_000), nullable=False)
+    approval_reason: Mapped[str | None] = mapped_column(String(1_000))
+    application_reason: Mapped[str | None] = mapped_column(String(1_000))
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    evaluation_report_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    evaluation_record_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    evaluation_run_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    evaluation_spec_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    evaluation_watermark: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    evaluation_summary_json: Mapped[dict[str, object]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), default=dict
+    )
+    submitted_by_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    approved_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    applied_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    configuration: Mapped[GenerationDefaultConfiguration] = relationship()
+    rollback_source_change_request: Mapped[GenerationDefaultChangeRequest | None] = relationship(
+        foreign_keys=[rollback_source_change_request_id],
+        remote_side=[id],
+    )
+    submitted_by_user: Mapped[User] = relationship(foreign_keys=[submitted_by_user_id])
+    approved_by_user: Mapped[User | None] = relationship(foreign_keys=[approved_by_user_id])
+    applied_by_user: Mapped[User | None] = relationship(foreign_keys=[applied_by_user_id])
+
+
+class GenerationDefaultSelection(Base):
+    __tablename__ = "generation_default_selections"
+    __table_args__ = (
+        CheckConstraint("scope = 'global'", name="ck_generation_default_scope_global"),
+    )
+
+    scope: Mapped[str] = mapped_column(String(20), primary_key=True, default="global")
+    configuration_id: Mapped[UUID] = mapped_column(
+        ForeignKey("generation_default_configurations.id"), nullable=False
+    )
+    applied_change_request_id: Mapped[UUID] = mapped_column(
+        ForeignKey("generation_default_change_requests.id"), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+    configuration: Mapped[GenerationDefaultConfiguration] = relationship()
+    applied_change_request: Mapped[GenerationDefaultChangeRequest] = relationship(
+        foreign_keys=[applied_change_request_id]
+    )
 
 
 class GenerationAttempt(Base):
