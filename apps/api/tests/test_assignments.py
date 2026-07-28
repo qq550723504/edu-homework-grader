@@ -509,6 +509,9 @@ def test_enrolled_student_lists_pending_and_opens_frozen_assignment(
     assert detail.json()["items"][0]["question_version_id"] == str(published.id)
     assert detail.json()["items"][0]["prompt"] == "What is 2 + 3?"
     assert detail.json()["items"][0]["reading_material"] is None
+    assert "content" not in detail.json()["items"][0]
+    assert "media" not in detail.json()["items"][0]
+    assert "sources" not in detail.json()["items"][0]
 
 
 def test_student_assignment_projects_e4_reading_material_separately(
