@@ -83,6 +83,11 @@ _SCENARIO_ID: Mapping[DependencyKind, str] = {
     "language": "language_read_timeout_recovery",
     "similarity": "similarity_read_timeout_recovery",
 }
+_DEPENDENCY_PROXY_PATH: Mapping[Literal["normalizer", "grader", "similarity"], str] = {
+    "normalizer": "/v1/normalize/mathjson",
+    "grader": "/v1/grade/math/numeric",
+    "similarity": "/v1/semantic-similarity",
+}
 _CONNECT_SCENARIO_ID: Mapping[Literal["normalizer", "grader", "similarity"], str] = {
     "normalizer": "normalizer_connect_timeout_recovery",
     "grader": "grader_connect_timeout_recovery",
@@ -162,6 +167,13 @@ def _connect_outage_request_timeout(dependency: DependencyKind) -> float:
     return CONNECT_TIMEOUT_SECONDS
 
 
+def _dependency_stall_seconds(
+    dependency: Literal["normalizer", "grader", "similarity"],
+) -> float:
+    del dependency
+    return float(settings.grader_request_timeout_seconds) + 1.0
+
+
 class _FaultProxyHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     block_on_close = False
@@ -175,7 +187,7 @@ class _FaultProxyHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         content_length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(content_length)
-        mode = self.server.proxy._record_call()  # type: ignore[attr-defined]
+        mode = self.server.proxy._record_call(self.path)  # type: ignore[attr-defined]
         self.close_connection = True
         if mode == "stall":
             time.sleep(self.server.proxy.stall_seconds)  # type: ignore[attr-defined]
@@ -226,6 +238,9 @@ class FaultInjectingGraderProxy:
     stall_seconds: float
     forward_timeout_seconds: float = 30.0
     _mode: ProxyMode = field(init=False, default="forward")
+    _stall_path: str | None = field(init=False, default=None)
+    _seen_stall: bool = field(init=False, default=False)
+    _calls_after_first_stall: int = field(init=False, default=0)
     _counts: dict[ProxyMode, int] = field(
         init=False,
         default_factory=lambda: {"stall": 0, "forward": 0},
@@ -276,17 +291,37 @@ class FaultInjectingGraderProxy:
         with self._lock:
             self._mode = mode
 
+    def set_stall_path(self, path: str | None) -> None:
+        if path is not None and (not path.startswith("/") or "?" in path):
+            raise ValueError("fault proxy stall path must be an absolute request path")
+        with self._lock:
+            self._stall_path = path
+
     def reset_counts(self) -> None:
         with self._lock:
             self._counts = {"stall": 0, "forward": 0}
+            self._seen_stall = False
+            self._calls_after_first_stall = 0
 
     def call_counts(self) -> dict[ProxyMode, int]:
         with self._lock:
             return dict(self._counts)
 
-    def _record_call(self) -> ProxyMode:
+    def calls_after_first_stall(self) -> int:
         with self._lock:
-            mode = self._mode
+            return self._calls_after_first_stall
+
+    def _record_call(self, path: str) -> ProxyMode:
+        with self._lock:
+            mode: ProxyMode = (
+                "stall"
+                if self._mode == "stall" and (self._stall_path is None or self._stall_path == path)
+                else "forward"
+            )
+            if self._seen_stall:
+                self._calls_after_first_stall += 1
+            if mode == "stall":
+                self._seen_stall = True
             self._counts[mode] += 1
             return mode
 
@@ -555,7 +590,10 @@ def _run_repetition(
             )
             base._wait_for_http(f"{context.grader_url}/health", timeout_seconds=90)
             _warm_timeout_dependencies(context.grader_url)
-            stall_seconds = float(settings.grader_request_timeout_seconds) + 1.0
+            stall_seconds = max(
+                _dependency_stall_seconds(dependency)
+                for dependency in ("normalizer", "grader", "similarity")
+            )
             with FaultInjectingGraderProxy(
                 context.grader_url,
                 stall_seconds=stall_seconds,
@@ -703,6 +741,7 @@ def _language_timeout_recovery_scenario(
         and outage_budget.get("status") == "dependency_timeout"
         and outage_budget.get("terminal_dependency") == dependency
         and outage_counts["stall"] == 1
+        and outage_counts["forward"] == 0
         and new_calls_after_timeout == 0
         and recovery_run.status.value == "passed"
         and expected_finding not in recovery_findings
@@ -761,9 +800,14 @@ def _dependency_timeout_recovery_scenario(
     session.commit()
     revision = base._revision(session, draft)
     versions_before = base._question_version_count(session)
-    grader = HttpGraderClient(proxy.base_url)
+    grader = HttpGraderClient(
+        proxy.base_url,
+        request_timeout_seconds=float(settings.grader_request_timeout_seconds),
+    )
 
     proxy.reset_counts()
+    if dependency != "language":
+        proxy.set_stall_path(_DEPENDENCY_PROXY_PATH[dependency])
     proxy.set_mode("stall")
     outage_run = run_budget_aware_candidate_verification(
         session,
@@ -773,6 +817,7 @@ def _dependency_timeout_recovery_scenario(
     )
     session.commit()
     outage_counts = proxy.call_counts()
+    outage_calls_after_timeout = proxy.calls_after_first_stall()
     outage_snapshot = base._run_snapshot(outage_run)
 
     proxy.reset_counts()
@@ -797,7 +842,7 @@ def _dependency_timeout_recovery_scenario(
     outage_findings = base._finding_codes(outage_run)
     recovery_findings = base._finding_codes(recovery_run)
     expected_finding = _EXPECTED_TIMEOUT_FINDING[dependency]
-    new_calls_after_timeout = max(outage_counts["stall"] - 1, 0)
+    new_calls_after_timeout = outage_calls_after_timeout
     passed = (
         outage_run.status.value == "blocked"
         and expected_finding in outage_findings

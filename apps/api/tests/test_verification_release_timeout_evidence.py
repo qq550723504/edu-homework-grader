@@ -104,6 +104,44 @@ def test_fault_proxy_forwards_real_http_response(
             assert proxy.call_counts() == {"stall": 0, "forward": 1}
 
 
+def test_fault_proxy_stalls_only_the_configured_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _allow_local_processor(monkeypatch)
+    monkeypatch.setattr(evidence.settings, "grader_request_timeout_seconds", 5.0)
+
+    with _grade_upstream() as upstream:
+        with evidence.FaultInjectingGraderProxy(
+            upstream,
+            stall_seconds=0.1,
+        ) as proxy:
+            proxy.set_stall_path("/v1/semantic-similarity")
+            proxy.set_mode("stall")
+
+            result = HttpGraderClient(proxy.base_url).grade(
+                "M1",
+                {"expected": 4, "tolerance": 0},
+                {"format": "text-v1", "text": "4"},
+                policy_version="1",
+            )
+
+            assert result.decision == "auto_accepted"
+            assert proxy.call_counts() == {"stall": 0, "forward": 1}
+
+
+def test_fault_proxy_counts_every_request_after_the_targeted_stall() -> None:
+    with evidence.FaultInjectingGraderProxy(
+        "http://127.0.0.1:9",
+        stall_seconds=0.1,
+    ) as proxy:
+        proxy.set_stall_path("/v1/semantic-similarity")
+        proxy.set_mode("stall")
+
+        assert proxy._record_call("/v1/semantic-similarity") == "stall"
+        assert proxy._record_call("/v1/grade/math/numeric") == "forward"
+        assert proxy.calls_after_first_stall() == 1
+
+
 def test_fault_proxy_rejects_non_positive_timeouts() -> None:
     with pytest.raises(ValueError, match="positive"):
         evidence.FaultInjectingGraderProxy(
@@ -116,6 +154,15 @@ def test_call_buckets_are_stable() -> None:
     assert evidence._call_bucket(0) == "none"
     assert evidence._call_bucket(1) == "single"
     assert evidence._call_bucket(2) == "multiple"
+
+
+def test_evidence_stall_outlasts_the_explicit_client_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(evidence.settings, "grader_request_timeout_seconds", 10.0)
+
+    assert evidence._dependency_stall_seconds("grader") == 11.0
+    assert evidence._dependency_stall_seconds("similarity") == 11.0
 
 
 def test_budget_boundary_clock_expires_at_selected_invocation() -> None:
