@@ -25,6 +25,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 from sqlalchemy.types import JSON, Uuid
 
 from .db import Base
+from .services.question_content import QUESTION_CONTENT_SCHEMA_VERSION, legacy_question_content
 from .services.question_fingerprints import FINGERPRINT_VERSION, fingerprint_prompt
 
 
@@ -1234,6 +1235,17 @@ class QuestionVersion(Base):
     )
     prompt: Mapped[str] = mapped_column(String(10_000))
     reading_material: Mapped[str | None] = mapped_column(Text)
+    content_schema_version: Mapped[str] = mapped_column(
+        String(40), nullable=False, default=QUESTION_CONTENT_SCHEMA_VERSION
+    )
+    content_json: Mapped[dict[str, object]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"),
+        nullable=False,
+        default=lambda context: legacy_question_content(
+            context.get_current_parameters().get("prompt", ""),
+            context.get_current_parameters().get("reading_material"),
+        ),
+    )
     fingerprint_version: Mapped[str] = mapped_column(String(100), nullable=False)
     exact_prompt_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     normalized_prompt_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -1254,6 +1266,12 @@ class QuestionVersion(Base):
     test_runs: Mapped[list[QuestionTestRun]] = relationship(back_populates="question_version")
     assignment_items: Mapped[list[AssignmentItem]] = relationship(back_populates="question_version")
     grading_runs: Mapped[list[GradingRun]] = relationship(back_populates="question_version")
+    media_assets: Mapped[list[QuestionMediaAsset]] = relationship(
+        back_populates="question_version", cascade="all, delete-orphan"
+    )
+    external_content_references: Mapped[list[ExternalContentReference]] = relationship(
+        back_populates="question_version", cascade="all, delete-orphan"
+    )
 
     @validates("prompt")
     def _refresh_prompt_fingerprints(self, _key: str, prompt: str) -> str:
@@ -1262,6 +1280,72 @@ class QuestionVersion(Base):
         self.exact_prompt_hash = fingerprints.exact_hash
         self.normalized_prompt_hash = fingerprints.normalized_hash
         return prompt
+
+
+class QuestionMediaAsset(Base):
+    __tablename__ = "question_media_assets"
+    __table_args__ = (
+        UniqueConstraint(
+            "question_version_id", "position", name="uq_question_media_asset_position"
+        ),
+        CheckConstraint("byte_size >= 0", name="ck_question_media_asset_byte_size_nonnegative"),
+        Index("ix_question_media_assets_question_version_id", "question_version_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    question_version_id: Mapped[UUID] = mapped_column(
+        ForeignKey("question_versions.id"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    alt_text: Mapped[str | None] = mapped_column(Text)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    question_version: Mapped[QuestionVersion] = relationship(back_populates="media_assets")
+
+
+class ExternalContentReference(Base):
+    __tablename__ = "external_content_references"
+    __table_args__ = (
+        UniqueConstraint(
+            "question_version_id",
+            "provider",
+            "external_id",
+            "source_version",
+            name="uq_external_content_reference_identity",
+        ),
+        Index("ix_external_content_references_question_version_id", "question_version_id"),
+        Index("ix_external_content_references_provider", "provider"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    question_version_id: Mapped[UUID] = mapped_column(
+        ForeignKey("question_versions.id"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(100), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(500), nullable=False)
+    source_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    license_code: Mapped[str] = mapped_column(String(100), nullable=False)
+    license_snapshot_json: Mapped[dict[str, object]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False
+    )
+    tenant_scope_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    allow_persist: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    allow_student_display: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    allow_ai_processing: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    allow_redistribution: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    contract_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    question_version: Mapped[QuestionVersion] = relationship(
+        back_populates="external_content_references"
+    )
+    tenant_scope: Mapped[Tenant] = relationship()
 
 
 class QuestionTestCase(Base):
