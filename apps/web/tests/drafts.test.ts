@@ -4,9 +4,12 @@ import {
   canSubmitAttempt,
   draftDatabase,
   flushAttempt,
+  getDraft,
   getSubmissionKey,
   queueAnswer,
-  resetDraftDatabase
+  requeueConflictWithLocal,
+  resetDraftDatabase,
+  resolveConflictWithServer
 } from '../app/lib/drafts'
 
 afterEach(async () => {
@@ -78,5 +81,69 @@ describe('assignment draft outbox', () => {
     )
 
     expect(acknowledged).toEqual([{ itemId: 'item-1', version: 1 }])
+  })
+
+  it('reads the latest local answer by its tenant, user, attempt, and item key', async () => {
+    await queueAnswer({
+      tenantId: 'tenant-1', userId: 'student-1', attemptId: 'attempt-1', itemId: 'item-1',
+      answer: { format: 'text-v1', text: 'offline answer' }, version: 0
+    })
+
+    expect(await getDraft('tenant-1', 'student-1', 'attempt-1', 'item-1'))
+      .toMatchObject({ answer: { format: 'text-v1', text: 'offline answer' } })
+    expect(await getDraft('tenant-1', 'student-2', 'attempt-1', 'item-1')).toBeUndefined()
+  })
+
+  it.each([
+    ['session_expired', { kind: 'session_expired' as const }],
+    ['processing_blocked', { kind: 'processing_blocked' as const }],
+    ['validation_error', { kind: 'validation_error' as const, code: 'mathjson_invalid' }]
+  ])('keeps %s visible but removes it from the automatic outbox', async (status, result) => {
+    await queueAnswer({
+      tenantId: 'tenant-1', userId: 'student-1', attemptId: 'attempt-1', itemId: 'item-1',
+      answer: { format: 'text-v1', text: '6' }, version: 0
+    })
+
+    await flushAttempt('attempt-1', { saveAnswer: async () => result })
+
+    expect((await draftDatabase.drafts.get(['tenant-1', 'student-1', 'attempt-1', 'item-1'])))
+      .toMatchObject({ status, errorCode: status === 'validation_error' ? 'mathjson_invalid' : undefined })
+    expect(await draftDatabase.outbox.count()).toBe(0)
+  })
+
+  it('keeps rate-limited work queued with a bounded retry count', async () => {
+    await queueAnswer({
+      tenantId: 'tenant-1', userId: 'student-1', attemptId: 'attempt-1', itemId: 'item-1',
+      answer: { format: 'text-v1', text: '6' }, version: 0
+    })
+
+    await flushAttempt('attempt-1', { saveAnswer: async () => ({ kind: 'rate_limited' as const }) })
+
+    expect((await draftDatabase.drafts.get(['tenant-1', 'student-1', 'attempt-1', 'item-1'])))
+      .toMatchObject({ status: 'rate_limited', retryCount: 1 })
+    expect(await draftDatabase.outbox.count()).toBe(1)
+  })
+
+  it('lets the student explicitly choose the server answer or requeue the local answer after a conflict', async () => {
+    await queueAnswer({
+      tenantId: 'tenant-1', userId: 'student-1', attemptId: 'attempt-1', itemId: 'item-1',
+      answer: { format: 'text-v1', text: 'local' }, version: 0
+    })
+    await flushAttempt('attempt-1', {
+      saveAnswer: async () => ({
+        kind: 'conflict' as const,
+        current: { answer: { format: 'text-v1', text: 'server' }, version: 2 }
+      })
+    })
+    const conflict = await draftDatabase.drafts.get(['tenant-1', 'student-1', 'attempt-1', 'item-1'])
+    if (!conflict) throw new Error('expected conflict draft')
+
+    await requeueConflictWithLocal(conflict)
+    expect(await draftDatabase.outbox.toArray()).toMatchObject([{ version: 2, answer: { text: 'local' } }])
+
+    await resolveConflictWithServer({ ...conflict, retryCount: 0 })
+    expect(await draftDatabase.drafts.get(['tenant-1', 'student-1', 'attempt-1', 'item-1']))
+      .toMatchObject({ answer: { text: 'server' }, version: 2, status: 'synced' })
+    expect(await draftDatabase.outbox.count()).toBe(0)
   })
 })

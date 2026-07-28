@@ -1,11 +1,12 @@
 // @vitest-environment happy-dom
 
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import AssignmentPage from '../app/pages/student/assignments/[assignmentId].vue'
 import '../app/assets/css/main.css'
+import { resetDraftDatabase } from '../app/lib/drafts'
 
 function assignmentDetail(readingMaterial: string | null) {
   return {
@@ -27,10 +28,26 @@ function assignmentDetail(readingMaterial: string | null) {
   }
 }
 
-async function mountAssignmentPage(readingMaterial: string | null): Promise<VueWrapper> {
+let requestedUrls: string[] = []
+
+async function mountAssignmentPage(
+  readingMaterial: string | null,
+  saveFailure?: unknown | unknown[],
+  sessionFailure?: unknown | unknown[]
+): Promise<VueWrapper> {
+  const saveFailures = Array.isArray(saveFailure) ? [...saveFailure] : [saveFailure]
+  const sessionFailures = Array.isArray(sessionFailure) ? [...sessionFailure] : [sessionFailure]
   vi.stubGlobal('$fetch', vi.fn(async (url: string) => {
+    requestedUrls.push(url)
     if (url === '/api/auth/session') {
+      const failure = sessionFailures.shift()
+      if (failure) throw failure
       return { id: 'student-1', tenant_id: 'tenant-1', csrf_token: 'csrf-token' }
+    }
+    if (url.startsWith('/api/core/v1/student/attempts/')) {
+      const failure = saveFailures.shift()
+      if (failure) throw failure
+      return { version: 2 }
     }
     return assignmentDetail(readingMaterial)
   }))
@@ -50,8 +67,12 @@ async function mountAssignmentPage(readingMaterial: string | null): Promise<VueW
 
 describe('student assignment question rendering', () => {
   beforeEach(() => {
+    requestedUrls = []
     vi.stubGlobal('computed', computed)
+    vi.stubGlobal('onBeforeUnmount', onBeforeUnmount)
+    vi.stubGlobal('navigator', { onLine: true })
     vi.stubGlobal('onMounted', onMounted)
+    vi.stubGlobal('navigateTo', vi.fn())
     vi.stubGlobal('ref', ref)
     vi.stubGlobal('useRoute', () => ({ params: { assignmentId: 'assignment-1' } }))
     vi.stubGlobal('watch', watch)
@@ -59,6 +80,10 @@ describe('student assignment question rendering', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+  })
+
+  afterEach(async () => {
+    await resetDraftDatabase()
   })
 
   it('renders multiline reading material before the question prompt', async () => {
@@ -83,5 +108,117 @@ describe('student assignment question rendering', () => {
     expect(wrapper.get('h2').text()).toBe('Why did the students arrive late?')
 
     wrapper.unmount()
+  })
+
+  it('shows a safe validation message and keeps the answer editable', async () => {
+    const wrapper = await mountAssignmentPage(null, {
+      statusCode: 422,
+      data: { detail: { code: 'mathjson_invalid', message: 'internal parser secret' } }
+    })
+
+    const input = wrapper.get('textarea[aria-label="答案"]')
+    expect(input.attributes('disabled')).toBeUndefined()
+    ;(input.element as HTMLTextAreaElement).value = 'synthetic answer'
+    await (wrapper.vm.$ as { setupState: { saveDraft: (event: Event) => Promise<void> } }).setupState.saveDraft({ target: input.element } as Event)
+    await flushPromises()
+
+    expect(requestedUrls).toContain('/api/core/v1/student/attempts/attempt-1/answers/item-1')
+    expect(wrapper.text()).toContain('答案格式需要修改后再同步。')
+    expect(wrapper.get('textarea[aria-label="答案"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.text()).not.toContain('secret')
+    wrapper.unmount()
+  })
+
+  it('blocks additional writes after a processing restriction', async () => {
+    const wrapper = await mountAssignmentPage(null, { statusCode: 403 })
+
+    const input = wrapper.get('textarea[aria-label="答案"]')
+    expect(input.attributes('disabled')).toBeUndefined()
+    ;(input.element as HTMLTextAreaElement).value = 'synthetic answer'
+    await (wrapper.vm.$ as { setupState: { saveDraft: (event: Event) => Promise<void> } }).setupState.saveDraft({ target: input.element } as Event)
+    await flushPromises()
+
+    expect(requestedUrls).toContain('/api/core/v1/student/attempts/attempt-1/answers/item-1')
+    expect(wrapper.text()).toContain('当前无法处理作答，请联系教师或管理员。')
+    expect(wrapper.get('textarea[aria-label="答案"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('requires an explicit choice when the server has a newer answer', async () => {
+    const wrapper = await mountAssignmentPage(null, {
+      statusCode: 409,
+      data: { current: { answer: { format: 'text-v1', text: 'server answer' }, version: 2 } }
+    })
+    const input = wrapper.get('textarea[aria-label="答案"]')
+    ;(input.element as HTMLTextAreaElement).value = 'local answer'
+    await (wrapper.vm.$ as { setupState: { saveDraft: (event: Event) => Promise<void> } }).setupState.saveDraft({ target: input.element } as Event)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="use-server-answer"]').text()).toBe('采用服务器答案')
+    expect(wrapper.get('[data-testid="keep-local-answer"]').text()).toBe('保留我的答案')
+    expect(wrapper.text()).not.toContain('server answer')
+    wrapper.unmount()
+  })
+
+  it('refreshes the BFF session once before retrying a 401 save', async () => {
+    const wrapper = await mountAssignmentPage(null, [{ statusCode: 401 }, undefined])
+    const input = wrapper.get('textarea[aria-label="答案"]')
+    ;(input.element as HTMLTextAreaElement).value = 'synthetic answer'
+    await (wrapper.vm.$ as { setupState: { saveDraft: (event: Event) => Promise<void> } }).setupState.saveDraft({ target: input.element } as Event)
+    await flushPromises()
+
+    expect(requestedUrls.filter((url) => url === '/api/auth/session')).toHaveLength(2)
+    expect(requestedUrls.filter((url) => url.startsWith('/api/core/v1/student/attempts/'))).toHaveLength(2)
+    expect(wrapper.text()).toContain('已同步。')
+    wrapper.unmount()
+  })
+
+  it('redirects to the existing login route after a renewed session cannot save', async () => {
+    const wrapper = await mountAssignmentPage(null, [{ statusCode: 401 }, { statusCode: 401 }])
+    const input = wrapper.get('textarea[aria-label="答案"]')
+    ;(input.element as HTMLTextAreaElement).value = 'synthetic answer'
+    await (wrapper.vm.$ as { setupState: { saveDraft: (event: Event) => Promise<void> } }).setupState.saveDraft({ target: input.element } as Event)
+    await flushPromises()
+
+    expect(vi.mocked(navigateTo)).toHaveBeenCalledWith(
+      '/api/auth/login?returnTo=%2Fstudent%2Fassignments%2Fassignment-1',
+      { external: true }
+    )
+    expect(wrapper.text()).toContain('登录会话已过期，请重新登录。')
+    expect(wrapper.get('textarea[aria-label="答案"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('retries one rate-limited save using Retry-After without a tight loop', async () => {
+    const wrapper = await mountAssignmentPage(null, [
+      { response: { status: 429, headers: { get: () => '0' } } },
+      undefined
+    ])
+    const input = wrapper.get('textarea[aria-label="答案"]')
+    ;(input.element as HTMLTextAreaElement).value = 'synthetic answer'
+    await (wrapper.vm.$ as { setupState: { saveDraft: (event: Event) => Promise<void> } }).setupState.saveDraft({ target: input.element } as Event)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await flushPromises()
+
+    expect(requestedUrls.filter((url) => url.startsWith('/api/core/v1/student/attempts/'))).toHaveLength(2)
+    wrapper.unmount()
+  })
+
+  it('removes named browser listeners when the assignment page unmounts', async () => {
+    const removeEventListener = vi.spyOn(window, 'removeEventListener')
+    const abort = vi.fn()
+    vi.stubGlobal('AbortController', class {
+      signal = {} as AbortSignal
+      abort = abort
+    })
+    const wrapper = await mountAssignmentPage(null)
+
+    wrapper.unmount()
+
+    expect(removeEventListener).toHaveBeenCalledWith('online', expect.any(Function))
+    expect(removeEventListener).toHaveBeenCalledWith('offline', expect.any(Function))
+    expect(removeEventListener).toHaveBeenCalledWith('visibilitychange', expect.any(Function))
+    expect(abort).toHaveBeenCalledTimes(1)
   })
 })
