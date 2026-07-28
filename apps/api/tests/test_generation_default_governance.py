@@ -43,7 +43,13 @@ def platform_admin(session: Session, *, subject: str = "platform-admin") -> User
     return user
 
 
-def passing_report(*, model_id: str = "fake-v1", provider_name: str = "fake") -> dict[str, object]:
+def passing_report(
+    *,
+    model_id: str = "fake-v1",
+    provider_name: str = "fake",
+    baseline_model_id: str = "fake-v0",
+    baseline_provider_name: str = "fake",
+) -> dict[str, object]:
     passing_gate = {
         "policy_id": "generation-default-governance-v1",
         "promotion_eligible": True,
@@ -60,8 +66,8 @@ def passing_report(*, model_id: str = "fake-v1", provider_name: str = "fake") ->
         tenant_id="pilot",
         watermark=datetime(2026, 7, 28, tzinfo=timezone.utc),
         baseline={
-            "provider_name": "fake",
-            "model_id": "fake-v0",
+            "provider_name": baseline_provider_name,
+            "model_id": baseline_model_id,
             "prompt_version": "generator-v1",
             "prompt_template_fingerprint": resolve_prompt_template(
                 "generator-v1", ("M1", "M2", "E1", "E2", "E3", "E4")
@@ -238,7 +244,7 @@ def test_apply_selects_new_default_and_supersedes_previous_request(session: Sess
         model_version="fake-v1",
         prompt_version="generator-v1",
         request_reason="Upgrade governed default",
-        evaluation_report=passing_report(),
+        evaluation_report=passing_report(baseline_model_id="fake-v1"),
         idempotency_key="promote-4",
     )
     service.approve_change_request(
@@ -252,8 +258,24 @@ def test_apply_selects_new_default_and_supersedes_previous_request(session: Sess
     assert original.status is GenerationDefaultChangeStatus.SUPERSEDED
     assert replacement.status is GenerationDefaultChangeStatus.APPLIED
 
+    with pytest.raises(service.GenerationDefaultGovernanceError) as error:
+        service.submit_change_request(
+            session,
+            actor=submitter,
+            provider_name="fake",
+            model_version="fake-v1",
+            prompt_version="generator-v1",
+            request_reason="Use evidence against a different baseline",
+            evaluation_report=passing_report(),
+            idempotency_key="wrong-baseline",
+        )
 
-def test_rollback_is_a_new_approved_change_request(session: Session) -> None:
+    assert error.value.code == "evaluation_baseline_mismatch"
+
+
+def test_rollback_is_a_new_approved_change_request(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
     service = governance_service()
     submitter = platform_admin(session)
     approver = platform_admin(session, subject="platform-approver")
@@ -280,7 +302,7 @@ def test_rollback_is_a_new_approved_change_request(session: Session) -> None:
         model_version="fake-v1",
         prompt_version="generator-v1",
         request_reason="Upgrade governed default",
-        evaluation_report=passing_report(),
+        evaluation_report=passing_report(baseline_model_id="fake-v1"),
         idempotency_key="promote-6",
     )
     service.approve_change_request(
@@ -297,6 +319,25 @@ def test_rollback_is_a_new_approved_change_request(session: Session) -> None:
         request_reason="Regression in replacement",
         idempotency_key="rollback-1",
     )
+    original_scalar = session.scalar
+    calls = 0
+
+    def stale_first_lookup(*args: object, **kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return None
+        return original_scalar(*args, **kwargs)
+
+    monkeypatch.setattr(session, "scalar", stale_first_lookup)
+    replay = service.submit_rollback_request(
+        session,
+        actor=submitter,
+        target_request_id=original.id,
+        request_reason="Regression in replacement",
+        idempotency_key="rollback-1",
+    )
+    monkeypatch.setattr(session, "scalar", original_scalar)
     service.approve_change_request(
         session, request_id=rollback.id, actor=approver, approval_reason="Rollback verified"
     )
@@ -307,6 +348,17 @@ def test_rollback_is_a_new_approved_change_request(session: Session) -> None:
     assert service.resolve_active_default(session).model_version == "fake-v1"
     assert replacement.status is GenerationDefaultChangeStatus.ROLLED_BACK
     assert rollback.status is GenerationDefaultChangeStatus.APPLIED
+    assert replay.id == rollback.id
+
+    restore = service.submit_rollback_request(
+        session,
+        actor=submitter,
+        target_request_id=replacement.id,
+        request_reason="Undo the rollback",
+        idempotency_key="restore-replacement",
+    )
+
+    assert restore.configuration_id == replacement.configuration_id
 
 
 def test_submit_rejects_globally_paused_candidate_component(session: Session) -> None:
@@ -471,7 +523,7 @@ def test_approval_is_timestamped_and_exact_retries_are_replayed(session: Session
         model_version="fake-v1",
         prompt_version="generator-v1",
         request_reason="Supersede the previous default",
-        evaluation_report=passing_report(),
+        evaluation_report=passing_report(baseline_model_id="fake-v1"),
         idempotency_key="superseding-request",
     )
     service.approve_change_request(

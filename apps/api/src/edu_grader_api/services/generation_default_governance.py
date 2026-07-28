@@ -110,6 +110,10 @@ def submit_change_request(
             raise GenerationDefaultGovernanceError("default_change_idempotency_conflict")
         return existing
 
+    selection = session.get(GenerationDefaultSelection, "global")
+    if selection is not None:
+        _assert_report_baseline_matches_selection(report, selection)
+
     configuration = session.scalar(
         select(GenerationDefaultConfiguration).where(
             GenerationDefaultConfiguration.provider_name == provider_name,
@@ -127,8 +131,6 @@ def submit_change_request(
             prompt_version=prompt_version,
             prompt_template_fingerprint=template.fingerprint,
         )
-
-    selection = session.get(GenerationDefaultSelection, "global")
 
     change_request = GenerationDefaultChangeRequest(
         configuration=configuration,
@@ -370,7 +372,11 @@ def submit_rollback_request(
     selection = session.get(GenerationDefaultSelection, "global")
     if (
         target is None
-        or target.status not in {GenerationDefaultChangeStatus.SUPERSEDED}
+        or target.status
+        not in {
+            GenerationDefaultChangeStatus.SUPERSEDED,
+            GenerationDefaultChangeStatus.ROLLED_BACK,
+        }
         or selection is None
         or target.id == selection.applied_change_request_id
     ):
@@ -408,8 +414,22 @@ def submit_rollback_request(
         evaluation_summary_json=target.evaluation_summary_json,
         submitted_by_user_id=actor.id,
     )
-    session.add(rollback)
-    session.flush()
+    try:
+        with session.begin_nested():
+            session.add(rollback)
+            session.flush()
+    except IntegrityError:
+        existing = session.scalar(
+            select(GenerationDefaultChangeRequest).where(
+                GenerationDefaultChangeRequest.submitted_by_user_id == actor.id,
+                GenerationDefaultChangeRequest.idempotency_key == idempotency_key,
+            )
+        )
+        if existing is None:
+            raise GenerationDefaultGovernanceError("default_change_request_conflict") from None
+        if existing.request_digest != request_digest:
+            raise GenerationDefaultGovernanceError("default_change_idempotency_conflict")
+        return existing
     append_audit_event(
         session,
         tenant_id=actor.tenant_id,
@@ -537,6 +557,20 @@ def _assert_candidate_matches(
         or candidate.prompt_version != prompt_version
     ):
         raise GenerationDefaultGovernanceError("evaluation_candidate_mismatch")
+
+
+def _assert_report_baseline_matches_selection(
+    report: object, selection: GenerationDefaultSelection
+) -> None:
+    baseline = report.baseline
+    configuration = selection.configuration
+    if (
+        baseline.provider_name != configuration.provider_name
+        or baseline.model_id != configuration.model_version
+        or baseline.prompt_version != configuration.prompt_version
+        or baseline.prompt_template_fingerprint != configuration.prompt_template_fingerprint
+    ):
+        raise GenerationDefaultGovernanceError("evaluation_baseline_mismatch")
 
 
 def _locked_change_request(
