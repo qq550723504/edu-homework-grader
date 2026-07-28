@@ -4,6 +4,7 @@ import {
   canSubmitAttempt,
   draftDatabase,
   flushAttempt,
+  getDraft,
   getSubmissionKey,
   queueAnswer,
   requeueConflictWithLocal,
@@ -80,6 +81,17 @@ describe('assignment draft outbox', () => {
     )
 
     expect(acknowledged).toEqual([{ itemId: 'item-1', version: 1 }])
+  })
+
+  it('reads the latest local answer by its tenant, user, attempt, and item key', async () => {
+    await queueAnswer({
+      tenantId: 'tenant-1', userId: 'student-1', attemptId: 'attempt-1', itemId: 'item-1',
+      answer: { format: 'text-v1', text: 'offline answer' }, version: 0
+    })
+
+    expect(await getDraft('tenant-1', 'student-1', 'attempt-1', 'item-1'))
+      .toMatchObject({ answer: { format: 'text-v1', text: 'offline answer' } })
+    expect(await getDraft('tenant-1', 'student-2', 'attempt-1', 'item-1')).toBeUndefined()
   })
 
   it.each([

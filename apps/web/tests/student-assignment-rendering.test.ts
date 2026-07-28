@@ -30,11 +30,18 @@ function assignmentDetail(readingMaterial: string | null) {
 
 let requestedUrls: string[] = []
 
-async function mountAssignmentPage(readingMaterial: string | null, saveFailure?: unknown | unknown[]): Promise<VueWrapper> {
+async function mountAssignmentPage(
+  readingMaterial: string | null,
+  saveFailure?: unknown | unknown[],
+  sessionFailure?: unknown | unknown[]
+): Promise<VueWrapper> {
   const saveFailures = Array.isArray(saveFailure) ? [...saveFailure] : [saveFailure]
+  const sessionFailures = Array.isArray(sessionFailure) ? [...sessionFailure] : [sessionFailure]
   vi.stubGlobal('$fetch', vi.fn(async (url: string) => {
     requestedUrls.push(url)
     if (url === '/api/auth/session') {
+      const failure = sessionFailures.shift()
+      if (failure) throw failure
       return { id: 'student-1', tenant_id: 'tenant-1', csrf_token: 'csrf-token' }
     }
     if (url.startsWith('/api/core/v1/student/attempts/')) {
@@ -65,6 +72,7 @@ describe('student assignment question rendering', () => {
     vi.stubGlobal('onBeforeUnmount', onBeforeUnmount)
     vi.stubGlobal('navigator', { onLine: true })
     vi.stubGlobal('onMounted', onMounted)
+    vi.stubGlobal('navigateTo', vi.fn())
     vi.stubGlobal('ref', ref)
     vi.stubGlobal('useRoute', () => ({ params: { assignmentId: 'assignment-1' } }))
     vi.stubGlobal('watch', watch)
@@ -165,6 +173,22 @@ describe('student assignment question rendering', () => {
     wrapper.unmount()
   })
 
+  it('redirects to the existing login route after a renewed session cannot save', async () => {
+    const wrapper = await mountAssignmentPage(null, [{ statusCode: 401 }, { statusCode: 401 }])
+    const input = wrapper.get('textarea[aria-label="答案"]')
+    ;(input.element as HTMLTextAreaElement).value = 'synthetic answer'
+    await (wrapper.vm.$ as { setupState: { saveDraft: (event: Event) => Promise<void> } }).setupState.saveDraft({ target: input.element } as Event)
+    await flushPromises()
+
+    expect(vi.mocked(navigateTo)).toHaveBeenCalledWith(
+      '/api/auth/login?returnTo=%2Fstudent%2Fassignments%2Fassignment-1',
+      { external: true }
+    )
+    expect(wrapper.text()).toContain('登录会话已过期，请重新登录。')
+    expect(wrapper.get('textarea[aria-label="答案"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
   it('retries one rate-limited save using Retry-After without a tight loop', async () => {
     const wrapper = await mountAssignmentPage(null, [
       { response: { status: 429, headers: { get: () => '0' } } },
@@ -183,6 +207,11 @@ describe('student assignment question rendering', () => {
 
   it('removes named browser listeners when the assignment page unmounts', async () => {
     const removeEventListener = vi.spyOn(window, 'removeEventListener')
+    const abort = vi.fn()
+    vi.stubGlobal('AbortController', class {
+      signal = {} as AbortSignal
+      abort = abort
+    })
     const wrapper = await mountAssignmentPage(null)
 
     wrapper.unmount()
@@ -190,5 +219,6 @@ describe('student assignment question rendering', () => {
     expect(removeEventListener).toHaveBeenCalledWith('online', expect.any(Function))
     expect(removeEventListener).toHaveBeenCalledWith('offline', expect.any(Function))
     expect(removeEventListener).toHaveBeenCalledWith('visibilitychange', expect.any(Function))
+    expect(abort).toHaveBeenCalledTimes(1)
   })
 })

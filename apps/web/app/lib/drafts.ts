@@ -142,6 +142,15 @@ export async function flushAttempt(
   }
 }
 
+export async function getDraft(
+  tenantId: string,
+  userId: string,
+  attemptId: string,
+  itemId: string
+): Promise<DraftRecord | undefined> {
+  return draftDatabase.drafts.get([tenantId, userId, attemptId, itemId])
+}
+
 export async function resolveConflictWithServer(record: DraftRecord): Promise<void> {
   if (!record.serverAnswer || record.serverVersion === undefined) return
   const key: [string, string, string, string] = [
