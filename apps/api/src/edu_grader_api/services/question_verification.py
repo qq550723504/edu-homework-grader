@@ -1912,6 +1912,10 @@ def _duplicate_findings(
                     )
                 ]
         return []
+    except (VerificationBudgetExceeded, VerificationDependencyTimeout):
+        # A budget terminal is not a recoverable semantic-comparison outage:
+        # callers must stop before issuing another dependency request.
+        raise
     except Exception:
         return [_duplicate_unavailable_finding()]
 
