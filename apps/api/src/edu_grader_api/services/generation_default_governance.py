@@ -573,10 +573,7 @@ def _decision_replay(
         return False
     if request.decision_request_digest != digest:
         raise GenerationDefaultGovernanceError("default_change_idempotency_conflict")
-    return request.status in {
-        GenerationDefaultChangeStatus.APPROVED,
-        GenerationDefaultChangeStatus.REJECTED,
-    }
+    return request.status is not GenerationDefaultChangeStatus.PENDING_APPROVAL
 
 
 def _application_replay(

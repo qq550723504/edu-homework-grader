@@ -450,9 +450,24 @@ def test_approval_is_timestamped_and_exact_retries_are_replayed(session: Session
         approval_reason="Verified",
         idempotency_key="approval-retry",
     )
+    service.apply_change_request(
+        session,
+        request_id=change_request.id,
+        actor=submitter,
+        application_reason="Release",
+        idempotency_key="apply-retry",
+    )
+    after_apply_replay = service.approve_change_request(
+        session,
+        request_id=change_request.id,
+        actor=approver,
+        approval_reason="Verified",
+        idempotency_key="approval-retry",
+    )
 
     assert approved.approved_at is not None
     assert replay.id == approved.id
+    assert after_apply_replay.id == approved.id
 
 
 def test_rollback_rejects_the_active_default_as_its_own_target(session: Session) -> None:

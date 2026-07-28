@@ -511,11 +511,15 @@ def run_operational_evaluation(
 
 
 def _matches(record: ai_evaluation.EvaluationRecord, selector: EvaluationVersionSelector) -> bool:
+    fingerprint = record.parameters.get("prompt_template_fingerprint")
     return (
         record.model_id == selector.model_id
         and record.prompt_version == selector.prompt_version
         and record.validator_version == selector.validator_version
         and record.parameters.get("provider_name") == selector.provider_name
+        and isinstance(fingerprint, str)
+        and fingerprint not in {"", "unknown"}
+        and fingerprint == selector.prompt_template_fingerprint
     )
 
 

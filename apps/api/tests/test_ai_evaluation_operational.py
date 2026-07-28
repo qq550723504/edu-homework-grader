@@ -44,6 +44,7 @@ from edu_grader_api.services.ai_evaluation_operational import (
     OperationalEvaluationSpec,
     compare_evaluation_records,
     export_evaluation_records,
+    _matches,
     write_operational_artifacts,
 )
 
@@ -443,6 +444,7 @@ def _selector(model_id: str) -> EvaluationVersionSelector:
         provider_name="openai",
         model_id=model_id,
         prompt_version="generator-v3",
+        prompt_template_fingerprint="f" * 64,
         validator_version="verification-v5",
     )
 
@@ -489,7 +491,10 @@ def _records_for_version(model_id: str, *, candidate_regression: bool = False):
                 validator_version="verification-v5",
                 difficulty_band="standard",
                 seed=index,
-                parameters={"provider_name": "openai"},
+                parameters={
+                    "provider_name": "openai",
+                    "prompt_template_fingerprint": "f" * 64,
+                },
                 content_fingerprint=(
                     f"{model_id}-{question_type}".encode().hex()[:64].ljust(64, "0")
                 ),
@@ -508,6 +513,17 @@ def _records_for_version(model_id: str, *, candidate_regression: bool = False):
             )
         )
     return records
+
+
+def test_record_matching_requires_the_declared_prompt_fingerprint() -> None:
+    selector = _selector("gpt-5.6-terra")
+    record = _records_for_version("gpt-5.6-terra")[0]
+
+    assert _matches(record, selector)
+    record.parameters["prompt_template_fingerprint"] = "unknown"
+    assert not _matches(record, selector)
+    record.parameters["prompt_template_fingerprint"] = "0" * 64
+    assert not _matches(record, selector)
 
 
 def _active_governance(session: Session, selectors) -> None:
