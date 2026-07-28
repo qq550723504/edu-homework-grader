@@ -3,6 +3,11 @@ param(
     [string]$Namespace = 'edu-homework-grader',
     [Parameter(Mandatory = $true)]
     [string]$OidcIssuer,
+    [Parameter(Mandatory = $true)]
+    [string[]]$GenerationGovernanceAdminSubjects,
+    [Parameter(Mandatory = $true)]
+    [AllowEmptyString()]
+    [string]$OpenAiApiKey,
     [string]$SecretName = 'edu-grader-runtime',
     [switch]$Replace
 )
@@ -20,6 +25,15 @@ function New-RandomSecret {
 $issuer = [Uri]$OidcIssuer
 if ($issuer.Scheme -ne 'https' -or $issuer.Host -in @('localhost', '127.0.0.1', '::1')) {
     throw 'OIDC issuer must use a non-local HTTPS URL in production.'
+}
+$generationGovernanceAdminSubjects = @(
+    $GenerationGovernanceAdminSubjects |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ } |
+        Select-Object -Unique
+)
+if ($generationGovernanceAdminSubjects.Count -lt 2) {
+    throw 'At least two distinct generation governance administrator subjects are required.'
 }
 
 if (-not $PSCmdlet.ShouldProcess("namespace/$Namespace secret/$SecretName", 'create production runtime Secret')) {
@@ -63,7 +77,9 @@ $secretArguments = @(
     '--from-literal=OIDC_SCHOOL_ID_CLAIM=school_id',
     '--from-literal=OIDC_TENANT_SLUG=pilot',
     '--from-literal=GRADER_BASE_URL=http://grader:8010',
-    '--from-literal=PROCESSOR_ALLOWED_HOSTS=grader,languagetool'
+    '--from-literal=PROCESSOR_ALLOWED_HOSTS=grader,languagetool',
+    "--from-literal=GENERATION_GOVERNANCE_ADMIN_SUBJECTS=$($generationGovernanceAdminSubjects -join ',')",
+    "--from-literal=OPENAI_API_KEY=$OpenAiApiKey"
 )
 
 # Use `kubectl create secret generic` as an in-memory manifest generator; values are never written to disk.

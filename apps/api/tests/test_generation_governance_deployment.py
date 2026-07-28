@@ -37,3 +37,15 @@ def test_production_passes_governance_admin_allowlist_to_api() -> None:
         }
         for item in environment
     )
+
+
+def test_production_secret_bootstrap_requires_and_provisions_generation_controls() -> None:
+    repository_root = Path(__file__).parents[3]
+    bootstrap = (repository_root / "scripts/k8s/create-prod-secrets.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "[string[]]$GenerationGovernanceAdminSubjects" in bootstrap
+    assert "[string]$OpenAiApiKey" in bootstrap
+    assert "GENERATION_GOVERNANCE_ADMIN_SUBJECTS" in bootstrap
+    assert "OPENAI_API_KEY" in bootstrap
