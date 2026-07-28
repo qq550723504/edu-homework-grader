@@ -385,11 +385,14 @@ def _validated_report(payload: dict[str, object]):
     except ValidationError as exc:
         raise GenerationDefaultGovernanceError("evaluation_report_invalid") from exc
     gates = (report.baseline_gate, report.candidate_gate)
+    gates_are_eligible = all(
+        gate is not None and gate.promotion_eligible and not gate.violations for gate in gates
+    )
     evidence_is_eligible = (
         report.promotion_eligible
         and report.export_manifest.issue_count == 0
         and not report.violations
-        and all(gate is not None and gate.promotion_eligible for gate in gates)
+        and gates_are_eligible
         and all(comparison.state != "fail" for comparison in report.metric_comparisons.values())
     )
     if not evidence_is_eligible:

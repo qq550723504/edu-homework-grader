@@ -152,6 +152,33 @@ def test_submit_rejects_promotion_flag_without_passing_gate_evidence(session: Se
     assert error.value.code == "evaluation_not_promotion_eligible"
 
 
+def test_submit_rejects_gate_that_claims_eligibility_despite_violations(session: Session) -> None:
+    service = governance_service()
+    admin = platform_admin(session)
+    report = passing_report()
+    report["candidate_gate"]["violations"] = [
+        {
+            "code": "evaluation_threshold_failed",
+            "metric": "acceptance_rate",
+            "key": {"scope": "candidate"},
+        }
+    ]
+
+    with pytest.raises(service.GenerationDefaultGovernanceError) as error:
+        service.submit_change_request(
+            session,
+            actor=admin,
+            provider_name="fake",
+            model_version="fake-v1",
+            prompt_version="generator-v1",
+            request_reason="Promote contradictory report",
+            evaluation_report=report,
+            idempotency_key="contradictory-gate-evidence",
+        )
+
+    assert error.value.code == "evaluation_not_promotion_eligible"
+
+
 def test_submitter_cannot_approve_own_change_request(session: Session) -> None:
     service = governance_service()
     admin = platform_admin(session)
