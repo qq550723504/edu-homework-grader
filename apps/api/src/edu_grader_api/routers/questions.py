@@ -222,6 +222,48 @@ def update_question_version_route(
     return {"id": str(version.id), "status": version.status.value}
 
 
+@version_router.get("/{version_id}/content")
+def read_question_content_route(
+    version_id: UUID,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    """Return the teacher-safe content snapshot without leaking storage or licenses."""
+    version = _tenant_version(session, version_id, UUID(principal.tenant_id))
+    return {
+        "content_schema_version": version.content_schema_version,
+        "content": version.content_json,
+        "media": [
+            {
+                "kind": asset.kind,
+                "mime_type": asset.mime_type,
+                "byte_size": asset.byte_size,
+                "content_hash": asset.content_hash,
+                "alt_text": asset.alt_text,
+                "position": asset.position,
+            }
+            for asset in sorted(version.media_assets, key=lambda asset: asset.position)
+        ],
+        "sources": [
+            {
+                "provider": source.provider,
+                "source_version": source.source_version,
+                "content_hash": source.content_hash,
+                "license_code": source.license_code,
+                "allow_persist": source.allow_persist,
+                "allow_student_display": source.allow_student_display,
+                "allow_ai_processing": source.allow_ai_processing,
+                "allow_redistribution": source.allow_redistribution,
+                "contract_expires_at": source.contract_expires_at,
+            }
+            for source in sorted(
+                version.external_content_references,
+                key=lambda source: (source.provider, source.source_version, source.created_at),
+            )
+        ],
+    }
+
+
 @version_router.post("/{version_id}/test-cases", status_code=status.HTTP_201_CREATED)
 def create_test_case_route(
     version_id: UUID,

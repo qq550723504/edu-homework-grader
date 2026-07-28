@@ -10,7 +10,16 @@ from sqlalchemy.pool import StaticPool
 from edu_grader_api.auth import VerifiedIdentity, get_token_verifier
 from edu_grader_api.db import Base, get_session
 from edu_grader_api.main import app
-from edu_grader_api.models import QuestionTestCase, QuestionVersion, Role, Tenant, User
+from edu_grader_api.models import (
+    ExternalContentReference,
+    Question,
+    QuestionMediaAsset,
+    QuestionTestCase,
+    QuestionVersion,
+    Role,
+    Tenant,
+    User,
+)
 from edu_grader_api.routers import questions as questions_router
 from edu_grader_api.services.questions import _unmatched_text
 from edu_grader_api.settings import settings
@@ -108,6 +117,80 @@ def test_teacher_can_create_a_tenant_scoped_question(client: TestClient, session
         headers=authorize(client, teacher),
     )
     assert publish_response.status_code == 409
+
+
+def test_teacher_can_read_safe_question_content_metadata(
+    client: TestClient, session: Session
+) -> None:
+    tenant = Tenant(slug="pilot", name="Pilot")
+    teacher = User(
+        tenant=tenant,
+        role=Role.TEACHER,
+        oidc_issuer=ISSUER,
+        oidc_subject="teacher",
+        display_name="Teacher",
+    )
+    version = QuestionVersion(
+        question=Question(tenant=tenant, created_by_user=teacher, title="Addition"),
+        version_number=1,
+        status="draft",
+        prompt="What is 2 + 3?",
+        question_type="M1",
+        grading_policy_id=uuid4(),
+        rule_json={"expected": 5},
+        created_by_user=teacher,
+    )
+    version.media_assets.append(
+        QuestionMediaAsset(
+            kind="image",
+            storage_key="private/question-assets/example.png",
+            mime_type="image/png",
+            byte_size=42,
+            content_hash="a" * 64,
+            alt_text="Worked example",
+            position=1,
+        )
+    )
+    version.external_content_references.append(
+        ExternalContentReference(
+            provider="open-content",
+            external_id="private-provider-id",
+            source_version="2026-07",
+            content_hash="b" * 64,
+            license_code="CC-BY-4.0",
+            license_snapshot_json={"private": "license terms"},
+            tenant_scope=tenant,
+            allow_persist=True,
+            allow_student_display=True,
+            allow_ai_processing=False,
+            allow_redistribution=True,
+        )
+    )
+    session.add_all([tenant, teacher, version])
+    session.commit()
+
+    response = client.get(
+        f"/v1/question-versions/{version.id}/content", headers=authorize(client, teacher)
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["content_schema_version"] == "question-content-v1"
+    assert body["content"]["stem"] == [{"kind": "text", "text": "What is 2 + 3?"}]
+    assert body["media"] == [
+        {
+            "kind": "image",
+            "mime_type": "image/png",
+            "byte_size": 42,
+            "content_hash": "a" * 64,
+            "alt_text": "Worked example",
+            "position": 1,
+        }
+    ]
+    assert body["sources"][0]["provider"] == "open-content"
+    assert "storage_key" not in body["media"][0]
+    assert "external_id" not in body["sources"][0]
+    assert "license_snapshot_json" not in body["sources"][0]
 
 
 def test_teacher_previews_a_draft_test_answer_without_persisting_it(
