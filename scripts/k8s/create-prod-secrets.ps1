@@ -8,6 +8,8 @@ param(
     [Parameter(Mandatory = $true)]
     [AllowEmptyString()]
     [string]$OpenAiApiKey,
+    [Parameter(Mandatory = $true)]
+    [string]$EvaluationEvidenceHmacKey,
     [string]$SecretName = 'edu-grader-runtime',
     [switch]$Replace
 )
@@ -34,6 +36,9 @@ $generationGovernanceAdminSubjects = @(
 )
 if ($generationGovernanceAdminSubjects.Count -lt 2) {
     throw 'At least two distinct generation governance administrator subjects are required.'
+}
+if ([Text.Encoding]::UTF8.GetByteCount($EvaluationEvidenceHmacKey) -lt 32) {
+    throw 'Evaluation evidence HMAC key must be at least 32 bytes.'
 }
 
 if (-not $PSCmdlet.ShouldProcess("namespace/$Namespace secret/$SecretName", 'create production runtime Secret')) {
@@ -79,7 +84,8 @@ $secretArguments = @(
     '--from-literal=GRADER_BASE_URL=http://grader:8010',
     '--from-literal=PROCESSOR_ALLOWED_HOSTS=grader,languagetool',
     "--from-literal=GENERATION_GOVERNANCE_ADMIN_SUBJECTS=$($generationGovernanceAdminSubjects -join ',')",
-    "--from-literal=OPENAI_API_KEY=$OpenAiApiKey"
+    "--from-literal=OPENAI_API_KEY=$OpenAiApiKey",
+    "--from-literal=EVALUATION_EVIDENCE_HMAC_KEY=$EvaluationEvidenceHmacKey"
 )
 
 # Use `kubectl create secret generic` as an in-memory manifest generator; values are never written to disk.

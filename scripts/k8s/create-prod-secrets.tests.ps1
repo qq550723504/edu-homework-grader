@@ -9,6 +9,7 @@ Describe 'create-prod-secrets' {
                 -OidcIssuer 'http://issuer.example' `
                 -GenerationGovernanceAdminSubjects @('admin-one', 'admin-two') `
                 -OpenAiApiKey 'test-only-key' `
+                -EvaluationEvidenceHmacKey ('e' * 32) `
                 -WhatIf
         } | Should -Throw 'OIDC issuer must use a non-local HTTPS URL in production.'
     }
@@ -19,6 +20,7 @@ Describe 'create-prod-secrets' {
                 -OidcIssuer 'https://issuer.example' `
                 -GenerationGovernanceAdminSubjects @('only-one') `
                 -OpenAiApiKey 'test-only-key' `
+                -EvaluationEvidenceHmacKey ('e' * 32) `
                 -WhatIf
         } | Should -Throw 'At least two distinct generation governance administrator subjects are required.'
     }
@@ -34,6 +36,7 @@ Describe 'create-prod-secrets' {
         $source | Should -Match 'NUXT_SESSION_PASSWORD'
         $source | Should -Match 'STUDENT_ACTIVATION_HMAC_KEY'
         $source | Should -Match 'KEYCLOAK_STUDENT_PROVISIONER_CLIENT_SECRET'
+        $source | Should -Match 'EVALUATION_EVIDENCE_HMAC_KEY'
         $source | Should -Not -Match 'change-me'
         $source | Should -Not -Match 'development-only-change-me'
         $source | Should -Not -Match 'pilot-(admin|teacher|student)'

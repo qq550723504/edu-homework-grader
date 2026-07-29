@@ -5,6 +5,7 @@ from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_AUDIT_HMAC_KEY = "development-only-change-me-32-bytes-minimum"
+DEFAULT_EVALUATION_EVIDENCE_HMAC_KEY = "development-only-evaluation-evidence-hmac-key"
 PRODUCTION_PROCESSOR_HOSTS: frozenset[str] = frozenset({"grader", "languagetool"})
 
 
@@ -20,6 +21,8 @@ def _require_production_security_controls(
     *,
     app_env: str,
     audit_hmac_key: str,
+    evaluation_evidence_hmac_key: str,
+    generation_governance_admin_subjects: str,
     database_url: str,
     oidc_issuer: str,
     processor_allowed_hosts: str,
@@ -38,6 +41,13 @@ def _require_production_security_controls(
         raise ValueError("AUDIT_HMAC_KEY must not use the development default in production")
     if len(audit_hmac_key.encode("utf-8")) < 32:
         raise ValueError("AUDIT_HMAC_KEY must be at least 32 bytes in production")
+    if _parse_subjects(generation_governance_admin_subjects):
+        if evaluation_evidence_hmac_key == DEFAULT_EVALUATION_EVIDENCE_HMAC_KEY:
+            raise ValueError(
+                "EVALUATION_EVIDENCE_HMAC_KEY must not use the development default in production"
+            )
+        if len(evaluation_evidence_hmac_key.encode("utf-8")) < 32:
+            raise ValueError("EVALUATION_EVIDENCE_HMAC_KEY must be at least 32 bytes in production")
     if len(student_activation_hmac_key.encode("utf-8")) < 32:
         raise ValueError("STUDENT_ACTIVATION_HMAC_KEY must be at least 32 bytes in production")
     if not keycloak_student_provisioner_client_secret:
@@ -100,6 +110,7 @@ class Settings(BaseSettings):
     curriculum_admin_subjects: str = ""
     generation_governance_admin_subjects: str = ""
     audit_hmac_key: str = DEFAULT_AUDIT_HMAC_KEY
+    evaluation_evidence_hmac_key: str = DEFAULT_EVALUATION_EVIDENCE_HMAC_KEY
     audit_hmac_key_version: str = "dev-1"
     student_activation_hmac_key: str = "development-only-student-activation-hmac-key"
     student_activation_expiry_days: int = 7
@@ -130,6 +141,8 @@ class Settings(BaseSettings):
         required_fields = (
             "app_env",
             "audit_hmac_key",
+            "evaluation_evidence_hmac_key",
+            "generation_governance_admin_subjects",
             "database_url",
             "oidc_issuer",
             "processor_allowed_hosts",
@@ -147,6 +160,8 @@ class Settings(BaseSettings):
         _require_production_security_controls(
             app_env=info.data["app_env"],
             audit_hmac_key=info.data["audit_hmac_key"],
+            evaluation_evidence_hmac_key=info.data["evaluation_evidence_hmac_key"],
+            generation_governance_admin_subjects=info.data["generation_governance_admin_subjects"],
             database_url=info.data["database_url"],
             oidc_issuer=info.data["oidc_issuer"],
             processor_allowed_hosts=info.data["processor_allowed_hosts"],

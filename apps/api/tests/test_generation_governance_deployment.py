@@ -10,6 +10,7 @@ def test_compose_passes_governance_admin_allowlist_to_api() -> None:
 
     assert "GENERATION_GOVERNANCE_ADMIN_SUBJECTS" in api_environment
     assert "CURRICULUM_ADMIN_SUBJECTS" in api_environment
+    assert "EVALUATION_EVIDENCE_HMAC_KEY" in api_environment
 
 
 def test_example_environment_documents_governance_admin_allowlist() -> None:
@@ -17,6 +18,7 @@ def test_example_environment_documents_governance_admin_allowlist() -> None:
     example = (repository_root / ".env.example").read_text(encoding="utf-8")
 
     assert "GENERATION_GOVERNANCE_ADMIN_SUBJECTS=" in example
+    assert "EVALUATION_EVIDENCE_HMAC_KEY=" in example
 
 
 def test_production_passes_governance_admin_allowlist_to_api() -> None:
@@ -28,6 +30,15 @@ def test_production_passes_governance_admin_allowlist_to_api() -> None:
     environment = api["spec"]["template"]["spec"]["containers"][0]["env"]
 
     assert any(item["name"] == "GENERATION_GOVERNANCE_ADMIN_SUBJECTS" for item in environment)
+    assert any(
+        item["name"] == "EVALUATION_EVIDENCE_HMAC_KEY"
+        and item["valueFrom"]["secretKeyRef"]
+        == {
+            "name": "edu-grader-runtime",
+            "key": "EVALUATION_EVIDENCE_HMAC_KEY",
+        }
+        for item in environment
+    )
     assert any(
         item["name"] == "OPENAI_API_KEY"
         and item["valueFrom"]["secretKeyRef"]
@@ -47,5 +58,7 @@ def test_production_secret_bootstrap_requires_and_provisions_generation_controls
 
     assert "[string[]]$GenerationGovernanceAdminSubjects" in bootstrap
     assert "[string]$OpenAiApiKey" in bootstrap
+    assert "[string]$EvaluationEvidenceHmacKey" in bootstrap
     assert "GENERATION_GOVERNANCE_ADMIN_SUBJECTS" in bootstrap
     assert "OPENAI_API_KEY" in bootstrap
+    assert "EVALUATION_EVIDENCE_HMAC_KEY" in bootstrap

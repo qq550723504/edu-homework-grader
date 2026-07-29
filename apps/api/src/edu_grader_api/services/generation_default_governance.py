@@ -24,6 +24,7 @@ from ..models import (
     User,
     utc_now,
 )
+from ..settings import settings
 from .generation_governance import controls_for_target
 from .generation_provider_registry import supports_generation_provider
 
@@ -59,6 +60,27 @@ def submit_change_request(
     idempotency_key: str,
 ) -> GenerationDefaultChangeRequest:
     report = _validated_report(evaluation_report)
+    report_payload = report.model_dump(mode="json")
+    report_sha256 = _canonical_sha256(report_payload)
+    request_digest = _canonical_sha256(
+        {
+            "provider_name": provider_name,
+            "model_version": model_version,
+            "prompt_version": prompt_version,
+            "request_reason": request_reason,
+            "evaluation_report_sha256": report_sha256,
+        }
+    )
+    existing = session.scalar(
+        select(GenerationDefaultChangeRequest).where(
+            GenerationDefaultChangeRequest.submitted_by_user_id == actor.id,
+            GenerationDefaultChangeRequest.idempotency_key == idempotency_key,
+        )
+    )
+    if existing is not None:
+        if existing.request_digest != request_digest:
+            raise GenerationDefaultGovernanceError("default_change_idempotency_conflict")
+        return existing
     _assert_candidate_matches(
         report,
         provider_name=provider_name,
@@ -87,28 +109,6 @@ def submit_change_request(
         model_version=model_version,
         prompt_version=prompt_version,
     )
-
-    report_payload = report.model_dump(mode="json")
-    report_sha256 = _canonical_sha256(report_payload)
-    request_digest = _canonical_sha256(
-        {
-            "provider_name": provider_name,
-            "model_version": model_version,
-            "prompt_version": prompt_version,
-            "request_reason": request_reason,
-            "evaluation_report_sha256": report_sha256,
-        }
-    )
-    existing = session.scalar(
-        select(GenerationDefaultChangeRequest).where(
-            GenerationDefaultChangeRequest.submitted_by_user_id == actor.id,
-            GenerationDefaultChangeRequest.idempotency_key == idempotency_key,
-        )
-    )
-    if existing is not None:
-        if existing.request_digest != request_digest:
-            raise GenerationDefaultGovernanceError("default_change_idempotency_conflict")
-        return existing
 
     selection = session.get(GenerationDefaultSelection, "global")
     if selection is not None:
@@ -477,12 +477,20 @@ def validate_active_default(session: Session) -> ResolvedGenerationDefault:
 
 
 def _validated_report(payload: dict[str, object]):
-    from .ai_evaluation_operational import OperationalEvaluationReport
+    from .ai_evaluation_operational import (
+        SignedOperationalEvaluationEvidence,
+        verify_operational_evaluation_evidence,
+    )
 
     try:
-        report = OperationalEvaluationReport.model_validate(payload)
+        evidence = SignedOperationalEvaluationEvidence.model_validate(payload)
     except ValidationError as exc:
         raise GenerationDefaultGovernanceError("evaluation_report_invalid") from exc
+    if not verify_operational_evaluation_evidence(
+        evidence, hmac_key=settings.evaluation_evidence_hmac_key
+    ):
+        raise GenerationDefaultGovernanceError("evaluation_evidence_untrusted")
+    report = evidence.report
     gates = (report.baseline_gate, report.candidate_gate)
     gates_are_eligible = all(
         gate is not None and gate.promotion_eligible and not gate.violations for gate in gates

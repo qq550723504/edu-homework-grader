@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type Page } from '@playwright/test'
+import { createHmac } from 'node:crypto'
 
 const webBaseUrl = 'http://127.0.0.1:13000'
 const ADMIN_A_TOKEN = 'e2e-platform-admin-a-token'
@@ -14,9 +15,20 @@ const passingGate = {
   rejection_reason_counts: {},
   cost_per_final_accepted_question: null,
   end_to_end_duration_ms: {},
+  strata: [],
+  version_summaries: [],
 }
 
-const evaluationReport = JSON.stringify({
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  if (value !== null && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+const evaluationEvidence = {
   spec_id: 'e2e-default-governance-v1',
   exporter_version: 'e2e-export-v1',
   run_id: 'e2e-default-governance-run',
@@ -29,6 +41,9 @@ const evaluationReport = JSON.stringify({
     provider_name: candidateProvider, model_id: candidateModel, prompt_version: 'generator-v1', prompt_template_fingerprint: generatorV1Fingerprint, validator_version: 'verification-v1',
   },
   promotion_eligible: true,
+  metric_comparisons: {},
+  strata: [],
+  violations: [],
   export_manifest: {
     exporter_version: 'e2e-export-v1', run_id: 'e2e-default-governance-run', tenant_id: 'pilot',
     watermark: '2026-07-28T00:00:00Z', record_count: 1, issue_count: 0,
@@ -36,6 +51,12 @@ const evaluationReport = JSON.stringify({
   },
   baseline_gate: passingGate,
   candidate_gate: passingGate,
+}
+const evaluationReport = JSON.stringify({
+  report: evaluationEvidence,
+  signature: createHmac('sha256', 'development-only-evaluation-evidence-hmac-key')
+    .update(canonicalJson(evaluationEvidence))
+    .digest('hex'),
 })
 
 async function loggedInPage(browser: Browser, token: string): Promise<{ context: Awaited<ReturnType<Browser['newContext']>>; page: Page }> {
@@ -64,7 +85,7 @@ test('two platform administrators approve, apply, and roll back a governed defau
     await submitter.page.getByLabel('模型固定版本').fill(candidateModel)
     await submitter.page.getByLabel('Prompt 版本').fill('generator-v1')
     await submitter.page.getByLabel('申请说明').fill('E2E verified promotion')
-    await submitter.page.getByLabel('运营评估报告 JSON').fill(evaluationReport)
+    await submitter.page.getByLabel('已签名运营评估证据 JSON').fill(evaluationReport)
     await submitter.page.getByRole('button', { name: '提交晋级申请' }).click()
     await expect(submitter.page.getByRole('status')).toHaveText('已提交晋级申请。')
 
@@ -86,6 +107,8 @@ test('two platform administrators approve, apply, and roll back a governed defau
     const approvedRollback = submitter.page.locator('li', { hasText: 'approved：fake-v1 / generator-v1' })
     await acceptPromptAndClick(submitter.page, approvedRollback.getByRole('button', { name: '应用' }), '恢复基线默认值')
     await expect(submitter.page.getByText('当前默认：fake / fake-v1 / generator-v1')).toBeVisible()
+    const rolledBackCandidate = submitter.page.locator('li', { hasText: `rolled_back：${candidateModel} / generator-v1` })
+    await expect(rolledBackCandidate.getByRole('button', { name: '申请回滚' })).toBeVisible()
   } finally {
     await Promise.all([submitter.context.close(), approver.context.close()])
   }

@@ -1,11 +1,11 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib import import_module
 from importlib.util import find_spec
 
 import pytest
+from edu_generator.prompt_templates import resolve_prompt_template
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
-from edu_generator.prompt_templates import resolve_prompt_template
 
 from edu_grader_api.models import (
     Base,
@@ -17,7 +17,11 @@ from edu_grader_api.models import (
     Tenant,
     User,
 )
-from edu_grader_api.services.ai_evaluation_operational import OperationalEvaluationReport
+from edu_grader_api.services.ai_evaluation_operational import (
+    OperationalEvaluationReport,
+    signed_operational_evaluation_evidence,
+)
+from edu_grader_api.settings import settings
 
 
 @pytest.fixture
@@ -59,12 +63,12 @@ def passing_report(
         "cost_per_final_accepted_question": None,
         "end_to_end_duration_ms": {},
     }
-    return OperationalEvaluationReport(
+    report = OperationalEvaluationReport(
         spec_id="generation-default-governance-v1",
         exporter_version="operational-export-v1",
         run_id="run-001",
         tenant_id="pilot",
-        watermark=datetime(2026, 7, 28, tzinfo=timezone.utc),
+        watermark=datetime(2026, 7, 28, tzinfo=UTC),
         baseline={
             "provider_name": baseline_provider_name,
             "model_id": baseline_model_id,
@@ -88,7 +92,7 @@ def passing_report(
             "exporter_version": "operational-export-v1",
             "run_id": "run-001",
             "tenant_id": "pilot",
-            "watermark": datetime(2026, 7, 28, tzinfo=timezone.utc),
+            "watermark": datetime(2026, 7, 28, tzinfo=UTC),
             "record_count": 12,
             "issue_count": 0,
             "record_digest": "a" * 64,
@@ -96,12 +100,41 @@ def passing_report(
         },
         baseline_gate=passing_gate,
         candidate_gate=passing_gate,
-    ).model_dump(mode="json")
+    )
+    return signed_operational_evaluation_evidence(
+        report, hmac_key=settings.evaluation_evidence_hmac_key
+    )
+
+
+def signed_report(report: dict[str, object]) -> dict[str, object]:
+    return signed_operational_evaluation_evidence(
+        OperationalEvaluationReport.model_validate(report),
+        hmac_key=settings.evaluation_evidence_hmac_key,
+    )
 
 
 def governance_service():
     assert find_spec("edu_grader_api.services.generation_default_governance") is not None
     return import_module("edu_grader_api.services.generation_default_governance")
+
+
+def test_submit_rejects_unsigned_evaluation_evidence(session: Session) -> None:
+    service = governance_service()
+    unsigned_report = {"report": passing_report()["report"], "signature": "0" * 64}
+
+    with pytest.raises(service.GenerationDefaultGovernanceError) as error:
+        service.submit_change_request(
+            session,
+            actor=platform_admin(session),
+            provider_name="fake",
+            model_version="fake-v1",
+            prompt_version="generator-v1",
+            request_reason="Promote evidence that was not produced by the protected evaluator",
+            evaluation_report=unsigned_report,
+            idempotency_key="unsigned-evidence",
+        )
+
+    assert error.value.code == "evaluation_evidence_untrusted"
 
 
 def test_submit_rejects_evaluation_for_a_different_candidate(
@@ -123,6 +156,37 @@ def test_submit_rejects_evaluation_for_a_different_candidate(
         )
 
     assert error.value.code == "evaluation_candidate_mismatch"
+
+
+def test_submit_replays_before_rechecking_mutable_provider_state(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = governance_service()
+    actor = platform_admin(session)
+    request = service.submit_change_request(
+        session,
+        actor=actor,
+        provider_name="fake",
+        model_version="fake-v1",
+        prompt_version="generator-v1",
+        request_reason="Promote verified candidate",
+        evaluation_report=passing_report(),
+        idempotency_key="submission-replay",
+    )
+    monkeypatch.setattr(service, "supports_generation_provider", lambda *_: False)
+
+    replay = service.submit_change_request(
+        session,
+        actor=actor,
+        provider_name="fake",
+        model_version="fake-v1",
+        prompt_version="generator-v1",
+        request_reason="Promote verified candidate",
+        evaluation_report=passing_report(),
+        idempotency_key="submission-replay",
+    )
+
+    assert replay.id == request.id
 
 
 def test_submit_rejects_provider_pair_missing_from_runtime_registry(session: Session) -> None:
@@ -147,7 +211,7 @@ def test_submit_rejects_provider_pair_missing_from_runtime_registry(session: Ses
 def test_submit_rejects_promotion_flag_without_passing_gate_evidence(session: Session) -> None:
     service = governance_service()
     admin = platform_admin(session)
-    report = passing_report()
+    report = passing_report()["report"]
     report["candidate_gate"] = None
 
     with pytest.raises(service.GenerationDefaultGovernanceError) as error:
@@ -158,7 +222,7 @@ def test_submit_rejects_promotion_flag_without_passing_gate_evidence(session: Se
             model_version="fake-v1",
             prompt_version="generator-v1",
             request_reason="Promote unverified candidate",
-            evaluation_report=report,
+            evaluation_report=signed_report(report),
             idempotency_key="missing-gate-evidence",
         )
 
@@ -168,7 +232,7 @@ def test_submit_rejects_promotion_flag_without_passing_gate_evidence(session: Se
 def test_submit_rejects_gate_that_claims_eligibility_despite_violations(session: Session) -> None:
     service = governance_service()
     admin = platform_admin(session)
-    report = passing_report()
+    report = passing_report()["report"]
     report["candidate_gate"]["violations"] = [
         {
             "code": "evaluation_threshold_failed",
@@ -185,7 +249,7 @@ def test_submit_rejects_gate_that_claims_eligibility_despite_violations(session:
             model_version="fake-v1",
             prompt_version="generator-v1",
             request_reason="Promote contradictory report",
-            evaluation_report=report,
+            evaluation_report=signed_report(report),
             idempotency_key="contradictory-gate-evidence",
         )
 
@@ -455,7 +519,7 @@ def test_apply_rechecks_governance_controls(session: Session) -> None:
 
 def test_submit_binds_evidence_to_the_resolved_prompt_fingerprint(session: Session) -> None:
     service = governance_service()
-    report = passing_report()
+    report = passing_report()["report"]
     report["candidate"]["prompt_template_fingerprint"] = "0" * 64
 
     with pytest.raises(service.GenerationDefaultGovernanceError) as error:
@@ -466,7 +530,7 @@ def test_submit_binds_evidence_to_the_resolved_prompt_fingerprint(session: Sessi
             model_version="fake-v1",
             prompt_version="generator-v1",
             request_reason="Promote stale evidence",
-            evaluation_report=report,
+            evaluation_report=signed_report(report),
             idempotency_key="stale-evidence",
         )
 

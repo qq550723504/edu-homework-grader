@@ -25,6 +25,7 @@ jobs:
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       OPERATIONAL_EVALUATION_SPEC_JSON: ${{ secrets.OPERATIONAL_EVALUATION_SPEC_JSON || vars.OPERATIONAL_EVALUATION_SPEC_JSON }}
+      EVALUATION_EVIDENCE_HMAC_KEY: ${{ secrets.EVALUATION_EVIDENCE_HMAC_KEY }}
     steps:
       - name: Check out exact target
         uses: actions/checkout@v4
@@ -50,6 +51,10 @@ jobs:
             echo "OPERATIONAL_EVALUATION_SPEC_JSON is not configured." >&2
             exit 1
           fi
+          if [[ -z "${EVALUATION_EVIDENCE_HMAC_KEY:-}" ]]; then
+            echo "EVALUATION_EVIDENCE_HMAC_KEY is not configured in ai-evaluation-operational." >&2
+            exit 1
+          fi
           mkdir -p artifacts/ai-evaluation-operational
           printf '%s' "$OPERATIONAL_EVALUATION_SPEC_JSON" \
             > "$RUNNER_TEMP/operational-evaluation-spec.json"
@@ -61,7 +66,8 @@ jobs:
         run: |
           python -m edu_grader_api.services.ai_evaluation_operational \
             "$RUNNER_TEMP/operational-evaluation-spec.json" \
-            artifacts/ai-evaluation-operational/report
+            artifacts/ai-evaluation-operational/report \
+            --evidence-hmac-key-env EVALUATION_EVIDENCE_HMAC_KEY
 
       - name: Upload operational evaluation evidence
         if: always()

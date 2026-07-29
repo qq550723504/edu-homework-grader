@@ -17,13 +17,13 @@
           <label>模型固定版本 <input v-model.trim="modelVersion" required></label>
           <label>Prompt 版本 <input v-model.trim="promptVersion" required></label>
           <label>申请说明 <input v-model.trim="requestReason" required></label>
-          <label>运营评估报告 JSON <textarea v-model="evaluationReport" required></textarea></label>
+          <label>已签名运营评估证据 JSON <textarea v-model="evaluationReport" required></textarea></label>
           <button :disabled="saving" type="submit">提交晋级申请</button>
         </form>
         <h3>待审批</h3>
         <ul><li v-for="item in summary?.pending" :key="item.id">{{ item.model_version }} / {{ item.prompt_version }}：{{ item.request_reason }}<small v-if="item.evaluation_summary">评估：{{ item.evaluation_summary.promotion_eligible ? '可晋级' : '不可晋级' }}，{{ item.evaluation_summary.record_count ?? 0 }} 条样本，{{ item.evaluation_summary.issue_count ?? 0 }} 个导出问题，候选门禁 {{ item.evaluation_summary.candidate_gate?.violations?.length ?? 0 }} 项违规。</small> <button :disabled="saving" type="button" @click="decide(item.id, 'approve')">批准</button><button :disabled="saving" type="button" @click="decide(item.id, 'reject')">拒绝</button></li></ul>
         <h3>历史</h3>
-        <ul><li v-for="item in summary?.history" :key="item.id">{{ item.status }}：{{ item.model_version }} / {{ item.prompt_version }} <button v-if="item.status === 'approved'" :disabled="saving" type="button" @click="apply(item.id)">应用</button><button v-if="item.status === 'applied' || item.status === 'superseded'" :disabled="saving" type="button" @click="rollback(item.id)">申请回滚</button></li></ul>
+        <ul><li v-for="item in summary?.history" :key="item.id">{{ item.status }}：{{ item.model_version }} / {{ item.prompt_version }} <button v-if="item.status === 'approved'" :disabled="saving" type="button" @click="apply(item.id)">应用</button><button v-if="item.status === 'superseded' || item.status === 'rolled_back'" :disabled="saving" type="button" @click="rollback(item.id)">申请回滚</button></li></ul>
       </template>
     </section>
   </main>
@@ -48,7 +48,7 @@ async function apply(id: string) { const reason = window.prompt('应用说明')?
 async function rollback(id: string) { const reason = window.prompt('回滚原因')?.trim(); if (!reason) return; saving.value = true; try { await rollbackGenerationDefaultChange($fetch, await csrfToken(), crypto.randomUUID(), id, reason); message.value = '已提交回滚申请。'; await load() } catch { message.value = '回滚申请失败。' } finally { saving.value = false } }
 async function submit() {
   let report: Record<string, unknown>
-  try { report = JSON.parse(evaluationReport.value) as Record<string, unknown> } catch { message.value = '运营评估报告必须是有效 JSON。'; return }
+  try { report = JSON.parse(evaluationReport.value) as Record<string, unknown> } catch { message.value = '已签名运营评估证据必须是有效 JSON。'; return }
   saving.value = true
   try {
     await submitGenerationDefaultChange($fetch, await csrfToken(), crypto.randomUUID(), {

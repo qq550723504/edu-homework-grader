@@ -126,6 +126,9 @@ spec:
             - name: OPENAI_API_KEY
               valueFrom:
                 secretKeyRef: {name: edu-grader-runtime, key: OPENAI_API_KEY}
+            - name: EVALUATION_EVIDENCE_HMAC_KEY
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: EVALUATION_EVIDENCE_HMAC_KEY}
             - name: AUDIT_HMAC_KEY
               valueFrom:
                 secretKeyRef: {name: edu-grader-runtime, key: AUDIT_HMAC_KEY}

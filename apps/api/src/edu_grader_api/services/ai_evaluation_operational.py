@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import hmac
+import json
+import os
+import sys
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from hashlib import sha256
 from html import escape
-import json
 from pathlib import Path
-import sys
-from typing import Literal, Sequence
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -85,7 +88,7 @@ class EvaluationExportSpec(BaseModel):
     watermark: datetime
 
     @model_validator(mode="after")
-    def require_timezone(self) -> "EvaluationExportSpec":
+    def require_timezone(self) -> EvaluationExportSpec:
         if self.watermark.tzinfo is None or self.watermark.utcoffset() is None:
             raise ValueError("watermark must include an explicit timezone")
         return self
@@ -115,7 +118,7 @@ class OperationalEvaluationSpec(BaseModel):
     stratum_fields: tuple[str, ...] = _STRATUM_FIELDS
 
     @model_validator(mode="after")
-    def validate_versions(self) -> "OperationalEvaluationSpec":
+    def validate_versions(self) -> OperationalEvaluationSpec:
         if self.baseline == self.candidate:
             raise ValueError("baseline and candidate versions must be different")
         if not self.stratum_fields or len(set(self.stratum_fields)) != len(self.stratum_fields):
@@ -191,6 +194,40 @@ class OperationalEvaluationReport(BaseModel):
     metric_comparisons: dict[str, VersionMetricComparison] = Field(default_factory=dict)
     strata: list[dict[str, object]] = Field(default_factory=list)
     violations: list[ai_evaluation.EvaluationViolation] = Field(default_factory=list)
+
+
+class SignedOperationalEvaluationEvidence(BaseModel):
+    """A protected evaluator's tamper-evident report envelope."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    report: OperationalEvaluationReport
+    signature: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+def signed_operational_evaluation_evidence(
+    report: OperationalEvaluationReport, *, hmac_key: str
+) -> dict[str, object]:
+    payload = report.model_dump(mode="json")
+    return {
+        "report": payload,
+        "signature": hmac.new(
+            hmac_key.encode("utf-8"), _canonical_json(payload).encode("utf-8"), sha256
+        ).hexdigest(),
+    }
+
+
+def verify_operational_evaluation_evidence(
+    evidence: SignedOperationalEvaluationEvidence, *, hmac_key: str
+) -> bool:
+    expected = signed_operational_evaluation_evidence(evidence.report, hmac_key=hmac_key)[
+        "signature"
+    ]
+    return hmac.compare_digest(evidence.signature, str(expected))
+
+
+def _canonical_json(payload: object) -> str:
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
 def load_operational_spec(path: Path) -> OperationalEvaluationSpec:
@@ -433,10 +470,8 @@ def _review_fields(
 
 
 def _at_or_before(value: datetime, watermark: datetime) -> bool:
-    value = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
-    watermark = (
-        watermark if watermark.tzinfo is not None else watermark.replace(tzinfo=timezone.utc)
-    )
+    value = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    watermark = watermark if watermark.tzinfo is not None else watermark.replace(tzinfo=UTC)
     return value <= watermark
 
 
@@ -708,15 +743,22 @@ def write_operational_artifacts(
     exported: EvaluationExportResult,
     report: OperationalEvaluationReport,
     output_directory: Path,
+    *,
+    evidence_hmac_key: str | None = None,
 ) -> None:
     output_directory.mkdir(parents=True, exist_ok=True)
     (output_directory / "records.jsonl").write_text(
         _serialize_records(exported.records), encoding="utf-8"
     )
+    report_payload: object = (
+        signed_operational_evaluation_evidence(report, hmac_key=evidence_hmac_key)
+        if evidence_hmac_key is not None
+        else report.model_dump(mode="json")
+    )
     payloads = {
         "manifest.json": exported.manifest.model_dump(mode="json"),
         "export-issues.json": [issue.model_dump(mode="json") for issue in exported.issues],
-        "report.json": report.model_dump(mode="json"),
+        "report.json": report_payload,
     }
     for filename, payload in payloads.items():
         rendered = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
@@ -739,11 +781,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("spec_path", type=Path)
     parser.add_argument("output_directory", type=Path)
+    parser.add_argument(
+        "--evidence-hmac-key-env",
+        help="Environment variable holding the protected evidence-signing HMAC key",
+    )
     arguments = parser.parse_args(argv)
     spec = load_operational_spec(arguments.spec_path)
     with SessionLocal() as session:
         exported, report = run_operational_evaluation(session, spec)
-    write_operational_artifacts(exported, report, arguments.output_directory)
+    evidence_hmac_key = (
+        os.environ.get(arguments.evidence_hmac_key_env, "")
+        if arguments.evidence_hmac_key_env
+        else None
+    )
+    if arguments.evidence_hmac_key_env and not evidence_hmac_key:
+        parser.error(f"{arguments.evidence_hmac_key_env} must be configured")
+    write_operational_artifacts(
+        exported,
+        report,
+        arguments.output_directory,
+        evidence_hmac_key=evidence_hmac_key,
+    )
     return 0 if report.promotion_eligible else 1
 
 

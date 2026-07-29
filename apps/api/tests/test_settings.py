@@ -105,6 +105,23 @@ def test_production_settings_reject_the_default_audit_key() -> None:
         Settings(app_env="production", processor_allowed_hosts="grader")
 
 
+def test_production_generation_governance_requires_a_non_default_evidence_key() -> None:
+    with pytest.raises(
+        ValueError,
+        match="EVALUATION_EVIDENCE_HMAC_KEY must not use the development default",
+    ):
+        Settings(
+            app_env="production",
+            audit_hmac_key="x" * 32,
+            database_url="postgresql://edu_grader:secure-password@db.example/edu_grader",
+            oidc_issuer="https://identity.example/realms/edu-grader",
+            processor_allowed_hosts="grader",
+            student_activation_hmac_key="x" * 32,
+            keycloak_student_provisioner_client_secret="provisioner-secret",
+            generation_governance_admin_subjects="governance-admin-a,governance-admin-b",
+        )
+
+
 @pytest.mark.parametrize(
     ("student_activation_hmac_key", "keycloak_student_provisioner_client_secret"),
     [("too-short", "provisioner-secret"), ("x" * 32, "")],

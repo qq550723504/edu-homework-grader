@@ -16,6 +16,7 @@ Configure:
 
 - Secret `DATABASE_URL`: a read-only PostgreSQL connection scoped to the evaluation tenant or replica.
 - Secret or variable `OPERATIONAL_EVALUATION_SPEC_JSON`: the exact export and comparison policy described below.
+- Secret `EVALUATION_EVIDENCE_HMAC_KEY`: a 32-byte-or-longer key shared with the API runtime secret. It signs `report.json`; only this protected environment may read the key.
 
 Do not use an application owner credential. The database role needs `SELECT` only on curriculum, generation, validation, review, governance, question, and grading-policy tables used by the exporter.
 
@@ -107,7 +108,7 @@ The command writes:
 - `records.jsonl`: de-identified facts used for the decision;
 - `manifest.json`: exporter version, watermark, counts, and deterministic digest;
 - `export-issues.json`: stable fail-closed mapping errors;
-- `report.json`: machine-readable gates, comparisons, and violations;
+- `report.json`: a machine-readable signed envelope containing the gates, comparisons, and violations;
 - `report.html`: human-readable rendering of the same report.
 
 Operational artifacts are sensitive internal quality evidence even though they exclude student and candidate content. Keep them behind repository/environment access controls and apply the configured retention period.

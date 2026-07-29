@@ -7,13 +7,13 @@
 1. 部署包含 Alembic `0027_generation_default_governance` 的 API，并运行数据库迁移。
 2. 在受保护的部署环境配置 `GENERATION_GOVERNANCE_ADMIN_SUBJECTS`，填写至少两个不同的 OIDC subject，以逗号分隔。普通学校管理员、教师和学生不应出现在此列表。
 3. 确认候选 Provider、模型和 Prompt 的全局生成治理状态为 `active`。`canary`、`paused`、`retired` 都不能作为全局默认值。
-4. 使用生产形态、只读导出的运营评估生成报告。报告必须表示候选配置、`promotion_eligible=true`，并带有确定的 run、spec、水位和记录摘要；不要把题目正文、Prompt 正文、密钥或身份信息粘贴进申请说明。
+4. 使用生产形态、只读导出的运营评估生成报告。该产物必须由受保护的 `ai-evaluation-operational` 环境用与 API 共享的 `EVALUATION_EVIDENCE_HMAC_KEY` 签名；报告必须表示候选配置、`promotion_eligible=true`，并带有确定的 run、spec、水位和记录摘要。不要把题目正文、Prompt 正文、密钥或身份信息粘贴进申请说明。
 
 迁移只创建治理数据结构，**不会**写入生产默认值。没有生效默认值时，`/ready` 返回 HTTP 503，新的生成任务返回 `generation_default_not_configured`；不得以环境变量或代码常量回退。
 
 ## 首次初始化与晋级
 
-1. 平台治理管理员 A 登录 `/admin`，在单页中填写 Provider、模型固定版本、Prompt 版本、简短申请说明，以及完整的运营评估报告 JSON，然后提交晋级申请。
+1. 平台治理管理员 A 登录 `/admin`，在单页中填写 Provider、模型固定版本、Prompt 版本、简短申请说明，以及受保护评估工作流产出的“已签名运营评估证据 JSON”，然后提交晋级申请。API 会先校验签名，拒绝手工伪造或篡改的报告。
 2. 管理员 B（不同 OIDC subject）在“待审批”中审阅版本标签、原因和安全证据摘要；报告正文和 Prompt 正文不会在页面或 API 响应中展示。B 填写审批说明并批准。
 3. 任一平台治理管理员在历史记录中填写应用说明并“应用”。该动作会再次校验候选 Prompt 指纹和全局控制状态，在一个事务中切换唯一全局指针并写入 HMAC 审计链。
 4. 访问 `/ready`，必须得到 `{"status":"ready","database":"ready","generation_default":"ready"}`。若 `generation_default` 为 `unconfigured` 或 `unavailable`，停止发布并处理配置/数据库问题。

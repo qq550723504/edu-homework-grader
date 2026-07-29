@@ -1,19 +1,22 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
+from edu_generator.prompt_templates import resolve_prompt_template
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
-from edu_generator.prompt_templates import resolve_prompt_template
 
 from edu_grader_api.auth import VerifiedIdentity, get_token_verifier
 from edu_grader_api.db import Base, get_session
 from edu_grader_api.main import app
 from edu_grader_api.models import Role, Tenant, User
+from edu_grader_api.services.ai_evaluation_operational import (
+    OperationalEvaluationReport,
+    signed_operational_evaluation_evidence,
+)
 from edu_grader_api.settings import settings
-
 
 ISSUER = "https://issuer.example.test"
 
@@ -100,7 +103,7 @@ def test_platform_governance_admin_submits_redacted_default_change(
         "exporter_version": "export-v1",
         "run_id": "run-1",
         "tenant_id": "pilot",
-        "watermark": datetime(2026, 7, 28, tzinfo=timezone.utc).isoformat(),
+        "watermark": datetime(2026, 7, 28, tzinfo=UTC).isoformat(),
         "baseline": {
             "provider_name": "fake",
             "model_id": "fake-v0",
@@ -124,7 +127,7 @@ def test_platform_governance_admin_submits_redacted_default_change(
             "exporter_version": "export-v1",
             "run_id": "run-1",
             "tenant_id": "pilot",
-            "watermark": datetime(2026, 7, 28, tzinfo=timezone.utc).isoformat(),
+            "watermark": datetime(2026, 7, 28, tzinfo=UTC).isoformat(),
             "record_count": 1,
             "issue_count": 0,
             "record_digest": "a" * 64,
@@ -150,6 +153,11 @@ def test_platform_governance_admin_submits_redacted_default_change(
         },
     }
 
+    evidence = signed_operational_evaluation_evidence(
+        OperationalEvaluationReport.model_validate(report),
+        hmac_key=settings.evaluation_evidence_hmac_key,
+    )
+
     response = client.post(
         "/v1/admin/ai-generation-default-change-requests",
         headers=headers(client, user),
@@ -158,7 +166,7 @@ def test_platform_governance_admin_submits_redacted_default_change(
             "model_version": "fake-v1",
             "prompt_version": "generator-v1",
             "request_reason": "Verified promotion",
-            "evaluation_report": report,
+            "evaluation_report": evidence,
         },
     )
 
