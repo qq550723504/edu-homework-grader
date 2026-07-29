@@ -121,6 +121,24 @@ def test_report_endpoint_rejects_incomplete_run(client: tuple[TestClient, FakeJo
     assert response.status_code == 409
 
 
+def test_executor_failure_marks_run_failed(client: tuple[TestClient, FakeJobLauncher]) -> None:
+    http, launcher = client
+    created = http.post(
+        "/v1/internal/operational-evaluations", json={"spec": SPEC}, headers=headers()
+    )
+    run_id = created.json()["id"]
+
+    completed = http.post(
+        f"/v1/internal/operational-evaluations/{run_id}/completion",
+        json={"failure_code": "evaluation_execution_failed"},
+        headers={"X-Operational-Evaluation-Callback": launcher.launches[0][1]},
+    )
+    status = http.get(f"/v1/internal/operational-evaluations/{run_id}", headers=headers())
+
+    assert completed.status_code == 204
+    assert status.json()["status"] == "failed"
+
+
 def test_launcher_uses_pinned_image_and_never_mounts_application_runtime_secret() -> None:
     launcher = KubernetesOperationalEvaluationJobLauncher(
         namespace="edu-homework-grader",

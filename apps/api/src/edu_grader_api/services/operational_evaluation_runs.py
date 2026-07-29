@@ -108,6 +108,26 @@ def complete_run(
     return run
 
 
+def fail_run(
+    session: Session, *, run_id: UUID, callback_token: str, failure_code: str, now: datetime
+) -> OperationalEvaluationRun:
+    run = session.get(OperationalEvaluationRun, run_id)
+    if run is None or run.callback_token_digest is None:
+        raise ValueError("operational evaluation callback is invalid")
+    supplied_digest = sha256(callback_token.encode("utf-8")).hexdigest()
+    if not hmac.compare_digest(run.callback_token_digest, supplied_digest):
+        raise ValueError("operational evaluation callback is invalid")
+    if failure_code != "evaluation_execution_failed":
+        raise ValueError("operational evaluation callback is invalid")
+    run.status = OperationalEvaluationRunStatus.FAILED
+    run.failure_code = failure_code
+    run.callback_token_digest = None
+    run.completed_at = now
+    run.expires_at = now + RETENTION
+    session.flush()
+    return run
+
+
 def purge_expired_runs(session: Session, *, now: datetime) -> list[UUID]:
     runs = list(
         session.scalars(

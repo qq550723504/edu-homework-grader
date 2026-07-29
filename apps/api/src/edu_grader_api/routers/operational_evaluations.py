@@ -16,6 +16,7 @@ from ..services.operational_evaluation_runs import (
     OperationalEvaluationRunConflict,
     complete_run,
     create_run,
+    fail_run,
 )
 
 
@@ -32,7 +33,8 @@ class StartOperationalEvaluationRequest(BaseModel):
 
 
 class CompleteOperationalEvaluationRequest(BaseModel):
-    report: dict[str, object]
+    report: dict[str, object] | None = None
+    failure_code: str | None = None
 
 
 def get_github_oidc_verifier() -> GitHubOidcVerifier:
@@ -141,13 +143,24 @@ def complete_operational_evaluation(
     callback_token: Annotated[str | None, Header(alias="X-Operational-Evaluation-Callback")],
 ) -> Response:
     try:
-        complete_run(
-            session,
-            run_id=run_id,
-            callback_token=callback_token or "",
-            report_json=request.report,
-            now=utc_now(),
-        )
+        if request.report is not None and request.failure_code is None:
+            complete_run(
+                session,
+                run_id=run_id,
+                callback_token=callback_token or "",
+                report_json=request.report,
+                now=utc_now(),
+            )
+        elif request.report is None and request.failure_code is not None:
+            fail_run(
+                session,
+                run_id=run_id,
+                callback_token=callback_token or "",
+                failure_code=request.failure_code,
+                now=utc_now(),
+            )
+        else:
+            raise ValueError("operational evaluation callback is invalid")
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid evaluation callback"
