@@ -520,16 +520,7 @@ def _run_repetition(
     try:
         base._compose(
             context,
-            "up",
-            "--detach",
-            "--build",
-            "--wait",
-            "--wait-timeout",
-            "240",
-            "postgres",
-            "languagetool",
-            "grader",
-            "language-connect-grader",
+            *_compose_start_args(use_published_images=_uses_published_images()),
         )
         stage = "database_migration"
         base._run_migrations(context.database_url)
@@ -664,6 +655,31 @@ def _run_repetition(
             report["status"] = "infrastructure_failure"
             report["failure_code"] = "cleanup_failed"
     return report, environment
+
+
+def _uses_published_images() -> bool:
+    return all(
+        os.environ.get(name)
+        for name in (
+            "RELEASE_EVIDENCE_GRADER_IMAGE",
+            "RELEASE_EVIDENCE_LANGUAGETOOL_IMAGE",
+        )
+    )
+
+
+def _compose_start_args(*, use_published_images: bool) -> tuple[str, ...]:
+    arguments = ("up", "--detach")
+    if not use_published_images:
+        arguments += ("--build",)
+    return arguments + (
+        "--wait",
+        "--wait-timeout",
+        "240",
+        "postgres",
+        "languagetool",
+        "grader",
+        "language-connect-grader",
+    )
 
 
 def _append_scenario(

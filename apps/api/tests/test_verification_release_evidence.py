@@ -177,6 +177,24 @@ def test_release_evidence_requires_two_isolated_repetitions(tmp_path: Path) -> N
         )
 
 
+def test_release_evidence_compose_accepts_candidate_image_overrides() -> None:
+    compose = Path("infra/release-evidence/compose.yaml").read_text(encoding="utf-8")
+
+    assert "${RELEASE_EVIDENCE_LANGUAGETOOL_IMAGE:-" in compose
+    assert compose.count("${RELEASE_EVIDENCE_GRADER_IMAGE:-") == 2
+
+
+def test_reusable_evidence_workflow_pulls_published_candidate_images() -> None:
+    workflow = Path(".github/workflows/verification-release-evidence.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "packages: read" in workflow
+    assert "docker/login-action@" in workflow
+    assert 'docker pull "$RELEASE_EVIDENCE_GRADER_IMAGE"' in workflow
+    assert 'docker pull "$RELEASE_EVIDENCE_LANGUAGETOOL_IMAGE"' in workflow
+
+
 def test_source_revision_prefers_explicit_evidence_revision(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -280,3 +280,17 @@ def test_language_connect_timeout_preserves_outer_grader_budget(
 
     assert evidence._connect_outage_request_timeout("grader") == 0.25
     assert evidence._connect_outage_request_timeout("language") == 15.0
+
+
+def test_candidate_image_mode_does_not_request_a_compose_build() -> None:
+    assert evidence._compose_start_args(use_published_images=True) == (
+        "up",
+        "--detach",
+        "--wait",
+        "--wait-timeout",
+        "240",
+        "postgres",
+        "languagetool",
+        "grader",
+        "language-connect-grader",
+    )
