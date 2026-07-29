@@ -66,6 +66,26 @@ def test_ready_keeps_an_authorized_initialization_path_out_of_traffic(monkeypatc
     }
 
 
+def test_ready_keeps_the_api_available_when_the_active_generation_default_is_paused(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("edu_grader_api.main.engine", create_engine("sqlite+pysqlite:///:memory:"))
+
+    def unavailable(_session):
+        raise GenerationDefaultGovernanceError("default_component_not_active")
+
+    monkeypatch.setattr("edu_grader_api.main.validate_active_default", unavailable)
+
+    response = TestClient(app).get("/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ready",
+        "database": "ready",
+        "generation_default": "unavailable",
+    }
+
+
 def test_capabilities_include_english_and_mathematics() -> None:
     response = TestClient(app).get("/v1/meta/capabilities")
 

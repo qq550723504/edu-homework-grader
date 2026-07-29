@@ -4,7 +4,9 @@
     <p class="eyebrow">管理员端</p>
     <h1>平台管理</h1>
     <p class="notice">管理员功能仅向平台管理员开放。</p>
-    <section aria-label="AI 默认配置治理">
+    <p v-if="!loading && governanceAccessDenied" role="status">当前账号无平台治理权限。</p>
+    <p v-else-if="!loading && !governanceAvailable" role="status">无法加载平台治理配置。</p>
+    <section v-if="governanceAvailable" aria-label="AI 默认配置治理">
       <h2>AI 默认配置治理</h2>
       <p v-if="loading">正在加载…</p>
       <template v-else>
@@ -30,10 +32,14 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
+
 import { fetchCurrentPrincipal } from '../../lib/student-api'
 import { decideGenerationDefaultChange, fetchGenerationDefaults, rollbackGenerationDefaultChange, submitGenerationDefaultChange, type GenerationDefaultSummary } from '../../lib/admin-generation-defaults'
 const summary = ref<GenerationDefaultSummary | null>(null)
 const loading = ref(true)
+const governanceAvailable = ref(false)
+const governanceAccessDenied = ref(false)
 const message = ref('')
 const saving = ref(false)
 const providerName = ref('openai')
@@ -41,7 +47,24 @@ const modelVersion = ref('')
 const promptVersion = ref('generator-v1')
 const requestReason = ref('')
 const evaluationReport = ref('')
-async function load() { loading.value = true; try { summary.value = await fetchGenerationDefaults($fetch) } catch { message.value = '无法加载治理配置。' } finally { loading.value = false } }
+function isGovernanceAuthorizationFailure(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const statusCode = (error as { statusCode?: unknown }).statusCode
+  return statusCode === 403 || statusCode === 404
+}
+async function load() {
+  loading.value = true
+  governanceAvailable.value = false
+  governanceAccessDenied.value = false
+  try {
+    summary.value = await fetchGenerationDefaults($fetch)
+    governanceAvailable.value = true
+  } catch (error) {
+    governanceAccessDenied.value = isGovernanceAuthorizationFailure(error)
+  } finally {
+    loading.value = false
+  }
+}
 async function csrfToken(): Promise<string> { const principal = await fetchCurrentPrincipal($fetch); if (!principal.csrf_token) throw new Error('登录会话已过期，请重新登录。'); return principal.csrf_token }
 async function decide(id: string, action: 'approve' | 'reject') { const reason = window.prompt(action === 'approve' ? '审批说明' : '拒绝原因')?.trim(); if (!reason) return; saving.value = true; try { await decideGenerationDefaultChange($fetch, await csrfToken(), crypto.randomUUID(), id, action, reason); message.value = '操作已保存。'; await load() } catch { message.value = '操作失败。' } finally { saving.value = false } }
 async function apply(id: string) { const reason = window.prompt('应用说明')?.trim(); if (!reason) return; saving.value = true; try { await decideGenerationDefaultChange($fetch, await csrfToken(), crypto.randomUUID(), id, 'apply', reason); message.value = '默认配置已应用。'; await load() } catch { message.value = '应用失败。' } finally { saving.value = false } }

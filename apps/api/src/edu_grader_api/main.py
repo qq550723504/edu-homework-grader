@@ -92,14 +92,7 @@ def ready() -> dict[str, str] | JSONResponse:
                 },
             )
         logger.warning("readiness check failed", extra={"component": "generation_default"})
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "degraded",
-                "database": "ready",
-                "generation_default": "unavailable",
-            },
-        )
+        return {"status": "ready", "database": "ready", "generation_default": "unavailable"}
     except Exception:
         logger.warning("readiness check failed", extra={"component": "generation_default"})
         return JSONResponse(
