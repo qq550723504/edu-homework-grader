@@ -143,11 +143,11 @@ jobs:
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
               output.write(
                   "RELEASE_EVIDENCE_GRADER_IMAGE="
-                  f"ghcr.io/{owner}/edu-homework-grader-grader@{digests['grader']}\\n"
+                  f"ghcr.io/{owner}/edu-homework-grader-grader@{digests['grader']}\n"
               )
               output.write(
                   "RELEASE_EVIDENCE_LANGUAGETOOL_IMAGE="
-                  f"ghcr.io/{owner}/edu-homework-grader-languagetool@{digests['languagetool']}\\n"
+                  f"ghcr.io/{owner}/edu-homework-grader-languagetool@{digests['languagetool']}\n"
               )
           PY
 
