@@ -101,9 +101,9 @@ spec:
         - protocol: TCP
           port: 8000
     - to:
-            - podSelector:
-                matchLabels:
-                  app.kubernetes.io/name: postgres
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
       ports:
         - protocol: TCP
           port: 5432
