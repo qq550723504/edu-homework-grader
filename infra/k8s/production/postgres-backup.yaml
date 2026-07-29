@@ -45,7 +45,10 @@ spec:
                   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
                   mkdir -p "/backup/$stamp"
                   pg_dump --host="$PGHOST" --username="$PGUSER" --dbname="$PGDATABASE" --format=custom --file="/backup/$stamp/edu_grader.dump"
-                  sha256sum "/backup/$stamp/edu_grader.dump" > "/backup/$stamp/edu_grader.dump.sha256"
+                  (
+                    cd "/backup/$stamp"
+                    sha256sum edu_grader.dump > edu_grader.dump.sha256
+                  )
                   printf '%s' "$stamp" > /backup/timestamp
               volumeMounts:
                 - name: backup

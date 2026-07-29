@@ -54,7 +54,7 @@ Apply the manifest and start one named Job for the initial drill:
 
 ```powershell
 kubectl apply --server-side -k infra/k8s/production
-$jobName = 'postgres-backup-manual-' + (Get-Date -AsUTC -Format 'yyyyMMddTHHmmssZ')
+$jobName = 'postgres-backup-manual-' + (Get-Date -AsUTC -Format 'yyyyMMddHHmmss')
 kubectl -n edu-homework-grader create job --from=cronjob/postgres-backup $jobName
 kubectl -n edu-homework-grader wait --for=condition=complete "job/$jobName" --timeout=15m
 kubectl -n edu-homework-grader logs "job/$jobName"

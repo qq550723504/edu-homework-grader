@@ -24,7 +24,7 @@ if ($BackupTimestamp -notmatch '^\d{8}T\d{6}Z$') {
     throw 'BackupTimestamp must use the yyyyMMddTHHmmssZ UTC format.'
 }
 
-$runId = "postgres-recovery-$BackupTimestamp"
+$runId = "postgres-recovery-$BackupTimestamp".ToLowerInvariant()
 
 function Invoke-Kubectl {
     param(
@@ -104,13 +104,13 @@ spec:
           [cos]
           type = s3
           provider = TencentCOS
-          access_key_id = \$COS_S3_ACCESS_KEY_ID
-          secret_access_key = \$COS_S3_SECRET_ACCESS_KEY
-          endpoint = \$COS_S3_ENDPOINT
-          region = \$COS_S3_REGION
+          access_key_id = `$COS_S3_ACCESS_KEY_ID
+          secret_access_key = `$COS_S3_SECRET_ACCESS_KEY
+          endpoint = `$COS_S3_ENDPOINT
+          region = `$COS_S3_REGION
           EOF
-          source="cos:\$COS_S3_BUCKET/edu-homework-grader/postgres/v1/$BackupTimestamp"
-          rclone copy --config /tmp/rclone.conf --checksum "\$source" /recovery
+          source="cos:`$COS_S3_BUCKET/edu-homework-grader/postgres/v1/$BackupTimestamp"
+          rclone copy --config /tmp/rclone.conf --checksum "`$source" /recovery
           cd /recovery
           sha256sum -c edu_grader.dump.sha256
       volumeMounts:
@@ -126,7 +126,7 @@ spec:
           value: edu_recovery
         - name: POSTGRES_HOST_AUTH_METHOD
           value: trust
-      command:
+      args:
         - postgres
         - -c
         - listen_addresses=127.0.0.1

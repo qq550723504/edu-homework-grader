@@ -273,7 +273,7 @@ Document this safe sequence without literal credentials:
     $region = Read-Host 'Approved COS region'
     ./scripts/k8s/create-backup-cos-secret.ps1 -Namespace edu-homework-grader -Bucket $bucket -Endpoint $endpoint -Region $region -ConfirmBackupCredential
     kubectl apply --server-side -k infra/k8s/production
-    $jobName = 'postgres-backup-manual-' + (Get-Date -AsUTC -Format 'yyyyMMddTHHmmssZ')
+    $jobName = 'postgres-backup-manual-' + (Get-Date -AsUTC -Format 'yyyyMMddHHmmss')
     kubectl -n edu-homework-grader create job --from=cronjob/postgres-backup $jobName
     $backupTimestamp = Read-Host 'UTC timestamp emitted by the successful backup job'
     ./scripts/k8s/recovery-drill.ps1 -Namespace edu-homework-grader -BackupTimestamp $backupTimestamp -ConfirmRecovery
@@ -329,7 +329,7 @@ Expected: only the target Secret name is printed.
 Run:
 
     kubectl apply --server-side -k infra/k8s/production
-    $jobName = 'postgres-backup-manual-' + (Get-Date -AsUTC -Format 'yyyyMMddTHHmmssZ')
+    $jobName = 'postgres-backup-manual-' + (Get-Date -AsUTC -Format 'yyyyMMddHHmmss')
     kubectl -n edu-homework-grader create job --from=cronjob/postgres-backup $jobName
     kubectl -n edu-homework-grader wait --for=condition=complete "job/$jobName" --timeout=15m
 

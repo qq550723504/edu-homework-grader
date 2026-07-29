@@ -15,6 +15,7 @@ Describe 'postgres-backup manifest' {
     It 'creates a verified custom dump and limits cleanup to the backup prefix' {
         $manifest | Should -Match 'pg_dump.*--format=custom'
         $manifest | Should -Match 'sha256sum.*edu_grader.dump'
+        $manifest | Should -Match 'sha256sum edu_grader.dump > edu_grader.dump.sha256'
         $manifest | Should -Match 'provider = TencentCOS'
         $manifest | Should -Match 'edu-homework-grader/postgres/v1/'
         $manifest | Should -Match 'rclone delete.*--min-age 14d'
