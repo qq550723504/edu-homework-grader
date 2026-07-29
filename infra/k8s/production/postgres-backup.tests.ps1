@@ -18,6 +18,7 @@ Describe 'postgres-backup manifest' {
         $manifest | Should -Match 'provider = TencentCOS'
         $manifest | Should -Match 'edu-homework-grader/postgres/v1/'
         $manifest | Should -Match 'rclone delete.*--min-age 14d'
+        $manifest | Should -Match 'backup_timestamp='
     }
 
     It 'keeps database and COS Secret access separate' {

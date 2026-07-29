@@ -95,6 +95,7 @@ spec:
                   region = $COS_S3_REGION
                   EOF
                   stamp="$(cat /backup/timestamp)"
+                  printf 'backup_timestamp=%s\n' "$stamp"
                   root="cos:$COS_S3_BUCKET/edu-homework-grader/postgres/v1/"
                   rclone copy --config /tmp/rclone.conf --checksum "/backup/$stamp" "$root$stamp"
                   rclone check --config /tmp/rclone.conf --one-way --checksum "/backup/$stamp" "$root$stamp"

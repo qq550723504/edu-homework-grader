@@ -38,3 +38,21 @@ Describe 'recovery-drill' {
         $source | Should -Match 'audit_logs'
     }
 }
+
+Describe 'PostgreSQL COS backup documentation' {
+    It 'documents the confirmation-gated backup and recovery workflow without credentials' {
+        $documentPath = Join-Path $PSScriptRoot '..\..\docs\operations\postgres-cos-backup-recovery.md'
+        $document = Get-Content -Raw -LiteralPath $documentPath
+
+        $document | Should -Match '-ConfirmBackupCredential'
+        $document | Should -Match '-ConfirmRecovery'
+        $document | Should -Match '-BackupTimestamp'
+        $document | Should -Match '-KeepRecoveryArtifacts'
+        $document | Should -Match 'postgres-backup'
+        $document | Should -Match '14 days'
+        $document | Should -Match 'edu-homework-grader/postgres/'
+        $document | Should -Not -Match 'AKID'
+        $document | Should -Not -Match 'SECRET_ACCESS_KEY='
+        $document | Should -Not -Match 'POSTGRES_PASSWORD='
+    }
+}
