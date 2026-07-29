@@ -1,0 +1,104 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+spec:
+  schedule: "15 3 * * 0"
+  timeZone: Asia/Singapore
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: postgres-backup
+        spec:
+          restartPolicy: Never
+          volumes:
+            - name: backup
+              emptyDir: {}
+          initContainers:
+            - name: dump
+              image: postgres:16-alpine
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: edu-grader-runtime
+                      key: POSTGRES_PASSWORD
+                - name: PGHOST
+                  value: postgres
+                - name: PGUSER
+                  value: edu_grader
+                - name: PGDATABASE
+                  value: edu_grader
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  set -eu
+                  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+                  mkdir -p "/backup/$stamp"
+                  pg_dump --host="$PGHOST" --username="$PGUSER" --dbname="$PGDATABASE" --format=custom --file="/backup/$stamp/edu_grader.dump"
+                  sha256sum "/backup/$stamp/edu_grader.dump" > "/backup/$stamp/edu_grader.dump.sha256"
+                  printf '%s' "$stamp" > /backup/timestamp
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+          containers:
+            - name: upload
+              image: rclone/rclone:1.71.0
+              env:
+                - name: COS_S3_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: edu-grader-backup-cos
+                      key: COS_S3_ACCESS_KEY_ID
+                - name: COS_S3_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: edu-grader-backup-cos
+                      key: COS_S3_SECRET_ACCESS_KEY
+                - name: COS_S3_ENDPOINT
+                  valueFrom:
+                    secretKeyRef:
+                      name: edu-grader-backup-cos
+                      key: COS_S3_ENDPOINT
+                - name: COS_S3_REGION
+                  valueFrom:
+                    secretKeyRef:
+                      name: edu-grader-backup-cos
+                      key: COS_S3_REGION
+                - name: COS_S3_BUCKET
+                  valueFrom:
+                    secretKeyRef:
+                      name: edu-grader-backup-cos
+                      key: COS_S3_BUCKET
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  set -eu
+                  umask 077
+                  cat > /tmp/rclone.conf <<EOF
+                  [cos]
+                  type = s3
+                  provider = TencentCOS
+                  access_key_id = $COS_S3_ACCESS_KEY_ID
+                  secret_access_key = $COS_S3_SECRET_ACCESS_KEY
+                  endpoint = $COS_S3_ENDPOINT
+                  region = $COS_S3_REGION
+                  EOF
+                  stamp="$(cat /backup/timestamp)"
+                  root="cos:$COS_S3_BUCKET/edu-homework-grader/postgres/v1/"
+                  rclone copy --config /tmp/rclone.conf --checksum "/backup/$stamp" "$root$stamp"
+                  rclone check --config /tmp/rclone.conf --one-way --checksum "/backup/$stamp" "$root$stamp"
+                  rclone delete --config /tmp/rclone.conf --min-age 14d "$root"
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup

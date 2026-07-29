@@ -11,6 +11,7 @@ resources:
   - datastore.yaml
   - application.yaml
   - ingress.yaml
+  - postgres-backup.yaml
   - student-activation-expiry.yaml
   - keycloak-student-provisioner-sync.yaml
 configMapGenerator:
