@@ -11,7 +11,14 @@ from sqlalchemy.pool import StaticPool
 from edu_grader_api.auth import VerifiedIdentity, get_token_verifier
 from edu_grader_api.db import Base, get_session
 from edu_grader_api.main import app
-from edu_grader_api.models import Role, Tenant, User
+from edu_grader_api.models import (
+    GenerationControlState,
+    GenerationGovernanceEntry,
+    GenerationGovernanceTargetType,
+    Role,
+    Tenant,
+    User,
+)
 from edu_grader_api.services.ai_evaluation_operational import (
     OperationalEvaluationReport,
     signed_operational_evaluation_evidence,
@@ -98,6 +105,32 @@ def test_platform_governance_admin_submits_redacted_default_change(
 ) -> None:
     user = admin(session, "platform-admin")
     monkeypatch.setattr(settings, "generation_governance_admin_subjects", "platform-admin")
+    session.add_all(
+        [
+            GenerationGovernanceEntry(
+                is_global=True,
+                target_type=GenerationGovernanceTargetType.PROVIDER,
+                target_key="fake",
+                control_state=GenerationControlState.ACTIVE,
+                created_by_user_id=user.id,
+            ),
+            GenerationGovernanceEntry(
+                is_global=True,
+                target_type=GenerationGovernanceTargetType.MODEL,
+                target_key="fake-v1",
+                control_state=GenerationControlState.ACTIVE,
+                created_by_user_id=user.id,
+            ),
+            GenerationGovernanceEntry(
+                is_global=True,
+                target_type=GenerationGovernanceTargetType.PROMPT_VERSION,
+                target_key="generator-v1",
+                control_state=GenerationControlState.ACTIVE,
+                created_by_user_id=user.id,
+            ),
+        ]
+    )
+    session.commit()
     report = {
         "spec_id": "governance-v1",
         "exporter_version": "export-v1",

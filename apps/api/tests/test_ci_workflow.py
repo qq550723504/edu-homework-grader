@@ -25,6 +25,9 @@ LIVE_GENERATOR_PROVIDER_ACCEPTANCE_WORKFLOW_PATH = (
     / "workflows"
     / "live-generator-provider-acceptance.yml"
 )
+OPERATIONAL_AI_EVALUATION_WORKFLOW_PATH = (
+    Path(__file__).resolve().parents[3] / ".github" / "workflows" / "ai-evaluation-operational.yml"
+)
 HEAVY_JOB_NAMES = (
     "python",
     "migrations",
@@ -329,6 +332,15 @@ def test_live_generator_acceptance_resolves_manual_refs_to_full_commit_shas() ->
     assert "github.rest.repos.getCommit" in workflow
     assert "ref: targetRef.trim()" in workflow
     assert "core.setOutput('target_ref', commit.data.sha);" in workflow
+
+
+def test_operational_evaluation_executes_only_trusted_main_code() -> None:
+    workflow = OPERATIONAL_AI_EVALUATION_WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    assert "target_ref" not in workflow
+    assert "ref: main" in workflow
+    assert "if: github.ref == 'refs/heads/main'" in workflow
+    assert "EVALUATION_EVIDENCE_HMAC_KEY" in workflow
 
 
 def test_manual_rollback_passes_github_environment_sha_to_powershell() -> None:

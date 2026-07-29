@@ -4,7 +4,7 @@ from importlib.util import find_spec
 
 import pytest
 from edu_generator.prompt_templates import resolve_prompt_template
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from edu_grader_api.models import (
@@ -30,6 +30,41 @@ def session() -> Session:
     Base.metadata.create_all(engine)
     with Session(engine) as session:
         yield session
+
+
+def activate_global_components(session: Session, *, model_version: str = "fake-v1") -> None:
+    entries = [
+        GenerationGovernanceEntry(
+            is_global=True,
+            target_type=GenerationGovernanceTargetType.MODEL,
+            target_key=model_version,
+            control_state=GenerationControlState.ACTIVE,
+        )
+    ]
+    if model_version == "fake-v1":
+        entries.extend(
+            [
+                GenerationGovernanceEntry(
+                    is_global=True,
+                    target_type=GenerationGovernanceTargetType.PROVIDER,
+                    target_key="fake",
+                    control_state=GenerationControlState.ACTIVE,
+                ),
+                GenerationGovernanceEntry(
+                    is_global=True,
+                    target_type=GenerationGovernanceTargetType.PROMPT_VERSION,
+                    target_key="generator-v1",
+                    control_state=GenerationControlState.ACTIVE,
+                ),
+            ]
+        )
+    session.add_all(entries)
+    session.flush()
+
+
+@pytest.fixture(autouse=True)
+def active_global_components(session: Session) -> None:
+    activate_global_components(session)
 
 
 def platform_admin(session: Session, *, subject: str = "platform-admin") -> User:
@@ -187,6 +222,47 @@ def test_submit_replays_before_rechecking_mutable_provider_state(
     )
 
     assert replay.id == request.id
+
+
+def test_submit_requires_explicit_global_activation_even_when_tenant_is_active(
+    session: Session,
+) -> None:
+    service = governance_service()
+    admin = platform_admin(session)
+    global_model = session.scalar(
+        select(GenerationGovernanceEntry).where(
+            GenerationGovernanceEntry.is_global.is_(True),
+            GenerationGovernanceEntry.target_type == GenerationGovernanceTargetType.MODEL,
+            GenerationGovernanceEntry.target_key == "fake-v1",
+        )
+    )
+    assert global_model is not None
+    session.delete(global_model)
+    session.add(
+        GenerationGovernanceEntry(
+            tenant_id=admin.tenant_id,
+            is_global=False,
+            target_type=GenerationGovernanceTargetType.MODEL,
+            target_key="fake-v1",
+            control_state=GenerationControlState.ACTIVE,
+            created_by_user_id=admin.id,
+        )
+    )
+    session.commit()
+
+    with pytest.raises(service.GenerationDefaultGovernanceError) as error:
+        service.submit_change_request(
+            session,
+            actor=admin,
+            provider_name="fake",
+            model_version="fake-v1",
+            prompt_version="generator-v1",
+            request_reason="Promote without global approval",
+            evaluation_report=passing_report(),
+            idempotency_key="missing-global-activation",
+        )
+
+    assert error.value.code == "default_component_not_active"
 
 
 def test_submit_replays_after_evaluation_evidence_key_rotation(
@@ -374,6 +450,7 @@ def test_rollback_is_a_new_approved_change_request(
 ) -> None:
     service = governance_service()
     monkeypatch.setattr(service, "supports_generation_provider", lambda *_: True)
+    activate_global_components(session, model_version="fake-v2")
     submitter = platform_admin(session)
     approver = platform_admin(session, subject="platform-approver")
     original = service.submit_change_request(
@@ -461,15 +538,15 @@ def test_rollback_is_a_new_approved_change_request(
 def test_submit_rejects_globally_paused_candidate_component(session: Session) -> None:
     service = governance_service()
     admin = platform_admin(session)
-    session.add(
-        GenerationGovernanceEntry(
-            is_global=True,
-            target_type=GenerationGovernanceTargetType.MODEL,
-            target_key="fake-v1",
-            control_state=GenerationControlState.PAUSED,
-            created_by_user_id=admin.id,
+    paused_model = session.scalar(
+        select(GenerationGovernanceEntry).where(
+            GenerationGovernanceEntry.is_global.is_(True),
+            GenerationGovernanceEntry.target_type == GenerationGovernanceTargetType.MODEL,
+            GenerationGovernanceEntry.target_key == "fake-v1",
         )
     )
+    assert paused_model is not None
+    paused_model.control_state = GenerationControlState.PAUSED
     session.commit()
 
     with pytest.raises(service.GenerationDefaultGovernanceError) as error:
@@ -531,15 +608,15 @@ def test_apply_rechecks_governance_controls(session: Session) -> None:
     service.approve_change_request(
         session, request_id=change_request.id, actor=approver, approval_reason="Verified"
     )
-    session.add(
-        GenerationGovernanceEntry(
-            is_global=True,
-            target_type=GenerationGovernanceTargetType.PROMPT_VERSION,
-            target_key="generator-v1",
-            control_state=GenerationControlState.PAUSED,
-            created_by_user_id=approver.id,
+    paused_prompt = session.scalar(
+        select(GenerationGovernanceEntry).where(
+            GenerationGovernanceEntry.is_global.is_(True),
+            GenerationGovernanceEntry.target_type == GenerationGovernanceTargetType.PROMPT_VERSION,
+            GenerationGovernanceEntry.target_key == "generator-v1",
         )
     )
+    assert paused_prompt is not None
+    paused_prompt.control_state = GenerationControlState.PAUSED
     session.commit()
 
     with pytest.raises(service.GenerationDefaultGovernanceError) as error:
@@ -687,6 +764,7 @@ def test_rollback_rejects_a_historical_request_with_the_active_configuration(
 ) -> None:
     service = governance_service()
     monkeypatch.setattr(service, "supports_generation_provider", lambda *_: True)
+    activate_global_components(session, model_version="fake-v2")
     submitter = platform_admin(session)
     approver = platform_admin(session, subject="platform-approver")
     original = service.submit_change_request(
@@ -745,3 +823,68 @@ def test_rollback_rejects_a_historical_request_with_the_active_configuration(
         )
 
     assert error.value.code == "default_rollback_target_invalid"
+
+
+def test_rollback_replays_after_the_target_configuration_becomes_active(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = governance_service()
+    monkeypatch.setattr(service, "supports_generation_provider", lambda *_: True)
+    activate_global_components(session, model_version="fake-v2")
+    submitter = platform_admin(session)
+    approver = platform_admin(session, subject="platform-approver")
+    original = service.submit_change_request(
+        session,
+        actor=submitter,
+        provider_name="fake",
+        model_version="fake-v1",
+        prompt_version="generator-v1",
+        request_reason="Initial governed default",
+        evaluation_report=passing_report(),
+        idempotency_key="rollback-replay-original",
+    )
+    service.approve_change_request(
+        session, request_id=original.id, actor=approver, approval_reason="Verified"
+    )
+    service.apply_change_request(
+        session, request_id=original.id, actor=submitter, application_reason="Release"
+    )
+    replacement = service.submit_change_request(
+        session,
+        actor=submitter,
+        provider_name="fake",
+        model_version="fake-v2",
+        prompt_version="generator-v1",
+        request_reason="Replacement governed default",
+        evaluation_report=passing_report(model_id="fake-v2", baseline_model_id="fake-v1"),
+        idempotency_key="rollback-replay-replacement",
+    )
+    service.approve_change_request(
+        session, request_id=replacement.id, actor=approver, approval_reason="Verified"
+    )
+    service.apply_change_request(
+        session, request_id=replacement.id, actor=submitter, application_reason="Release"
+    )
+    rollback = service.submit_rollback_request(
+        session,
+        actor=submitter,
+        target_request_id=original.id,
+        request_reason="Restore original default",
+        idempotency_key="rollback-replay",
+    )
+    service.approve_change_request(
+        session, request_id=rollback.id, actor=approver, approval_reason="Verified"
+    )
+    service.apply_change_request(
+        session, request_id=rollback.id, actor=submitter, application_reason="Restore"
+    )
+
+    replay = service.submit_rollback_request(
+        session,
+        actor=submitter,
+        target_request_id=original.id,
+        request_reason="Restore original default",
+        idempotency_key="rollback-replay",
+    )
+
+    assert replay.id == rollback.id

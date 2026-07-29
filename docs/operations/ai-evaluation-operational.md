@@ -10,7 +10,7 @@ A run fails closed when required evidence is missing or contradictory. In partic
 
 ## Protected environment
 
-Create a GitHub Environment named `ai-evaluation-operational`. Restrict it to approved release branches and add required reviewers where appropriate.
+Create a GitHub Environment named `ai-evaluation-operational`. Restrict it to the protected `main` branch and add required reviewers where appropriate. The repository workflow checks out `main` unconditionally before it reads the signing key; operational evidence is intentionally not produced from arbitrary branches, tags, or commits.
 
 Configure:
 

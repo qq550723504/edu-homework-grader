@@ -2,22 +2,17 @@ name: Operational AI evaluation
 
 on:
   workflow_dispatch:
-    inputs:
-      target_ref:
-        description: Branch, tag, or commit SHA containing the exporter to run
-        required: true
-        default: main
-        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: operational-ai-evaluation-${{ inputs.target_ref }}
+  group: operational-ai-evaluation-main
   cancel-in-progress: false
 
 jobs:
   evaluate:
+    if: github.ref == 'refs/heads/main'
     name: production facts and explicit version comparison
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -27,10 +22,10 @@ jobs:
       OPERATIONAL_EVALUATION_SPEC_JSON: ${{ secrets.OPERATIONAL_EVALUATION_SPEC_JSON || vars.OPERATIONAL_EVALUATION_SPEC_JSON }}
       EVALUATION_EVIDENCE_HMAC_KEY: ${{ secrets.EVALUATION_EVIDENCE_HMAC_KEY }}
     steps:
-      - name: Check out exact target
+      - name: Check out protected evaluation tooling
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.target_ref }}
+          ref: main
           fetch-depth: 1
 
       - name: Set up Python

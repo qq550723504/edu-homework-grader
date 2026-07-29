@@ -367,25 +367,11 @@ def submit_rollback_request(
     request_reason: str,
     idempotency_key: str,
 ) -> GenerationDefaultChangeRequest:
-    target = session.get(GenerationDefaultChangeRequest, target_request_id)
     if not request_reason.strip():
         raise GenerationDefaultGovernanceError("default_rollback_reason_required")
-    selection = session.get(GenerationDefaultSelection, "global")
-    if (
-        target is None
-        or target.status
-        not in {
-            GenerationDefaultChangeStatus.SUPERSEDED,
-            GenerationDefaultChangeStatus.ROLLED_BACK,
-        }
-        or selection is None
-        or target.id == selection.applied_change_request_id
-        or target.configuration_id == selection.configuration_id
-    ):
-        raise GenerationDefaultGovernanceError("default_rollback_target_invalid")
     request_digest = _canonical_sha256(
         {
-            "target_request_id": str(target.id),
+            "target_request_id": str(target_request_id),
             "request_reason": request_reason,
             "idempotency_key": idempotency_key,
         }
@@ -400,6 +386,20 @@ def submit_rollback_request(
         if existing.request_digest != request_digest:
             raise GenerationDefaultGovernanceError("default_change_idempotency_conflict")
         return existing
+    target = session.get(GenerationDefaultChangeRequest, target_request_id)
+    selection = session.get(GenerationDefaultSelection, "global")
+    if (
+        target is None
+        or target.status
+        not in {
+            GenerationDefaultChangeStatus.SUPERSEDED,
+            GenerationDefaultChangeStatus.ROLLED_BACK,
+        }
+        or selection is None
+        or target.id == selection.applied_change_request_id
+        or target.configuration_id == selection.configuration_id
+    ):
+        raise GenerationDefaultGovernanceError("default_rollback_target_invalid")
     rollback = GenerationDefaultChangeRequest(
         configuration_id=target.configuration_id,
         rollback_source_change_request_id=target.id,
@@ -537,7 +537,7 @@ def _assert_global_default_components_active(
             target_type=target_type,
             target_key=target_key,
         )
-        if global_state not in {None, GenerationControlState.ACTIVE}:
+        if global_state is not GenerationControlState.ACTIVE:
             raise GenerationDefaultGovernanceError("default_component_not_active")
 
 
@@ -558,7 +558,7 @@ def _assert_global_components_active(
                 GenerationGovernanceEntry.target_key == target_key,
             )
         )
-        if entry is not None and entry.control_state is not GenerationControlState.ACTIVE:
+        if entry is None or entry.control_state is not GenerationControlState.ACTIVE:
             raise GenerationDefaultGovernanceError("default_component_not_active")
 
 
