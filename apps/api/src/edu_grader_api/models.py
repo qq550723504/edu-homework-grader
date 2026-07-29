@@ -172,6 +172,13 @@ class GenerationDefaultChangeStatus(StrEnum):
     ROLLED_BACK = "rolled_back"
 
 
+class OperationalEvaluationRunStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
 class ValidationRunStatus(StrEnum):
     PASSED = "passed"
     WARNING = "warning"
@@ -915,6 +922,35 @@ class GenerationDefaultSelection(Base):
     applied_change_request: Mapped[GenerationDefaultChangeRequest] = relationship(
         foreign_keys=[applied_change_request_id]
     )
+
+
+class OperationalEvaluationRun(Base):
+    __tablename__ = "operational_evaluation_runs"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    github_run_id: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    repository_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    repository_owner_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    workflow_ref: Mapped[str] = mapped_column(String(500), nullable=False)
+    spec_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    callback_token_digest: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[OperationalEvaluationRunStatus] = mapped_column(
+        Enum(
+            OperationalEvaluationRunStatus,
+            native_enum=False,
+            values_callable=lambda values: [value.value for value in values],
+        ),
+        nullable=False,
+        default=OperationalEvaluationRunStatus.QUEUED,
+    )
+    report_json: Mapped[dict[str, object] | None] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql")
+    )
+    report_sha256: Mapped[str | None] = mapped_column(String(64))
+    failure_code: Mapped[str | None] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class GenerationAttempt(Base):

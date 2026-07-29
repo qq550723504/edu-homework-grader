@@ -28,7 +28,7 @@
 - `apps/api/src/edu_grader_api/services/operational_evaluation_kubernetes.py`: creates only labelled executor Jobs and callback Secrets through the official Kubernetes client.
 - `apps/api/src/edu_grader_api/routers/operational_evaluations.py`: exposes GitHub-OIDC protected trigger, status, report, and in-cluster callback endpoints.
 - `apps/api/src/edu_grader_api/services/operational_evaluation_executor.py`: executes the existing exporter and posts a sanitized completion result.
-- `apps/api/src/edu_grader_api/models.py` and `apps/api/alembic/versions/0028_operational_evaluation_runs.py`: durable 30-day run metadata and signed-report retention.
+- `apps/api/src/edu_grader_api/models.py` and `apps/api/alembic/versions/0031_operational_evaluation_runs.py`: durable 30-day run metadata and signed-report retention.
 - `infra/k8s/production/operational-evaluation.yaml`: executor RBAC, network policy, cleanup CronJob, and secret references.
 - `infra/k8s/production/application.yaml`: API service-account, OIDC configuration, and no broad executor credential sharing.
 - `.github/workflows/ai-evaluation-operational.yml`: protected GitHub-hosted OIDC trigger/poll/download workflow.
@@ -51,7 +51,9 @@
 - [ ] **Step 1: Write failing verifier and production-settings tests**
 
 ```python
-def test_verifier_accepts_only_the_protected_main_workflow(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_verifier_accepts_only_the_protected_main_workflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     verifier = GitHubOidcVerifier(expected=GitHubOidcTrust.from_settings(settings))
     monkeypatch.setattr(verifier, "jwk_client", StaticJwkClient(signing_key))
 
@@ -70,7 +72,15 @@ def test_verifier_accepts_only_the_protected_main_workflow(monkeypatch: pytest.M
     assert identity.run_id == "123"
 
 
-@pytest.mark.parametrize("claim,value", [("ref", "refs/heads/feature"), ("environment", "production"), ("runner_environment", "self-hosted"), ("repository_visibility", "private")])
+@pytest.mark.parametrize(
+    "claim,value",
+    [
+        ("ref", "refs/heads/feature"),
+        ("environment", "production"),
+        ("runner_environment", "self-hosted"),
+        ("repository_visibility", "private"),
+    ],
+)
 def test_verifier_rejects_a_wrong_trust_claim(claim: str, value: str) -> None:
     claims = protected_claims()
     claims[claim] = value
@@ -97,11 +107,20 @@ class GitHubWorkflowIdentity:
 
 class GitHubOidcVerifier:
     def verify(self, token: str) -> GitHubWorkflowIdentity:
-        claims = jwt.decode(token, self.jwk_client.get_signing_key_from_jwt(token).key,
-                            algorithms=["RS256"], audience=self.expected.audience,
-                            issuer="https://token.actions.githubusercontent.com")
+        claims = jwt.decode(
+            token,
+            self.jwk_client.get_signing_key_from_jwt(token).key,
+            algorithms=["RS256"],
+            audience=self.expected.audience,
+            issuer="https://token.actions.githubusercontent.com",
+        )
         self.expected.require(claims)
-        return GitHubWorkflowIdentity(str(claims["repository_id"]), str(claims["repository_owner_id"]), str(claims["run_id"]), str(claims["workflow_ref"]))
+        return GitHubWorkflowIdentity(
+            str(claims["repository_id"]),
+            str(claims["repository_owner_id"]),
+            str(claims["run_id"]),
+            str(claims["workflow_ref"]),
+        )
 ```
 
 Add `kubernetes` to the API dependency list, add the three non-empty GitHub trust settings, and reject missing or development values when `APP_ENV=production`.
@@ -123,7 +142,7 @@ git commit -m "feat: verify protected GitHub OIDC evaluation jobs"
 
 **Files:**
 - Modify: `apps/api/src/edu_grader_api/models.py`
-- Create: `apps/api/alembic/versions/0028_operational_evaluation_runs.py`
+- Create: `apps/api/alembic/versions/0031_operational_evaluation_runs.py`
 - Create: `apps/api/src/edu_grader_api/services/operational_evaluation_runs.py`
 - Test: `apps/api/tests/test_operational_evaluation_runs.py`
 
@@ -143,9 +162,17 @@ def test_same_github_run_and_spec_is_idempotent(session: Session) -> None:
     assert second.callback_token is None
 
 
-def test_callback_persists_only_signed_report_and_expires_after_thirty_days(session: Session) -> None:
+def test_callback_persists_only_signed_report_and_expires_after_thirty_days(
+    session: Session,
+) -> None:
     created = create_run(session, identity=identity("42"), spec_json=SPEC, now=NOW)
-    completed = complete_run(session, run_id=created.run.id, callback_token=created.callback_token, report_json=SIGNED_REPORT, now=NOW)
+    completed = complete_run(
+        session,
+        run_id=created.run.id,
+        callback_token=created.callback_token,
+        report_json=SIGNED_REPORT,
+        now=NOW,
+    )
     assert completed.expires_at == NOW + timedelta(days=30)
     assert completed.report_json == SIGNED_REPORT
     assert purge_expired_runs(session, now=completed.expires_at) == [completed.id]
@@ -170,7 +197,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/api/src/edu_grader_api/models.py apps/api/alembic/versions/0028_operational_evaluation_runs.py apps/api/src/edu_grader_api/services/operational_evaluation_runs.py apps/api/tests/test_operational_evaluation_runs.py
+git add apps/api/src/edu_grader_api/models.py apps/api/alembic/versions/0031_operational_evaluation_runs.py apps/api/src/edu_grader_api/services/operational_evaluation_runs.py apps/api/tests/test_operational_evaluation_runs.py
 git commit -m "feat: retain signed operational evaluation runs"
 ```
 
@@ -190,14 +217,23 @@ git commit -m "feat: retain signed operational evaluation runs"
 - [ ] **Step 1: Write failing API/launcher tests**
 
 ```python
-def test_valid_github_oidc_request_creates_exactly_one_job(client: TestClient, launcher: FakeLauncher) -> None:
-    response = client.post("/v1/internal/operational-evaluations", json={"spec": SPEC}, headers=github_headers())
+def test_valid_github_oidc_request_creates_exactly_one_job(
+    client: TestClient, launcher: FakeLauncher
+) -> None:
+    response = client.post(
+        "/v1/internal/operational-evaluations",
+        json={"spec": SPEC},
+        headers=github_headers(),
+    )
     assert response.status_code == 202
     assert launcher.launched_run_ids == [response.json()["id"]]
 
 
 def test_report_endpoint_never_returns_source_records(client: TestClient) -> None:
-    response = client.get(f"/v1/internal/operational-evaluations/{completed_run.id}/report", headers=github_headers())
+    response = client.get(
+        f"/v1/internal/operational-evaluations/{completed_run.id}/report",
+        headers=github_headers(),
+    )
     assert response.status_code == 200
     assert "records" not in response.text
 
@@ -255,20 +291,50 @@ git commit -m "feat: dispatch OIDC operational evaluation jobs"
 - [ ] **Step 1: Write failing executor tests**
 
 ```python
-def test_executor_posts_signed_report_without_exported_records(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_executor_posts_signed_report_without_exported_records(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     posted: list[dict[str, object]] = []
-    monkeypatch.setattr(executor, "post_completion", lambda **kwargs: posted.append(kwargs["payload"]))
-    assert executor.run_executor(spec_json=SPEC_JSON, callback_url="http://api:8000/callback", callback_token="token", output_dir=tmp_path) == 0
+    monkeypatch.setattr(
+        executor, "post_completion", lambda **kwargs: posted.append(kwargs["payload"])
+    )
+    assert (
+        executor.run_executor(
+            spec_json=SPEC_JSON,
+            callback_url="http://api:8000/callback",
+            callback_token="token",
+            output_dir=tmp_path,
+        )
+        == 0
+    )
     assert posted[0]["status"] == "succeeded"
     assert "records" not in posted[0]["report"]
 
 
-def test_executor_maps_exception_to_sanitized_failure_code(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(executor, "run_operational_evaluation", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("source record")))
+def test_executor_maps_exception_to_sanitized_failure_code(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        executor,
+        "run_operational_evaluation",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("source record")),
+    )
     posted: list[dict[str, object]] = []
-    monkeypatch.setattr(executor, "post_completion", lambda **kwargs: posted.append(kwargs["payload"]))
-    assert executor.run_executor(spec_json=SPEC_JSON, callback_url="http://api:8000/callback", callback_token="token", output_dir=tmp_path) == 1
-    assert posted == [{"status": "failed", "failure_code": "evaluation_execution_failed"}]
+    monkeypatch.setattr(
+        executor, "post_completion", lambda **kwargs: posted.append(kwargs["payload"])
+    )
+    assert (
+        executor.run_executor(
+            spec_json=SPEC_JSON,
+            callback_url="http://api:8000/callback",
+            callback_token="token",
+            output_dir=tmp_path,
+        )
+        == 1
+    )
+    assert posted == [
+        {"status": "failed", "failure_code": "evaluation_execution_failed"}
+    ]
 ```
 
 - [ ] **Step 2: Run executor tests to verify they fail**
