@@ -126,6 +126,18 @@ spec:
             - name: OPENAI_API_KEY
               valueFrom:
                 secretKeyRef: {name: edu-grader-runtime, key: OPENAI_API_KEY}
+            - name: GENERATION_PROVIDER
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: GENERATION_PROVIDER}
+            - name: GENERATOR_OPENAI_MODEL
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: GENERATOR_OPENAI_MODEL}
+            - name: GENERATOR_OPENAI_BASE_URL
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: GENERATOR_OPENAI_BASE_URL}
+            - name: GENERATOR_PROVIDER_ALLOWED_HOSTS
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: GENERATOR_PROVIDER_ALLOWED_HOSTS}
             - name: EVALUATION_EVIDENCE_HMAC_KEY
               valueFrom:
                 secretKeyRef: {name: edu-grader-runtime, key: EVALUATION_EVIDENCE_HMAC_KEY}
@@ -146,7 +158,7 @@ spec:
                 secretKeyRef: {name: edu-grader-runtime, key: KEYCLOAK_STUDENT_PROVISIONER_CLIENT_SECRET}
           readinessProbe:
             httpGet:
-              path: /ready
+              path: /infrastructure-ready
               port: http
 ---
 apiVersion: apps/v1

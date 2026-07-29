@@ -47,15 +47,33 @@ def test_production_passes_governance_admin_allowlist_to_api() -> None:
         }
         for item in environment
     )
-    assert any(
-        item["name"] == "OPENAI_API_KEY"
-        and item["valueFrom"]["secretKeyRef"]
-        == {
-            "name": "edu-grader-runtime",
-            "key": "OPENAI_API_KEY",
-        }
-        for item in environment
+    for setting in (
+        "GENERATION_PROVIDER",
+        "OPENAI_API_KEY",
+        "GENERATOR_OPENAI_MODEL",
+        "GENERATOR_OPENAI_BASE_URL",
+        "GENERATOR_PROVIDER_ALLOWED_HOSTS",
+    ):
+        assert any(
+            item["name"] == setting
+            and item["valueFrom"]["secretKeyRef"]
+            == {
+                "name": "edu-grader-runtime",
+                "key": setting,
+            }
+            for item in environment
+        )
+
+
+def test_production_api_readiness_probe_checks_infrastructure_only() -> None:
+    repository_root = Path(__file__).parents[3]
+    production = yaml.safe_load_all(
+        (repository_root / "infra/k8s/production/application.yaml").read_text(encoding="utf-8")
     )
+    api = next(document for document in production if document["metadata"]["name"] == "api")
+    probe = api["spec"]["template"]["spec"]["containers"][0]["readinessProbe"]
+
+    assert probe["httpGet"] == {"path": "/infrastructure-ready", "port": "http"}
 
 
 def test_production_secret_bootstrap_requires_and_provisions_generation_controls() -> None:
@@ -66,7 +84,15 @@ def test_production_secret_bootstrap_requires_and_provisions_generation_controls
 
     assert "[string[]]$GenerationGovernanceAdminSubjects" in bootstrap
     assert "[string]$OpenAiApiKey" in bootstrap
+    assert "[string]$GenerationProvider" in bootstrap
+    assert "[string]$GeneratorOpenAiModel" in bootstrap
+    assert "[string]$GeneratorOpenAiBaseUrl" in bootstrap
+    assert "[string]$GeneratorProviderAllowedHosts" in bootstrap
     assert "[string]$EvaluationEvidenceHmacKey" in bootstrap
     assert "GENERATION_GOVERNANCE_ADMIN_SUBJECTS" in bootstrap
     assert "OPENAI_API_KEY" in bootstrap
+    assert "GENERATION_PROVIDER" in bootstrap
+    assert "GENERATOR_OPENAI_MODEL" in bootstrap
+    assert "GENERATOR_OPENAI_BASE_URL" in bootstrap
+    assert "GENERATOR_PROVIDER_ALLOWED_HOSTS" in bootstrap
     assert "EVALUATION_EVIDENCE_HMAC_KEY" in bootstrap

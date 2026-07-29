@@ -9,6 +9,10 @@ Describe 'create-prod-secrets' {
                 -OidcIssuer 'http://issuer.example' `
                 -GenerationGovernanceAdminSubjects @('admin-one', 'admin-two') `
                 -OpenAiApiKey 'test-only-key' `
+                -GenerationProvider 'openai' `
+                -GeneratorOpenAiModel 'gpt-5-mini-2025-08-07' `
+                -GeneratorOpenAiBaseUrl 'https://api.example/v1' `
+                -GeneratorProviderAllowedHosts 'api.example' `
                 -EvaluationEvidenceHmacKey ('e' * 32) `
                 -WhatIf
         } | Should -Throw 'OIDC issuer must use a non-local HTTPS URL in production.'
@@ -20,6 +24,10 @@ Describe 'create-prod-secrets' {
                 -OidcIssuer 'https://issuer.example' `
                 -GenerationGovernanceAdminSubjects @('only-one') `
                 -OpenAiApiKey 'test-only-key' `
+                -GenerationProvider 'openai' `
+                -GeneratorOpenAiModel 'gpt-5-mini-2025-08-07' `
+                -GeneratorOpenAiBaseUrl 'https://api.example/v1' `
+                -GeneratorProviderAllowedHosts 'api.example' `
                 -EvaluationEvidenceHmacKey ('e' * 32) `
                 -WhatIf
         } | Should -Throw 'At least two distinct generation governance administrator subjects are required.'
