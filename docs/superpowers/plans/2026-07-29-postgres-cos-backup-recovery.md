@@ -223,7 +223,7 @@ Validate both user inputs before native commands. Derive $runId = "postgres-reco
     SELECT 'assignments', count(*) FROM assignments;
     SELECT 'student_attempts', count(*) FROM student_attempts;
     SELECT 'grading_runs', count(*) FROM grading_runs;
-    SELECT 'guardian_consents', count(*) FROM guardian_consents;
+    SELECT 'student_guardian_consents', count(*) FROM student_guardian_consents;
     SELECT 'audit_logs', count(*) FROM audit_logs;
 
 Delete only the $runId Pod in a finally block, unless -KeepRecoveryArtifacts is passed. Do not delete or patch any production data store, Secret, application workload, Service, PVC, or Ingress.
