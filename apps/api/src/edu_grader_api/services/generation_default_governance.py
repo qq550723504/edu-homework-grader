@@ -306,8 +306,16 @@ def apply_change_request(
         raise GenerationDefaultGovernanceError("default_change_not_approved")
     if change_request.evaluation_evidence_json is None:
         raise GenerationDefaultGovernanceError("evaluation_evidence_untrusted")
-    _validated_report(change_request.evaluation_evidence_json)
+    report = _validated_report(change_request.evaluation_evidence_json)
     configuration = change_request.configuration
+    _assert_candidate_matches(
+        report,
+        provider_name=configuration.provider_name,
+        model_version=configuration.model_version,
+        prompt_version=configuration.prompt_version,
+    )
+    if report.candidate.prompt_template_fingerprint != configuration.prompt_template_fingerprint:
+        raise GenerationDefaultGovernanceError("evaluation_prompt_template_mismatch")
     if not supports_generation_provider(configuration.provider_name, configuration.model_version):
         raise GenerationDefaultGovernanceError("default_provider_not_configured")
     _assert_global_default_components_active(
