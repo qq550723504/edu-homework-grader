@@ -82,16 +82,6 @@ def ready() -> dict[str, str] | JSONResponse:
             validate_active_default(session)
     except GenerationDefaultGovernanceError as exc:
         if exc.code == "generation_default_not_configured":
-            if settings.generation_governance_admin_subject_set:
-                logger.warning(
-                    "readiness awaiting generation default initialization",
-                    extra={"component": "generation_default"},
-                )
-                return {
-                    "status": "initialization_required",
-                    "database": "ready",
-                    "generation_default": "unconfigured",
-                }
             logger.warning("readiness check failed", extra={"component": "generation_default"})
             return JSONResponse(
                 status_code=503,

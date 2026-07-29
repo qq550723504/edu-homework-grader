@@ -45,7 +45,7 @@ def test_ready_fails_closed_without_an_active_generation_default(monkeypatch) ->
     }
 
 
-def test_ready_allows_an_authorized_initialization_path(monkeypatch) -> None:
+def test_ready_keeps_an_authorized_initialization_path_out_of_traffic(monkeypatch) -> None:
     monkeypatch.setattr("edu_grader_api.main.engine", create_engine("sqlite+pysqlite:///:memory:"))
     monkeypatch.setattr(
         "edu_grader_api.main.settings.generation_governance_admin_subjects", "bootstrap-admin"
@@ -58,9 +58,9 @@ def test_ready_allows_an_authorized_initialization_path(monkeypatch) -> None:
 
     response = TestClient(app).get("/ready")
 
-    assert response.status_code == 200
+    assert response.status_code == 503
     assert response.json() == {
-        "status": "initialization_required",
+        "status": "degraded",
         "database": "ready",
         "generation_default": "unconfigured",
     }
