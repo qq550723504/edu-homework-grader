@@ -11,6 +11,14 @@ def test_compose_passes_governance_admin_allowlist_to_api() -> None:
     assert "GENERATION_GOVERNANCE_ADMIN_SUBJECTS" in api_environment
     assert "CURRICULUM_ADMIN_SUBJECTS" in api_environment
     assert "EVALUATION_EVIDENCE_HMAC_KEY" in api_environment
+    for setting in (
+        "OPENAI_API_KEY",
+        "GENERATOR_OPENAI_MODEL",
+        "GENERATOR_OPENAI_BASE_URL",
+        "GENERATOR_PROVIDER_ALLOWED_HOSTS",
+        "GENERATOR_TIMEOUT_SECONDS",
+    ):
+        assert setting in api_environment
 
 
 def test_example_environment_documents_governance_admin_allowlist() -> None:

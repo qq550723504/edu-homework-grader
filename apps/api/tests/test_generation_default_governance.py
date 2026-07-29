@@ -189,6 +189,38 @@ def test_submit_replays_before_rechecking_mutable_provider_state(
     assert replay.id == request.id
 
 
+def test_submit_replays_after_evaluation_evidence_key_rotation(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = governance_service()
+    actor = platform_admin(session)
+    evidence = passing_report()
+    request = service.submit_change_request(
+        session,
+        actor=actor,
+        provider_name="fake",
+        model_version="fake-v1",
+        prompt_version="generator-v1",
+        request_reason="Promote verified candidate",
+        evaluation_report=evidence,
+        idempotency_key="submission-replay-key-rotation",
+    )
+    monkeypatch.setattr(service.settings, "evaluation_evidence_hmac_key", "r" * 32)
+
+    replay = service.submit_change_request(
+        session,
+        actor=actor,
+        provider_name="fake",
+        model_version="fake-v1",
+        prompt_version="generator-v1",
+        request_reason="Promote verified candidate",
+        evaluation_report=evidence,
+        idempotency_key="submission-replay-key-rotation",
+    )
+
+    assert replay.id == request.id
+
+
 def test_submit_rejects_provider_pair_missing_from_runtime_registry(session: Session) -> None:
     service = governance_service()
     admin = platform_admin(session)

@@ -59,7 +59,7 @@ def submit_change_request(
     evaluation_report: dict[str, object],
     idempotency_key: str,
 ) -> GenerationDefaultChangeRequest:
-    report = _validated_report(evaluation_report)
+    report = _evaluation_report_from_evidence(evaluation_report)
     report_payload = report.model_dump(mode="json")
     report_sha256 = _canonical_sha256(report_payload)
     request_digest = _canonical_sha256(
@@ -81,6 +81,7 @@ def submit_change_request(
         if existing.request_digest != request_digest:
             raise GenerationDefaultGovernanceError("default_change_idempotency_conflict")
         return existing
+    report = _validated_report(evaluation_report)
     _assert_candidate_matches(
         report,
         provider_name=provider_name,
@@ -477,16 +478,25 @@ def validate_active_default(session: Session) -> ResolvedGenerationDefault:
     return default
 
 
-def _validated_report(payload: dict[str, object]):
+def _evaluation_report_from_evidence(payload: dict[str, object]):
+    return _evaluation_evidence(payload).report
+
+
+def _evaluation_evidence(payload: dict[str, object]):
     from .ai_evaluation_operational import (
         SignedOperationalEvaluationEvidence,
-        verify_operational_evaluation_evidence,
     )
 
     try:
-        evidence = SignedOperationalEvaluationEvidence.model_validate(payload)
+        return SignedOperationalEvaluationEvidence.model_validate(payload)
     except ValidationError as exc:
         raise GenerationDefaultGovernanceError("evaluation_report_invalid") from exc
+
+
+def _validated_report(payload: dict[str, object]):
+    from .ai_evaluation_operational import verify_operational_evaluation_evidence
+
+    evidence = _evaluation_evidence(payload)
     if not verify_operational_evaluation_evidence(
         evidence, hmac_key=settings.evaluation_evidence_hmac_key
     ):
