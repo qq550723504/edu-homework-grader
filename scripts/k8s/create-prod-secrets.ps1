@@ -9,6 +9,14 @@ param(
     [AllowEmptyString()]
     [string]$OpenAiApiKey,
     [Parameter(Mandatory = $true)]
+    [string]$GenerationProvider,
+    [Parameter(Mandatory = $true)]
+    [string]$GeneratorOpenAiModel,
+    [Parameter(Mandatory = $true)]
+    [string]$GeneratorOpenAiBaseUrl,
+    [Parameter(Mandatory = $true)]
+    [string]$GeneratorProviderAllowedHosts,
+    [Parameter(Mandatory = $true)]
     [string]$EvaluationEvidenceHmacKey,
     [string]$SecretName = 'edu-grader-runtime',
     [switch]$Replace
@@ -22,6 +30,34 @@ function New-RandomSecret {
     $buffer = [byte[]]::new($Bytes)
     [System.Security.Cryptography.RandomNumberGenerator]::Fill($buffer)
     return [Convert]::ToBase64String($buffer)
+}
+
+function Test-ImmutableOpenAiModelId {
+    param([string]$Model)
+
+    if ($Model -in @('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna')) {
+        return $true
+    }
+    if ($Model -match '^ft:[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9_-]*$') {
+        return $true
+    }
+    $match = [regex]::Match(
+        $Model,
+        '^[A-Za-z0-9][A-Za-z0-9._-]*-(?<snapshot>\d{4}-\d{2}-\d{2}|\d{4})$'
+    )
+    if (-not $match.Success) {
+        return $false
+    }
+    $snapshot = $match.Groups['snapshot'].Value
+    $format = if ($snapshot.Length -eq 4) { 'MMdd' } else { 'yyyy-MM-dd' }
+    $parsed = [DateTime]::MinValue
+    return [DateTime]::TryParseExact(
+        $snapshot,
+        $format,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::None,
+        [ref]$parsed
+    )
 }
 
 $issuer = [Uri]$OidcIssuer
@@ -39,6 +75,34 @@ if ($generationGovernanceAdminSubjects.Count -lt 2) {
 }
 if ([Text.Encoding]::UTF8.GetByteCount($EvaluationEvidenceHmacKey) -lt 32) {
     throw 'Evaluation evidence HMAC key must be at least 32 bytes.'
+}
+if ($GenerationProvider -ne 'openai') {
+    throw 'Generation provider must be openai in production.'
+}
+if ([string]::IsNullOrWhiteSpace($OpenAiApiKey)) {
+    throw 'OpenAI API key is required in production.'
+}
+if ([string]::IsNullOrWhiteSpace($GeneratorOpenAiModel)) {
+    throw 'Generator OpenAI model is required in production.'
+}
+if (-not (Test-ImmutableOpenAiModelId $GeneratorOpenAiModel)) {
+    throw 'Generator OpenAI model must use an immutable model ID in production.'
+}
+$generatorOpenAiBaseUri = [Uri]$GeneratorOpenAiBaseUrl
+if ($generatorOpenAiBaseUri.Scheme -ne 'https' -or $generatorOpenAiBaseUri.Host -in @('localhost', '127.0.0.1', '::1')) {
+    throw 'Generator OpenAI base URL must use a non-local HTTPS URL in production.'
+}
+if ([string]::IsNullOrWhiteSpace($GeneratorProviderAllowedHosts)) {
+    throw 'Generator provider allowed hosts are required in production.'
+}
+$allowedGeneratorProviderHosts = @(
+    $GeneratorProviderAllowedHosts.Split(',') |
+        ForEach-Object { $_.Trim().ToLowerInvariant() } |
+        Where-Object { $_ } |
+        Select-Object -Unique
+)
+if ($generatorOpenAiBaseUri.Host.ToLowerInvariant() -notin $allowedGeneratorProviderHosts) {
+    throw 'Generator provider allowed hosts must include the OpenAI base URL host.'
 }
 
 if (-not $PSCmdlet.ShouldProcess("namespace/$Namespace secret/$SecretName", 'create production runtime Secret')) {
@@ -85,6 +149,10 @@ $secretArguments = @(
     '--from-literal=PROCESSOR_ALLOWED_HOSTS=grader,languagetool',
     "--from-literal=GENERATION_GOVERNANCE_ADMIN_SUBJECTS=$($generationGovernanceAdminSubjects -join ',')",
     "--from-literal=OPENAI_API_KEY=$OpenAiApiKey",
+    "--from-literal=GENERATION_PROVIDER=$GenerationProvider",
+    "--from-literal=GENERATOR_OPENAI_MODEL=$GeneratorOpenAiModel",
+    "--from-literal=GENERATOR_OPENAI_BASE_URL=$($generatorOpenAiBaseUri.AbsoluteUri.TrimEnd('/'))",
+    "--from-literal=GENERATOR_PROVIDER_ALLOWED_HOSTS=$GeneratorProviderAllowedHosts",
     "--from-literal=EVALUATION_EVIDENCE_HMAC_KEY=$EvaluationEvidenceHmacKey"
 )
 

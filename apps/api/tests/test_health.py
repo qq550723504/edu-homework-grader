@@ -13,6 +13,24 @@ def test_health() -> None:
     assert response.json()["service"] == "api"
 
 
+def test_infrastructure_ready_reports_database_availability(monkeypatch) -> None:
+    monkeypatch.setattr("edu_grader_api.main.engine", create_engine("sqlite+pysqlite:///:memory:"))
+
+    response = TestClient(app).get("/infrastructure-ready")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready", "database": "ready"}
+
+
+def test_infrastructure_ready_fails_closed_when_database_is_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr("edu_grader_api.main.engine", create_engine("postgresql+psycopg://invalid"))
+
+    response = TestClient(app).get("/infrastructure-ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "degraded", "database": "unavailable"}
+
+
 def test_ready_reports_database_availability(monkeypatch) -> None:
     monkeypatch.setattr("edu_grader_api.main.engine", create_engine("sqlite+pysqlite:///:memory:"))
     monkeypatch.setattr("edu_grader_api.main.validate_active_default", lambda _session: object())

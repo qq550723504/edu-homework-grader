@@ -9,6 +9,10 @@ Describe 'create-prod-secrets' {
                 -OidcIssuer 'http://issuer.example' `
                 -GenerationGovernanceAdminSubjects @('admin-one', 'admin-two') `
                 -OpenAiApiKey 'test-only-key' `
+                -GenerationProvider 'openai' `
+                -GeneratorOpenAiModel 'gpt-5-mini-2025-08-07' `
+                -GeneratorOpenAiBaseUrl 'https://api.example/v1' `
+                -GeneratorProviderAllowedHosts 'api.example' `
                 -EvaluationEvidenceHmacKey ('e' * 32) `
                 -WhatIf
         } | Should -Throw 'OIDC issuer must use a non-local HTTPS URL in production.'
@@ -20,9 +24,58 @@ Describe 'create-prod-secrets' {
                 -OidcIssuer 'https://issuer.example' `
                 -GenerationGovernanceAdminSubjects @('only-one') `
                 -OpenAiApiKey 'test-only-key' `
+                -GenerationProvider 'openai' `
+                -GeneratorOpenAiModel 'gpt-5-mini-2025-08-07' `
+                -GeneratorOpenAiBaseUrl 'https://api.example/v1' `
+                -GeneratorProviderAllowedHosts 'api.example' `
                 -EvaluationEvidenceHmacKey ('e' * 32) `
                 -WhatIf
         } | Should -Throw 'At least two distinct generation governance administrator subjects are required.'
+    }
+
+    It 'rejects an empty OpenAI API key before any Kubernetes write' {
+        {
+            & $scriptPath `
+                -OidcIssuer 'https://issuer.example' `
+                -GenerationGovernanceAdminSubjects @('admin-one', 'admin-two') `
+                -OpenAiApiKey '' `
+                -GenerationProvider 'openai' `
+                -GeneratorOpenAiModel 'gpt-5-2025-08-07' `
+                -GeneratorOpenAiBaseUrl 'https://api.example/v1' `
+                -GeneratorProviderAllowedHosts 'api.example' `
+                -EvaluationEvidenceHmacKey ('e' * 32) `
+                -WhatIf
+        } | Should -Throw 'OpenAI API key is required in production.'
+    }
+
+    It 'rejects a floating OpenAI model ID before any Kubernetes write' {
+        {
+            & $scriptPath `
+                -OidcIssuer 'https://issuer.example' `
+                -GenerationGovernanceAdminSubjects @('admin-one', 'admin-two') `
+                -OpenAiApiKey 'test-only-key' `
+                -GenerationProvider 'openai' `
+                -GeneratorOpenAiModel 'gpt-5' `
+                -GeneratorOpenAiBaseUrl 'https://api.example/v1' `
+                -GeneratorProviderAllowedHosts 'api.example' `
+                -EvaluationEvidenceHmacKey ('e' * 32) `
+                -WhatIf
+        } | Should -Throw 'Generator OpenAI model must use an immutable model ID in production.'
+    }
+
+    It 'requires the OpenAI base URL host in the allowed host list before any Kubernetes write' {
+        {
+            & $scriptPath `
+                -OidcIssuer 'https://issuer.example' `
+                -GenerationGovernanceAdminSubjects @('admin-one', 'admin-two') `
+                -OpenAiApiKey 'test-only-key' `
+                -GenerationProvider 'openai' `
+                -GeneratorOpenAiModel 'gpt-5-2025-08-07' `
+                -GeneratorOpenAiBaseUrl 'https://proxy.example/v1' `
+                -GeneratorProviderAllowedHosts 'api.example' `
+                -EvaluationEvidenceHmacKey ('e' * 32) `
+                -WhatIf
+        } | Should -Throw 'Generator provider allowed hosts must include the OpenAI base URL host.'
     }
 
     It 'does not print secret-bearing values' {
