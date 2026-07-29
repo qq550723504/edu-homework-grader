@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Annotated, Protocol
 from uuid import UUID
 
@@ -11,21 +12,23 @@ from sqlalchemy.orm import Session
 from ..db import get_session
 from ..github_oidc import GitHubOidcTrust, GitHubOidcVerifier, GitHubWorkflowIdentity
 from ..models import OperationalEvaluationRun, OperationalEvaluationRunStatus, utc_now
-from ..settings import settings
 from ..services.operational_evaluation_runs import (
     OperationalEvaluationRunConflict,
     complete_run,
     create_run,
     fail_run,
 )
-
+from ..settings import settings
 
 router = APIRouter(prefix="/v1/internal/operational-evaluations", tags=["operations"])
 github_security = HTTPBearer(auto_error=False)
+logger = logging.getLogger(__name__)
 
 
 class OperationalEvaluationJobLauncher(Protocol):
     def launch(self, *, run_id: str, spec_json: dict[str, object], callback_token: str) -> None: ...
+
+    def delete_callback_secret(self, *, run_id: str) -> None: ...
 
 
 class StartOperationalEvaluationRequest(BaseModel):
@@ -107,7 +110,7 @@ def start_operational_evaluation(
             callback_token=created.callback_token,
         )
         created.run.status = OperationalEvaluationRunStatus.RUNNING
-        session.flush()
+    session.commit()
     return {"id": str(created.run.id), "status": created.run.status.value}
 
 
@@ -141,6 +144,9 @@ def complete_operational_evaluation(
     request: CompleteOperationalEvaluationRequest,
     session: Annotated[Session, Depends(get_session)],
     callback_token: Annotated[str | None, Header(alias="X-Operational-Evaluation-Callback")],
+    launcher: Annotated[
+        OperationalEvaluationJobLauncher, Depends(get_operational_evaluation_job_launcher)
+    ],
 ) -> Response:
     try:
         if request.report is not None and request.failure_code is None:
@@ -165,4 +171,9 @@ def complete_operational_evaluation(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid evaluation callback"
         ) from None
+    session.commit()
+    try:
+        launcher.delete_callback_secret(run_id=str(run_id))
+    except Exception:
+        logger.warning("operational evaluation callback Secret cleanup failed", exc_info=True)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

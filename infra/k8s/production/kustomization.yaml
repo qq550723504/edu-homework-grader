@@ -14,6 +14,7 @@ resources:
   - postgres-backup.yaml
   - student-activation-expiry.yaml
   - keycloak-student-provisioner-sync.yaml
+  - operational-evaluation.yaml
 configMapGenerator:
   - name: edu-grader-production-realm
     files:

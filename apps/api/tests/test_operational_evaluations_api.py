@@ -17,7 +17,6 @@ from edu_grader_api.services.operational_evaluation_kubernetes import (
     KubernetesOperationalEvaluationJobLauncher,
 )
 
-
 IDENTITY = GitHubWorkflowIdentity(
     repository_id="123", owner_id="456", run_id="789", workflow_ref="workflow@main"
 )
@@ -35,9 +34,13 @@ class StaticGitHubVerifier:
 @dataclass
 class FakeJobLauncher:
     launches: list[tuple[str, str]] = field(default_factory=list)
+    deleted_callback_runs: list[str] = field(default_factory=list)
 
     def launch(self, *, run_id: str, spec_json: dict[str, object], callback_token: str) -> None:
         self.launches.append((run_id, callback_token))
+
+    def delete_callback_secret(self, *, run_id: str) -> None:
+        self.deleted_callback_runs.append(run_id)
 
 
 @pytest.fixture
@@ -103,6 +106,7 @@ def test_report_endpoint_returns_only_completed_signed_report(
     report = http.get(f"/v1/internal/operational-evaluations/{run_id}/report", headers=headers())
 
     assert completed.status_code == 204
+    assert launcher.deleted_callback_runs == [run_id]
     assert report.status_code == 200
     assert report.json()["promotion_eligible"] is False
     assert "records" not in report.text
@@ -136,6 +140,7 @@ def test_executor_failure_marks_run_failed(client: tuple[TestClient, FakeJobLaun
     status = http.get(f"/v1/internal/operational-evaluations/{run_id}", headers=headers())
 
     assert completed.status_code == 204
+    assert launcher.deleted_callback_runs == [run_id]
     assert status.json()["status"] == "failed"
 
 

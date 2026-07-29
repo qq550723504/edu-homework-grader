@@ -4,8 +4,9 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from ..settings import Settings
+from kubernetes.client.exceptions import ApiException
 
+from ..settings import Settings
 
 _DIGEST_PREFIX = "@sha256:"
 
@@ -48,14 +49,27 @@ class KubernetesOperationalEvaluationJobLauncher:
                 "stringData": {"callback-token": callback_token},
             },
         )
-        self.batch_api.create_namespaced_job(
-            namespace=self.namespace,
-            body=self.manifest_for(
-                run_id=run_id,
-                spec_json=spec_json,
-                callback_secret_name=callback_secret_name,
-            ),
-        )
+        try:
+            self.batch_api.create_namespaced_job(
+                namespace=self.namespace,
+                body=self.manifest_for(
+                    run_id=run_id,
+                    spec_json=spec_json,
+                    callback_secret_name=callback_secret_name,
+                ),
+            )
+        except Exception:
+            self.delete_callback_secret(run_id=run_id)
+            raise
+
+    def delete_callback_secret(self, *, run_id: str) -> None:
+        try:
+            self.core_api.delete_namespaced_secret(
+                name=f"operational-evaluation-callback-{run_id}", namespace=self.namespace
+            )
+        except ApiException as error:
+            if error.status != 404:
+                raise
 
     def manifest_for(
         self, *, run_id: str, spec_json: dict[str, object], callback_secret_name: str

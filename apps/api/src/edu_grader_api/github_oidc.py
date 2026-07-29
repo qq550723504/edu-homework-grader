@@ -9,7 +9,6 @@ from jwt.exceptions import InvalidTokenError, PyJWKClientError
 
 from .settings import Settings
 
-
 GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 GITHUB_OIDC_JWKS_URL = f"{GITHUB_OIDC_ISSUER}/.well-known/jwks"
 OPERATIONAL_EVALUATION_ENVIRONMENT = "ai-evaluation-operational"

@@ -14,7 +14,6 @@ from .ai_evaluation_operational import (
     signed_operational_evaluation_evidence,
 )
 
-
 _FORBIDDEN_KEYS = frozenset({"records", "candidate_json", "prompt"})
 
 
@@ -66,15 +65,15 @@ def run_executor(
             payload={"report": evidence},
         )
         return 0
-    except Exception:
+    except Exception:  # noqa: BLE001 - report a bounded failure without leaking evaluation input
         try:
             post_completion(
                 callback_url=callback_url,
                 callback_token=callback_token,
                 payload={"failure_code": "evaluation_execution_failed"},
             )
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 - the original executor failure remains the job outcome
+            return 1
         return 1
 
 

@@ -71,6 +71,7 @@ function ConvertTo-ReleaseImagesFromDigests {
         Web            = "$($ManagedRepositories.Web)@$($digests.web)"
         LanguageTool   = "$($ManagedRepositories.LanguageTool)@$($digests.languagetool)"
         ExpiryCronJob  = "$($ManagedRepositories.Api)@$($digests.api)"
+        OperationalEvaluationRetentionCronJob = "$($ManagedRepositories.Api)@$($digests.api)"
     }
 }
 
@@ -187,7 +188,7 @@ function Get-ManagedImages {
 
     $cronJobOutput = @(
         Invoke-NativeTool -Tool 'kubectl' -Arguments @(
-            'get', 'cronjob', 'student-activation-expiry',
+            'get', 'cronjob', 'student-activation-expiry', 'operational-evaluation-retention',
             '--output', 'json', '--namespace', $Namespace
         )
     )
@@ -218,8 +219,13 @@ function Get-ManagedImages {
             -WorkloadName 'languagetool' `
             -ContainerName 'languagetool'
         ExpiryCronJob = Get-NamedWorkloadImage `
-            -Workloads @($cronJobDocument) `
+            -Workloads @($cronJobDocument.items) `
             -WorkloadName 'student-activation-expiry' `
+            -ContainerName 'expire' `
+        -CronJob
+        OperationalEvaluationRetentionCronJob = Get-NamedWorkloadImage `
+            -Workloads @($cronJobDocument.items) `
+            -WorkloadName 'operational-evaluation-retention' `
             -ContainerName 'expire' `
             -CronJob
     }
@@ -264,6 +270,38 @@ $Spec
     Set-Content -LiteralPath $Path -Value $content -NoNewline
 }
 
+function Add-OperationalEvaluationExecutorImagePatch {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Image,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Destination
+    )
+
+    Assert-CapturedImage -Image $Image -Name 'OperationalEvaluationExecutor'
+    $executorImage = ConvertTo-YamlString $Image
+    New-ExactImagePatch `
+        -Path (Join-Path $Destination 'managed-operational-evaluation-executor-image.yaml') `
+        -ApiVersion 'apps/v1' `
+        -Kind 'Deployment' `
+        -Name 'api' `
+        -Spec @"
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          env:
+            - name: OPERATIONAL_EVALUATION_EXECUTOR_IMAGE
+              value: $executorImage
+"@
+
+    Add-Content `
+        -LiteralPath (Join-Path $Destination 'kustomization.yaml') `
+        -Value "`n  - path: managed-operational-evaluation-executor-image.yaml"
+}
+
 function Add-ExactImagePatches {
     param(
         [Parameter(Mandatory = $true)]
@@ -273,7 +311,7 @@ function Add-ExactImagePatches {
         [string]$Destination
     )
 
-    $requiredKeys = @('ApiInit', 'Api', 'Grader', 'Web', 'LanguageTool', 'ExpiryCronJob')
+    $requiredKeys = @('ApiInit', 'Api', 'Grader', 'Web', 'LanguageTool', 'ExpiryCronJob', 'OperationalEvaluationRetentionCronJob')
     foreach ($key in $requiredKeys) {
         if (-not $Images.Contains($key)) {
             throw "Exact rollback image map is missing $key."
@@ -298,6 +336,9 @@ spec:
       containers:
         - name: api
           image: $api
+          env:
+            - name: OPERATIONAL_EVALUATION_EXECUTOR_IMAGE
+              value: $api
 "@
 
     foreach ($deployment in @(
@@ -338,6 +379,23 @@ spec:
               image: $cronImage
 "@
 
+    $operationalEvaluationRetentionImage = ConvertTo-YamlString ([string]$Images.OperationalEvaluationRetentionCronJob)
+    New-ExactImagePatch `
+        -Path (Join-Path $Destination 'managed-operational-evaluation-retention-image.yaml') `
+        -ApiVersion 'batch/v1' `
+        -Kind 'CronJob' `
+        -Name 'operational-evaluation-retention' `
+        -Spec @"
+spec:
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: expire
+              image: $operationalEvaluationRetentionImage
+"@
+
     $kustomizationPath = Join-Path $Destination 'kustomization.yaml'
     $patchConfiguration = @'
   - path: managed-api-images.yaml
@@ -345,8 +403,9 @@ spec:
   - path: managed-web-image.yaml
   - path: managed-languagetool-image.yaml
   - path: managed-expiry-image.yaml
+  - path: managed-operational-evaluation-retention-image.yaml
 '@
-    Add-Content -LiteralPath $kustomizationPath -Value $patchConfiguration
+    Add-Content -LiteralPath $kustomizationPath -Value ("`n" + $patchConfiguration)
 }
 
 function Initialize-ReleaseKustomization {
@@ -365,6 +424,7 @@ labels:
 resources:
   - application.yaml
   - student-activation-expiry.yaml
+  - operational-evaluation.yaml
 patches:
   - path: managed-keycloak-exclusion.yaml
 '@
@@ -405,6 +465,9 @@ function New-RenderedRelease {
     Push-Location $Destination
     try {
         if ($usingSha) {
+            Add-OperationalEvaluationExecutorImagePatch `
+                -Image "$($ManagedRepositories.Api):$Sha" `
+                -Destination $Destination
             foreach ($repository in $ManagedRepositories.Values) {
                 $replacement = "$repository=${repository}:$Sha"
                 $null = Invoke-NativeTool `
@@ -414,6 +477,9 @@ function New-RenderedRelease {
         }
         else {
             Add-ExactImagePatches -Images $ExactImages -Destination $Destination
+            Add-OperationalEvaluationExecutorImagePatch `
+                -Image ([string]$ExactImages.Api) `
+                -Destination $Destination
         }
 
         $renderedOutput = @(

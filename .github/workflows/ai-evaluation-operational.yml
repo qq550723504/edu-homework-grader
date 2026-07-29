@@ -17,59 +17,94 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: ai-evaluation-operational
+    permissions:
+      contents: read
+      id-token: write
     env:
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      OPERATIONAL_EVALUATION_SPEC_JSON: ${{ secrets.OPERATIONAL_EVALUATION_SPEC_JSON || vars.OPERATIONAL_EVALUATION_SPEC_JSON }}
+      OPERATIONAL_EVALUATION_API_URL: ${{ vars.OPERATIONAL_EVALUATION_API_URL }}
+      OPERATIONAL_EVALUATION_AUDIENCE: ${{ vars.OPERATIONAL_EVALUATION_AUDIENCE }}
+      OPERATIONAL_EVALUATION_SPEC_JSON: ${{ vars.OPERATIONAL_EVALUATION_SPEC_JSON }}
     steps:
-      - name: Check out protected evaluation tooling
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: main
-          fetch-depth: 1
-
-      - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
-        with:
-          python-version: "3.13"
-          cache: pip
-
-      - name: Validate protected configuration
+      - name: Start and await in-cluster operational evaluation
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "${DATABASE_URL:-}" ]]; then
-            echo "DATABASE_URL is not configured in ai-evaluation-operational." >&2
+          if [[ -z "${OPERATIONAL_EVALUATION_API_URL:-}" ]]; then
+            echo "OPERATIONAL_EVALUATION_API_URL is not configured." >&2
+            exit 1
+          fi
+          if [[ -z "${OPERATIONAL_EVALUATION_AUDIENCE:-}" ]]; then
+            echo "OPERATIONAL_EVALUATION_AUDIENCE is not configured." >&2
             exit 1
           fi
           if [[ -z "${OPERATIONAL_EVALUATION_SPEC_JSON:-}" ]]; then
             echo "OPERATIONAL_EVALUATION_SPEC_JSON is not configured." >&2
             exit 1
           fi
-          mkdir -p artifacts/ai-evaluation-operational
-          printf '%s' "$OPERATIONAL_EVALUATION_SPEC_JSON" \
-            > "$RUNNER_TEMP/operational-evaluation-spec.json"
-
-      - name: Install Python packages
-        run: make install-python
-
-      - name: Export facts and compare explicit versions
-        env:
-          EVALUATION_EVIDENCE_HMAC_KEY: ${{ secrets.EVALUATION_EVIDENCE_HMAC_KEY }}
-        run: |
-          if [[ -z "${EVALUATION_EVIDENCE_HMAC_KEY:-}" ]]; then
-            echo "EVALUATION_EVIDENCE_HMAC_KEY is not configured in ai-evaluation-operational." >&2
+          if ! jq -e . >/dev/null <<<"$OPERATIONAL_EVALUATION_SPEC_JSON"; then
+            echo "OPERATIONAL_EVALUATION_SPEC_JSON must be valid JSON." >&2
             exit 1
           fi
-          python -m edu_grader_api.services.ai_evaluation_operational \
-            "$RUNNER_TEMP/operational-evaluation-spec.json" \
-            artifacts/ai-evaluation-operational/report \
-            --evidence-hmac-key-env EVALUATION_EVIDENCE_HMAC_KEY
+
+          oidc_token() {
+            local audience
+            audience="$(jq -rn --arg value "$OPERATIONAL_EVALUATION_AUDIENCE" '$value | @uri')"
+            curl --fail --silent --show-error \
+              -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience}" | jq -er .value
+          }
+
+          api_request() {
+            local method="$1"
+            local url="$2"
+            shift 2
+            curl --fail --silent --show-error \
+              -X "$method" \
+              -H "Authorization: Bearer $(oidc_token)" \
+              "$url" "$@"
+          }
+
+          mkdir -p artifacts/ai-evaluation-operational
+          start_payload="$(jq -cn --argjson spec "$OPERATIONAL_EVALUATION_SPEC_JSON" '{spec: $spec}')"
+          api_request POST "$OPERATIONAL_EVALUATION_API_URL" \
+            -H 'Content-Type: application/json' \
+            --data-binary "$start_payload" \
+            > "$RUNNER_TEMP/operational-evaluation-start.json"
+          run_id="$(jq -er .id "$RUNNER_TEMP/operational-evaluation-start.json")"
+
+          deadline=$((SECONDS + 900))
+          while (( SECONDS < deadline )); do
+            api_request GET "$OPERATIONAL_EVALUATION_API_URL/$run_id" \
+              > "$RUNNER_TEMP/operational-evaluation-status.json"
+            run_status="$(jq -er .status "$RUNNER_TEMP/operational-evaluation-status.json")"
+            case "$run_status" in
+              succeeded)
+                api_request GET "$OPERATIONAL_EVALUATION_API_URL/$run_id/report" \
+                  > artifacts/ai-evaluation-operational/report.json
+                exit 0
+                ;;
+              failed)
+                echo "Operational evaluation failed in the in-cluster executor." >&2
+                exit 1
+                ;;
+              pending|running)
+                sleep 5
+                ;;
+              *)
+                echo "Unexpected operational evaluation status: $run_status" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          echo "Timed out waiting for in-cluster operational evaluation." >&2
+          exit 1
 
       - name: Upload operational evaluation evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: operational-ai-evaluation-${{ github.run_id }}
-          path: artifacts/ai-evaluation-operational/report
+          path: artifacts/ai-evaluation-operational/report.json
           if-no-files-found: warn
           retention-days: 30

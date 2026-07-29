@@ -337,16 +337,18 @@ def test_live_generator_acceptance_resolves_manual_refs_to_full_commit_shas() ->
 def test_operational_evaluation_executes_only_trusted_main_code() -> None:
     workflow = OPERATIONAL_AI_EVALUATION_WORKFLOW_PATH.read_text(encoding="utf-8")
     evaluation_job = workflow_data(OPERATIONAL_AI_EVALUATION_WORKFLOW_PATH)["jobs"]["evaluate"]
-    signing_step = named_step(evaluation_job, "Export facts and compare explicit versions")
 
     assert "target_ref" not in workflow
-    assert "ref: main" in workflow
     assert "if: github.ref == 'refs/heads/main'" in workflow
-    assert "EVALUATION_EVIDENCE_HMAC_KEY" not in evaluation_job["env"]
-    assert (
-        signing_step["env"]["EVALUATION_EVIDENCE_HMAC_KEY"]
-        == "${{ secrets.EVALUATION_EVIDENCE_HMAC_KEY }}"
-    )
+    assert "actions/checkout" not in workflow
+    assert evaluation_job["permissions"]["id-token"] == "write"
+    assert "DATABASE_URL" not in workflow
+    assert "EVALUATION_EVIDENCE_HMAC_KEY" not in workflow
+    assert "secrets.OPERATIONAL_EVALUATION_SPEC_JSON" not in workflow
+    assert "ACTIONS_ID_TOKEN_REQUEST_URL" in workflow
+    assert "Authorization: Bearer" in workflow
+    assert "OPERATIONAL_EVALUATION_API_URL" in workflow
+    assert "Upload operational evaluation evidence" in workflow
 
 
 def test_manual_rollback_passes_github_environment_sha_to_powershell() -> None:
