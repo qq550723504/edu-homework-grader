@@ -1,11 +1,13 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from queue import Queue
 from threading import Event, Thread
 from uuid import UUID, uuid4
 
 import pytest
+from edu_generator.prompt_templates import resolve_prompt_template
+from edu_generator.providers import FakeGenerationProvider
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event, func, select
@@ -13,7 +15,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from edu_generator.providers import FakeGenerationProvider
+import edu_grader_api.routers.ai_question_generation as generation_router
+import edu_grader_api.routers.ai_question_validation as validation_router
 from edu_grader_api.auth import (
     CurrentPrincipal,
     VerifiedIdentity,
@@ -33,19 +36,20 @@ from edu_grader_api.models import (
     CurriculumProfileStatus,
     CurriculumRevisionStatus,
     CurriculumSourceRecord,
+    GeneratedQuestionDraft,
+    GeneratedQuestionDraftRevision,
+    GeneratedQuestionReviewDecision,
+    GenerationBatchAcceptance,
     GenerationControlState,
     GenerationDefaultChangeRequest,
     GenerationDefaultChangeStatus,
     GenerationDefaultConfiguration,
     GenerationDefaultSelection,
+    GenerationGovernanceEntry,
     GenerationGovernanceTargetType,
     GenerationJob,
-    GenerationBatchAcceptance,
-    GenerationGovernanceEntry,
     GenerationJobStatus,
-    GeneratedQuestionDraft,
-    GeneratedQuestionDraftRevision,
-    GeneratedQuestionReviewDecision,
+    GenerationQuotaUsage,
     GenerationValidationRun,
     QuestionVersion,
     Role,
@@ -55,13 +59,9 @@ from edu_grader_api.models import (
     ValidationFindingSeverity,
     ValidationRunStatus,
 )
-from edu_grader_api.settings import settings
-import edu_grader_api.routers.ai_question_validation as validation_router
-import edu_grader_api.routers.ai_question_generation as generation_router
+from edu_grader_api.services import question_verification
 from edu_grader_api.services.generation import GENERATION_PROMPT_VERSION
-import edu_grader_api.services.question_verification as question_verification
-from edu_generator.prompt_templates import resolve_prompt_template
-
+from edu_grader_api.settings import settings
 
 ISSUER = "http://localhost:8080/realms/edu-grader"
 
@@ -101,7 +101,7 @@ def session() -> Session:
         evaluation_record_digest="c" * 64,
         evaluation_run_id="run",
         evaluation_spec_id="spec",
-        evaluation_watermark=datetime.now(tz=timezone.utc),
+        evaluation_watermark=datetime.now(tz=UTC),
         evaluation_summary_json={},
         submitted_by_user_id=uuid4(),
     )
@@ -1082,6 +1082,35 @@ def test_generation_regeneration_preserves_original_job_snapshot(
         regenerated.policy_version,
         regenerated.prompt_version,
     ) == expected_snapshot
+
+
+def test_regeneration_rejects_a_stale_prompt_snapshot_before_reserving_quota(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client, teacher, revision, idempotency_key="stale-regeneration-source"
+    )
+    source = session.get(GenerationJob, UUID(str(created["id"])))
+    assert source is not None
+    source.prompt_template_fingerprint = "0" * 64
+    session.commit()
+    draft = fetch_only_draft(client, headers, created["id"])
+    usage_before = session.scalar(select(GenerationQuotaUsage))
+    assert usage_before is not None
+    used_count_before = usage_before.used_count
+
+    response = client.post(
+        f"/v1/ai-generated-questions/{draft['id']}/regenerate",
+        headers=headers | {"Idempotency-Key": "stale-regeneration"},
+        json={},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": {"code": "generation_request_rejected"}}
+    usage_after = session.scalar(select(GenerationQuotaUsage))
+    assert usage_after is not None
+    assert usage_after.used_count == used_count_before
 
 
 def test_generation_regeneration_inherits_ordinal_difficulty_plan_and_snapshot(

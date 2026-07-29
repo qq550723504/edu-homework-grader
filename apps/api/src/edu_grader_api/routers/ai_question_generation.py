@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
-from hashlib import sha256
 import json
+from datetime import UTC, date, datetime
+from hashlib import sha256
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -33,8 +33,8 @@ from ..models import (
     User,
 )
 from ..services.ai_question_review import (
-    ReviewAccessError,
     BatchAcceptanceItemInput,
+    ReviewAccessError,
     ReviewConflictError,
     ReviewStateError,
     accept_review_batch,
@@ -43,9 +43,11 @@ from ..services.ai_question_review import (
     recover_review_batch,
     reject_review_draft,
 )
+from ..services.budget_aware_verification import run_budget_aware_candidate_verification
 from ..services.generation import (
     GenerationJobRequest,
     GenerationServiceError,
+    assert_generation_snapshot_prompt_current,
     cancel_generation_job,
     create_or_get_job,
     derive_generation_plan,
@@ -53,11 +55,9 @@ from ..services.generation import (
     run_generation_job,
     snapshot_for_regeneration,
 )
-from ..services.budget_aware_verification import run_budget_aware_candidate_verification
-from ..services.grader import HttpGraderClient
 from ..services.generation_provider_registry import generation_provider
+from ..services.grader import HttpGraderClient
 from ..settings import settings
-
 
 router = APIRouter(prefix="/v1/ai-question-generation", tags=["AI question generation"])
 draft_router = APIRouter(prefix="/v1/ai-generated-questions", tags=["AI question generation"])
@@ -389,6 +389,7 @@ def regenerate_draft_route(
         snapshot = snapshot_for_regeneration(session, original)
         reserved = False
         if existing is None:
+            assert_generation_snapshot_prompt_current(snapshot, [source_item])
             reserved = _enforce_generation_quota(
                 session,
                 actor=actor,
@@ -820,7 +821,7 @@ def _generation_count_since_utc_midnight(session: Session, *, tenant_id: UUID) -
     )
     if usage is not None:
         return usage.used_count
-    today = datetime.combine(quota_day, datetime.min.time(), tzinfo=timezone.utc)
+    today = datetime.combine(quota_day, datetime.min.time(), tzinfo=UTC)
     used = session.scalar(
         select(func.coalesce(func.sum(GenerationJob.requested_count), 0)).where(
             GenerationJob.tenant_id == tenant_id,
@@ -907,7 +908,7 @@ def _dialect_insert(session: Session, model: object) -> object:
 
 
 def _utc_today() -> date:
-    return datetime.now(timezone.utc).date()
+    return datetime.now(UTC).date()
 
 
 def _job_payload(job: GenerationJob) -> dict[str, object]:

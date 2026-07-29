@@ -42,14 +42,14 @@ from ..models import (
     utc_now,
 )
 from ..policies import validate_policy
+from ..services.generation_default_governance import (
+    GenerationDefaultGovernanceError,
+    resolve_active_default,
+)
 from ..services.generation_governance import (
     GenerationGovernanceError,
     assert_generation_configured_components_allowed,
     assert_generation_pipeline_allowed,
-)
-from ..services.generation_default_governance import (
-    GenerationDefaultGovernanceError,
-    resolve_active_default,
 )
 from .question_fingerprints import fingerprint_prompt
 
@@ -260,6 +260,22 @@ def snapshot_for_regeneration(session: Session, job: GenerationJob) -> Generatio
     return _snapshot_from_active_revision(session, revision)
 
 
+def assert_generation_snapshot_prompt_current(
+    snapshot: GenerationJobSnapshot, items: Sequence[GenerationPlanItem]
+) -> PromptTemplate:
+    """Reject a persisted snapshot whose Prompt no longer resolves identically."""
+
+    try:
+        template = resolve_prompt_template(
+            snapshot.prompt_version, [item.question_type for item in items]
+        )
+    except ValueError as exc:
+        raise GenerationServiceError("prompt_template_unavailable") from exc
+    if template.fingerprint != snapshot.prompt_template_fingerprint:
+        raise GenerationServiceError("prompt_template_changed")
+    return template
+
+
 def run_generation_job(
     session: Session,
     *,
@@ -301,19 +317,12 @@ def run_generation_job(
 
     request = _provider_request(session, job, teacher_constraint=teacher_constraint)
     try:
-        template = resolve_prompt_template(
-            request.prompt_version, [item.question_type for item in request.items]
+        template = assert_generation_snapshot_prompt_current(
+            GenerationJobSnapshot.from_job(job), request.items
         )
-    except ValueError:
+    except GenerationServiceError as exc:
         job.status = GenerationJobStatus.FAILED
-        job.failure_code = "prompt_template_unavailable"
-        job.failed_count = max(job.requested_count - job.succeeded_count, 0)
-        job.finished_at = utc_now()
-        session.flush()
-        return job
-    if template.fingerprint != job.prompt_template_fingerprint:
-        job.status = GenerationJobStatus.FAILED
-        job.failure_code = "prompt_template_changed"
+        job.failure_code = str(exc)
         job.failed_count = max(job.requested_count - job.succeeded_count, 0)
         job.finished_at = utc_now()
         session.flush()
