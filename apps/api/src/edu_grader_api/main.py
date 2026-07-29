@@ -67,6 +67,19 @@ def health() -> dict[str, str]:
     return {"status": "ok", "service": "api", "environment": settings.app_env}
 
 
+@app.get("/infrastructure-ready", tags=["system"], response_model=None)
+def infrastructure_ready() -> dict[str, str] | JSONResponse:
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except Exception:
+        logger.warning("infrastructure readiness check failed", extra={"component": "database"})
+        return JSONResponse(
+            status_code=503, content={"status": "degraded", "database": "unavailable"}
+        )
+    return {"status": "ready", "database": "ready"}
+
+
 @app.get("/ready", tags=["system"], response_model=None)
 def ready() -> dict[str, str] | JSONResponse:
     try:
