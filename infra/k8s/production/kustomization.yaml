@@ -2,7 +2,7 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: edu-homework-grader
 labels:
-  - includeSelectors: true
+  - includeSelectors: false
     pairs:
       app.kubernetes.io/part-of: edu-homework-grader
 resources:
@@ -11,6 +11,7 @@ resources:
   - datastore.yaml
   - application.yaml
   - ingress.yaml
+  - postgres-backup.yaml
   - student-activation-expiry.yaml
   - keycloak-student-provisioner-sync.yaml
 configMapGenerator:

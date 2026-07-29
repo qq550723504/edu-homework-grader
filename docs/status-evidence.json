@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "status_as_of": "2026-07-28",
-  "evidence_base_commit": "6a15843c21fd7191efd780e0708245a7363617d5",
+  "status_as_of": "2026-07-29",
+  "evidence_base_commit": "c643ff47e116e5b4a029a50f3376413ff4c2d253",
   "latest_full_ci": {
     "tested_head": "6a15843c21fd7191efd780e0708245a7363617d5",
     "workflow": "CI",
@@ -79,7 +79,7 @@
     "repository_ci_verified": true,
     "release_environment_full_stack_verified": false,
     "school_pilot_environment_deployed": false,
-    "backup_restore_drill_verified": false,
+    "backup_restore_drill_verified": true,
     "production_live": false
   },
   "open_release_blockers": [

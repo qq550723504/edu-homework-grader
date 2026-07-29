@@ -1,9 +1,9 @@
-# 项目状态（2026-07-28）
+# 项目状态（2026-07-29）
 
 机器可读证据见 [`status-evidence.json`](status-evidence.json)。本页的证据基线提交为：
 
 ```text
-6a15843c21fd7191efd780e0708245a7363617d5
+c643ff47e116e5b4a029a50f3376413ff4c2d253
 ```
 
 ## 状态口径
@@ -31,7 +31,7 @@
 | AI 出题 | 课程约束、真实 Provider、`generator-v1`、候选验证、编辑/重验、拒绝/重生成、原子批量接受和安全转草稿已实现；生产验证入口已加入年级复杂度、Objective prerequisite、数学语义和 `verification-capacity-v1` 载荷预检；发布前 RC 已签发两轮真实服务证据 | 未经审核直接发布仍禁止；正式阈值、生产报告和统一发布环境验收仍缺 |
 | AI 治理 | 全局/租户 `active`、`canary`、`paused`、`retired`、Kill Switch、权限和审计基础已实现 | #43 仍需默认版本晋级/回滚、预算、Provider 合规、版权下架和事故手册 |
 | AI 评估 | 离线 fail-closed 门禁和生产形态只读导出/显式版本比较已实现 | #99 需首次真实只读数据库报告；#42 需教师黄金集、最终阈值、线上反馈和 shadow/canary 证据 |
-| 部署 | Compose、Kubernetes 清单和 SHA 镜像发布工作流存在 | 清单存在不等于环境已部署；#33 的实际 rollout、监控、备份恢复和回滚尚未验收 |
+| 部署 | Compose、Kubernetes 清单、SHA 镜像发布工作流，以及每周 COS 备份和隔离恢复自动化已实现；试点 PostgreSQL 已完成真实迁移、COS 备份和隔离恢复演练 | #33 的实际应用 rollout、监控、容量、回滚和联合签署尚未验收 |
 
 ## 可验证的仓库证据
 
