@@ -160,17 +160,39 @@ SELECT 'grading_runs', count(*) FROM grading_runs;
 SELECT 'student_guardian_consents', count(*) FROM student_guardian_consents;
 SELECT 'audit_logs', count(*) FROM audit_logs;
 "@
+    $expectedValidationLabels = @(
+        'question_versions',
+        'assignments',
+        'student_attempts',
+        'grading_runs',
+        'student_guardian_consents',
+        'audit_logs'
+    )
     $validation = Invoke-Kubectl -Arguments @(
         'exec', '--namespace', $Namespace, $runId, '--',
         'psql', '--host=127.0.0.1', '--username=edu_recovery', '--dbname=edu_recovery',
-        '--tuples-only', '--no-align', '--command', $validationSql
+        '--set', 'ON_ERROR_STOP=1', '--tuples-only', '--no-align', '--command', $validationSql
     )
 
-    Write-Information "Recovery drill completed for backup $BackupTimestamp using isolated pod $runId."
+    $validationResults = @{}
     foreach ($line in $validation) {
         if ($line -match '^(question_versions|assignments|student_attempts|grading_runs|student_guardian_consents|audit_logs)\|\d+$') {
-            Write-Information $line
+            $label = ($line -split '\|', 2)[0]
+            if ($validationResults.ContainsKey($label)) {
+                throw "Recovery validation returned duplicate result for $label."
+            }
+            $validationResults[$label] = $line
         }
+    }
+    foreach ($label in $expectedValidationLabels) {
+        if (-not $validationResults.ContainsKey($label)) {
+            throw "Recovery validation missing expected validation result for $label."
+        }
+    }
+
+    Write-Information "Recovery drill completed for backup $BackupTimestamp using isolated pod $runId."
+    foreach ($label in $expectedValidationLabels) {
+        Write-Information $validationResults[$label]
     }
 }
 finally {

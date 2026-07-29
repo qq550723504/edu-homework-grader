@@ -309,7 +309,7 @@ BeforeEach {
         $images | Should -Contain $languageToolImage
     }
 
-    It 'preserves existing selector labels and force-adopts legacy image ownership' {
+    It 'keeps shared ownership labels out of immutable deployment selectors' {
         & $scriptPath -ImageSha $validSha -SkipPublicHealthCheck
 
         @(
@@ -322,12 +322,15 @@ BeforeEach {
                 -Content $global:DeployProductionTestState.AppliedManifests[0]
         )
         foreach ($deployment in @($resources | Where-Object { $_.Kind -eq 'Deployment' })) {
-            $deployment.Content | Should -Match (
-                '(?ms)^  selector:\s*\r?\n' +
-                '\s{4}matchLabels:\s*\r?\n' +
-                '\s{6}app\.kubernetes\.io/name:\s*' + [regex]::Escape($deployment.Name) + '\s*\r?\n' +
-                '\s{6}app\.kubernetes\.io/part-of:\s*edu-homework-grader\s*$'
+            $selector = [regex]::Match(
+                $deployment.Content,
+                '(?ms)^  selector:\s*\r?\n(?<body>.*?)(?=^  template:)'
+            ).Groups['body'].Value
+
+            $selector | Should -Match (
+                'app\.kubernetes\.io/name:\s*' + [regex]::Escape($deployment.Name)
             )
+            $selector | Should -Not -Match 'app\.kubernetes\.io/part-of:'
         }
     }
 

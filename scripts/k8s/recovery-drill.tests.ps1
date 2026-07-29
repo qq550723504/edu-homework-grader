@@ -42,6 +42,13 @@ Describe 'recovery-drill' {
         $source | Should -Match 'student_guardian_consents'
         $source | Should -Match 'audit_logs'
     }
+
+    It 'fails when validation SQL fails or omits an expected table group' {
+        $source = Get-Content -Raw -LiteralPath $scriptPath
+
+        $source | Should -Match "(?s)'psql'.*'--set'.*'ON_ERROR_STOP=1'"
+        $source | Should -Match 'expected validation result for \$label'
+    }
 }
 
 Describe 'PostgreSQL COS backup documentation' {
