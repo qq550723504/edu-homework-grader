@@ -32,6 +32,34 @@ function New-RandomSecret {
     return [Convert]::ToBase64String($buffer)
 }
 
+function Test-ImmutableOpenAiModelId {
+    param([string]$Model)
+
+    if ($Model -in @('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna')) {
+        return $true
+    }
+    if ($Model -match '^ft:[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9_-]*$') {
+        return $true
+    }
+    $match = [regex]::Match(
+        $Model,
+        '^[A-Za-z0-9][A-Za-z0-9._-]*-(?<snapshot>\d{4}-\d{2}-\d{2}|\d{4})$'
+    )
+    if (-not $match.Success) {
+        return $false
+    }
+    $snapshot = $match.Groups['snapshot'].Value
+    $format = if ($snapshot.Length -eq 4) { 'MMdd' } else { 'yyyy-MM-dd' }
+    $parsed = [DateTime]::MinValue
+    return [DateTime]::TryParseExact(
+        $snapshot,
+        $format,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::None,
+        [ref]$parsed
+    )
+}
+
 $issuer = [Uri]$OidcIssuer
 if ($issuer.Scheme -ne 'https' -or $issuer.Host -in @('localhost', '127.0.0.1', '::1')) {
     throw 'OIDC issuer must use a non-local HTTPS URL in production.'
@@ -51,8 +79,14 @@ if ([Text.Encoding]::UTF8.GetByteCount($EvaluationEvidenceHmacKey) -lt 32) {
 if ($GenerationProvider -ne 'openai') {
     throw 'Generation provider must be openai in production.'
 }
+if ([string]::IsNullOrWhiteSpace($OpenAiApiKey)) {
+    throw 'OpenAI API key is required in production.'
+}
 if ([string]::IsNullOrWhiteSpace($GeneratorOpenAiModel)) {
     throw 'Generator OpenAI model is required in production.'
+}
+if (-not (Test-ImmutableOpenAiModelId $GeneratorOpenAiModel)) {
+    throw 'Generator OpenAI model must use an immutable model ID in production.'
 }
 $generatorOpenAiBaseUri = [Uri]$GeneratorOpenAiBaseUrl
 if ($generatorOpenAiBaseUri.Scheme -ne 'https' -or $generatorOpenAiBaseUri.Host -in @('localhost', '127.0.0.1', '::1')) {
@@ -60,6 +94,15 @@ if ($generatorOpenAiBaseUri.Scheme -ne 'https' -or $generatorOpenAiBaseUri.Host 
 }
 if ([string]::IsNullOrWhiteSpace($GeneratorProviderAllowedHosts)) {
     throw 'Generator provider allowed hosts are required in production.'
+}
+$allowedGeneratorProviderHosts = @(
+    $GeneratorProviderAllowedHosts.Split(',') |
+        ForEach-Object { $_.Trim().ToLowerInvariant() } |
+        Where-Object { $_ } |
+        Select-Object -Unique
+)
+if ($generatorOpenAiBaseUri.Host.ToLowerInvariant() -notin $allowedGeneratorProviderHosts) {
+    throw 'Generator provider allowed hosts must include the OpenAI base URL host.'
 }
 
 if (-not $PSCmdlet.ShouldProcess("namespace/$Namespace secret/$SecretName", 'create production runtime Secret')) {
