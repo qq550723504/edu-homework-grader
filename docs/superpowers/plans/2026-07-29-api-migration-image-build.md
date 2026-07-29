@@ -6,6 +6,8 @@
 
 **Architecture:** A dedicated manual GitHub Actions workflow validates the source SHA, checks out only that revision, builds the API Dockerfile, pushes it to GHCR, and returns the digest as a one-day artifact. It does not share a job or deployment path with the production release workflow.
 
+**Bootstrap:** Until the workflow reaches the default branch, a same-repository draft PR labeled `build-migration-image` invokes the same build job using the PR head SHA. Fork PRs and all other labels are rejected by the job condition.
+
 **Tech Stack:** GitHub Actions, Docker Buildx, GHCR, Pester source-contract tests.
 
 ## Global Constraints
@@ -14,6 +16,7 @@
 - Build and publish only `ghcr.io/${{ github.repository_owner }}/edu-homework-grader-api`.
 - Tag is the validated 40-character lower-case source SHA; operators use only the emitted `@sha256` reference.
 - No Kubernetes credentials, environment, deployment script, or other service Dockerfile is allowed.
+- The PR bootstrap is restricted to `pull_request` `labeled` events whose label is `build-migration-image` and whose head repository equals the current repository.
 
 ---
 

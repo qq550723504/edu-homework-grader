@@ -7,6 +7,8 @@ on:
         description: Immutable 40-character source commit SHA containing the Alembic history.
         required: true
         type: string
+  pull_request:
+    types: [labeled]
 
 permissions:
   contents: read
@@ -14,14 +16,25 @@ permissions:
 
 jobs:
   build:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.action == 'labeled' &&
+       github.event.label.name == 'build-migration-image' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
-      - name: Validate source SHA
+      - name: Resolve and validate source SHA
         shell: bash
         env:
-          SOURCE_SHA: ${{ inputs.source_sha }}
+          WORKFLOW_SOURCE_SHA: ${{ inputs.source_sha }}
+          PULL_REQUEST_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          SOURCE_SHA="$WORKFLOW_SOURCE_SHA"
+          if [[ "$GITHUB_EVENT_NAME" == 'pull_request' ]]; then
+            SOURCE_SHA="$PULL_REQUEST_SOURCE_SHA"
+          fi
           if [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            printf 'SOURCE_SHA=%s\n' "$SOURCE_SHA" >> "$GITHUB_ENV"
             exit 0
           fi
           echo 'source_sha must be a 40-character lower-case Git SHA.' >&2
@@ -29,7 +42,7 @@ jobs:
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.SOURCE_SHA }}
 
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
@@ -43,7 +56,7 @@ jobs:
           context: .
           file: apps/api/Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/edu-homework-grader-api:${{ inputs.source_sha }}
+          tags: ghcr.io/${{ github.repository_owner }}/edu-homework-grader-api:${{ env.SOURCE_SHA }}
 
       - name: Record immutable image digest
         shell: bash

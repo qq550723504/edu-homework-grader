@@ -13,6 +13,11 @@ Add one manually dispatched GitHub Actions workflow. It accepts a single
 `apps/api/Dockerfile`, and pushes only
 `ghcr.io/<owner>/edu-homework-grader-api:<source-sha>`.
 
+Before the workflow exists on the default branch, a bootstrap path accepts only
+the `build-migration-image` label event from a same-repository pull request and
+uses that pull request's head SHA. This avoids accepting fork code while keeping
+the production release workflow untouched.
+
 The workflow writes the resulting SHA-256 image digest to its job summary and a
 short-lived artifact. It has `contents: read` and `packages: write` only.
 
