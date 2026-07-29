@@ -14,9 +14,16 @@ from sqlalchemy.orm import Session
 from ..github_oidc import GitHubWorkflowIdentity
 from ..models import OperationalEvaluationRun, OperationalEvaluationRunStatus
 
-
 RETENTION = timedelta(days=30)
 _FORBIDDEN_REPORT_KEYS = frozenset({"records", "candidate_json", "prompt"})
+_RECONCILED_FAILURE_CODES = frozenset(
+    {
+        "evaluation_job_deadline_exceeded",
+        "evaluation_job_failed",
+        "evaluation_job_completed_without_callback",
+        "evaluation_job_missing",
+    }
+)
 
 
 class OperationalEvaluationRunConflict(ValueError):
@@ -119,6 +126,27 @@ def fail_run(
         raise ValueError("operational evaluation callback is invalid")
     if failure_code != "evaluation_execution_failed":
         raise ValueError("operational evaluation callback is invalid")
+    run.status = OperationalEvaluationRunStatus.FAILED
+    run.failure_code = failure_code
+    run.callback_token_digest = None
+    run.completed_at = now
+    run.expires_at = now + RETENTION
+    session.flush()
+    return run
+
+
+def reconcile_run_failure(
+    session: Session, *, run_id: UUID, failure_code: str, now: datetime
+) -> OperationalEvaluationRun:
+    if failure_code not in _RECONCILED_FAILURE_CODES:
+        raise ValueError("operational evaluation reconciliation is invalid")
+    run = session.get(OperationalEvaluationRun, run_id)
+    if run is None or run.status not in {
+        OperationalEvaluationRunStatus.QUEUED,
+        OperationalEvaluationRunStatus.RUNNING,
+    }:
+        raise ValueError("operational evaluation reconciliation is invalid")
+
     run.status = OperationalEvaluationRunStatus.FAILED
     run.failure_code = failure_code
     run.callback_token_digest = None

@@ -1,7 +1,9 @@
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from jwt.exceptions import InvalidTokenError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
@@ -31,16 +33,25 @@ class StaticGitHubVerifier:
         return self.identity
 
 
+class InvalidGitHubVerifier:
+    def verify(self, _token: str) -> GitHubWorkflowIdentity:
+        raise InvalidTokenError("signature verification failed")
+
+
 @dataclass
 class FakeJobLauncher:
     launches: list[tuple[str, str]] = field(default_factory=list)
     deleted_callback_runs: list[str] = field(default_factory=list)
+    terminal_failure_codes: dict[str, str] = field(default_factory=dict)
 
     def launch(self, *, run_id: str, spec_json: dict[str, object], callback_token: str) -> None:
         self.launches.append((run_id, callback_token))
 
     def delete_callback_secret(self, *, run_id: str) -> None:
         self.deleted_callback_runs.append(run_id)
+
+    def terminal_failure_code(self, *, run_id: str) -> str | None:
+        return self.terminal_failure_codes.get(run_id)
 
 
 @pytest.fixture
@@ -88,6 +99,19 @@ def test_valid_github_oidc_request_creates_exactly_one_job(
     assert len(launcher.launches) == 1
 
 
+def test_invalid_github_oidc_token_returns_unauthorized(
+    client: tuple[TestClient, FakeJobLauncher],
+) -> None:
+    http, _launcher = client
+    app.dependency_overrides[get_github_oidc_verifier] = InvalidGitHubVerifier
+
+    response = http.post(
+        "/v1/internal/operational-evaluations", json={"spec": SPEC}, headers=headers()
+    )
+
+    assert response.status_code == 401
+
+
 def test_report_endpoint_returns_only_completed_signed_report(
     client: tuple[TestClient, FakeJobLauncher],
 ) -> None:
@@ -125,6 +149,29 @@ def test_report_endpoint_rejects_incomplete_run(client: tuple[TestClient, FakeJo
     assert response.status_code == 409
 
 
+def test_report_endpoint_rejects_a_different_github_workflow_run(
+    client: tuple[TestClient, FakeJobLauncher],
+) -> None:
+    http, launcher = client
+    created = http.post(
+        "/v1/internal/operational-evaluations", json={"spec": SPEC}, headers=headers()
+    )
+    run_id = created.json()["id"]
+    completed = http.post(
+        f"/v1/internal/operational-evaluations/{run_id}/completion",
+        json={"report": {"promotion_eligible": False}},
+        headers={"X-Operational-Evaluation-Callback": launcher.launches[0][1]},
+    )
+    assert completed.status_code == 204
+    app.dependency_overrides[get_github_oidc_verifier] = lambda: StaticGitHubVerifier(
+        GitHubWorkflowIdentity("123", "456", "different-run", "workflow@main")
+    )
+
+    response = http.get(f"/v1/internal/operational-evaluations/{run_id}/report", headers=headers())
+
+    assert response.status_code == 403
+
+
 def test_executor_failure_marks_run_failed(client: tuple[TestClient, FakeJobLauncher]) -> None:
     http, launcher = client
     created = http.post(
@@ -142,6 +189,23 @@ def test_executor_failure_marks_run_failed(client: tuple[TestClient, FakeJobLaun
     assert completed.status_code == 204
     assert launcher.deleted_callback_runs == [run_id]
     assert status.json()["status"] == "failed"
+
+
+def test_status_reconciles_a_terminal_job_that_never_calls_back(
+    client: tuple[TestClient, FakeJobLauncher],
+) -> None:
+    http, launcher = client
+    created = http.post(
+        "/v1/internal/operational-evaluations", json={"spec": SPEC}, headers=headers()
+    )
+    run_id = created.json()["id"]
+    launcher.terminal_failure_codes[run_id] = "evaluation_job_deadline_exceeded"
+
+    status = http.get(f"/v1/internal/operational-evaluations/{run_id}", headers=headers())
+
+    assert status.status_code == 200
+    assert status.json()["status"] == "failed"
+    assert launcher.deleted_callback_runs == [run_id]
 
 
 def test_launcher_uses_pinned_image_and_never_mounts_application_runtime_secret() -> None:
@@ -165,3 +229,28 @@ def test_launcher_uses_pinned_image_and_never_mounts_application_runtime_secret(
     assert "operational-evaluation-runtime" in serialized
     assert manifest["spec"]["backoffLimit"] == 0
     assert manifest["spec"]["activeDeadlineSeconds"] == 900
+
+
+def test_launcher_classifies_a_deadline_exceeded_job_as_terminal_failure() -> None:
+    batch_api = SimpleNamespace(
+        read_namespaced_job_status=lambda **_kwargs: SimpleNamespace(
+            status=SimpleNamespace(
+                failed=1,
+                conditions=[
+                    SimpleNamespace(type="Failed", status="True", reason="DeadlineExceeded")
+                ],
+            )
+        )
+    )
+    launcher = KubernetesOperationalEvaluationJobLauncher(
+        namespace="edu-homework-grader",
+        image="ghcr.io/qq550723504/edu-homework-grader-api@sha256:" + "a" * 64,
+        runtime_secret_name="operational-evaluation-runtime",
+        callback_base_url="http://api:8000",
+        batch_api=batch_api,
+        core_api=object(),
+    )
+
+    failure_code = launcher.terminal_failure_code(run_id="run-1")
+
+    assert failure_code == "evaluation_job_deadline_exceeded"

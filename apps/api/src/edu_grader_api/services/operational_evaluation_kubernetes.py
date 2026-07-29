@@ -11,6 +11,31 @@ from ..settings import Settings
 _DIGEST_PREFIX = "@sha256:"
 
 
+def terminal_failure_code(*, batch_api: Any, namespace: str, run_id: str) -> str | None:
+    try:
+        job = batch_api.read_namespaced_job_status(
+            name=f"operational-evaluation-{run_id}", namespace=namespace
+        )
+    except ApiException as error:
+        if error.status == 404:
+            return "evaluation_job_missing"
+        raise
+
+    status = job.status
+    for condition in status.conditions or []:
+        if condition.type == "Failed" and condition.status == "True":
+            return (
+                "evaluation_job_deadline_exceeded"
+                if condition.reason == "DeadlineExceeded"
+                else "evaluation_job_failed"
+            )
+    if status.succeeded:
+        return "evaluation_job_completed_without_callback"
+    if status.failed:
+        return "evaluation_job_failed"
+    return None
+
+
 @dataclass
 class KubernetesOperationalEvaluationJobLauncher:
     namespace: str
@@ -70,6 +95,11 @@ class KubernetesOperationalEvaluationJobLauncher:
         except ApiException as error:
             if error.status != 404:
                 raise
+
+    def terminal_failure_code(self, *, run_id: str) -> str | None:
+        return terminal_failure_code(
+            batch_api=self.batch_api, namespace=self.namespace, run_id=run_id
+        )
 
     def manifest_for(
         self, *, run_id: str, spec_json: dict[str, object], callback_secret_name: str

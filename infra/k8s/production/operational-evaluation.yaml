@@ -30,6 +30,9 @@ kind: Role
 metadata:
   name: operational-evaluation-retention
 rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get"]
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["delete"]

@@ -6,6 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jwt.exceptions import InvalidTokenError
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -17,6 +18,7 @@ from ..services.operational_evaluation_runs import (
     complete_run,
     create_run,
     fail_run,
+    reconcile_run_failure,
 )
 from ..settings import settings
 
@@ -29,6 +31,8 @@ class OperationalEvaluationJobLauncher(Protocol):
     def launch(self, *, run_id: str, spec_json: dict[str, object], callback_token: str) -> None: ...
 
     def delete_callback_secret(self, *, run_id: str) -> None: ...
+
+    def terminal_failure_code(self, *, run_id: str) -> str | None: ...
 
 
 class StartOperationalEvaluationRequest(BaseModel):
@@ -62,7 +66,7 @@ def get_github_workflow_identity(
         )
     try:
         return verifier.verify(credentials.credentials)
-    except ValueError:
+    except (InvalidTokenError, ValueError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid GitHub OIDC token"
         ) from None
@@ -79,6 +83,7 @@ def _run_for_identity(
     if (
         run.repository_id != identity.repository_id
         or run.repository_owner_id != identity.owner_id
+        or run.github_run_id != identity.run_id
         or run.workflow_ref != identity.workflow_ref
     ):
         raise HTTPException(
@@ -119,8 +124,25 @@ def operational_evaluation_status(
     run_id: UUID,
     session: Annotated[Session, Depends(get_session)],
     identity: Annotated[GitHubWorkflowIdentity, Depends(get_github_workflow_identity)],
+    launcher: Annotated[
+        OperationalEvaluationJobLauncher, Depends(get_operational_evaluation_job_launcher)
+    ],
 ) -> dict[str, str]:
     run = _run_for_identity(session, run_id, identity)
+    if run.status is OperationalEvaluationRunStatus.RUNNING:
+        failure_code = launcher.terminal_failure_code(run_id=str(run.id))
+        if failure_code is not None:
+            run = reconcile_run_failure(
+                session, run_id=run.id, failure_code=failure_code, now=utc_now()
+            )
+            session.commit()
+            try:
+                launcher.delete_callback_secret(run_id=str(run.id))
+            except Exception:
+                logger.warning(
+                    "operational evaluation reconciled callback Secret cleanup failed",
+                    exc_info=True,
+                )
     return {"id": str(run.id), "status": run.status.value}
 
 
