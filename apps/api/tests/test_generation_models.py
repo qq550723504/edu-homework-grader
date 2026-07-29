@@ -1,12 +1,14 @@
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from types import SimpleNamespace
+
 import pytest
+from edu_generator.contracts import GeneratedCandidate
 from sqlalchemy import create_engine, event
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from edu_generator.contracts import GeneratedCandidate
+import edu_grader_api.models as model_module
 from edu_grader_api.models import (
     Base,
     CurriculumActivityType,
@@ -20,10 +22,10 @@ from edu_grader_api.models import (
     GeneratedQuestionDraft,
     GeneratedQuestionDraftRevision,
     GeneratedQuestionReviewDecision,
-    GenerationValidationRun,
     GenerationAttempt,
     GenerationJob,
     GenerationJobStatus,
+    GenerationValidationRun,
     Role,
     Tenant,
     User,
@@ -44,6 +46,20 @@ def session() -> Session:
     Base.metadata.create_all(engine)
     with Session(engine) as session:
         yield session
+
+
+def test_generation_default_models_define_a_single_global_selection_boundary() -> None:
+    assert hasattr(model_module, "GenerationDefaultConfiguration")
+    assert hasattr(model_module, "GenerationDefaultChangeRequest")
+    assert hasattr(model_module, "GenerationDefaultSelection")
+
+    selection = model_module.GenerationDefaultSelection.__table__
+
+    assert list(selection.primary_key.columns.keys()) == ["scope"]
+    assert any(
+        constraint.name == "ck_generation_default_scope_global"
+        for constraint in selection.constraints
+    )
 
 
 def active_objective_revision_id(session: Session):
@@ -331,6 +347,34 @@ def test_review_evidence_protection_migration_scopes_postgresql_triggers(
     assert "WHEN (OLD.candidate_json::jsonb IS DISTINCT FROM NEW.candidate_json::jsonb)" in sql
     assert "BEFORE UPDATE OR DELETE ON generated_question_drafts" not in sql
     assert "BEFORE UPDATE OR DELETE ON validation_findings" in sql
+
+
+def test_generation_default_configuration_protection_migration_scopes_postgresql_triggers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "0029_protect_generation_default_configurations.py"
+    )
+    spec = spec_from_file_location("migration_0029_default_configurations", migration_path)
+    assert spec is not None and spec.loader is not None
+    migration = module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    statements: list[str] = []
+    monkeypatch.setattr(
+        migration.op,
+        "get_bind",
+        lambda: SimpleNamespace(dialect=SimpleNamespace(name="postgresql")),
+    )
+    monkeypatch.setattr(migration.op, "execute", statements.append)
+
+    migration._install_generation_default_configuration_protection_triggers()
+
+    assert migration.down_revision == "0028_generation_default_governance_hardening"
+    assert len(statements) == 1
+    assert "BEFORE UPDATE OR DELETE ON generation_default_configurations" in statements[0]
 
 
 def test_generation_job_is_unique_per_tenant_idempotency_key(session: Session) -> None:

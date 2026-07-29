@@ -31,6 +31,10 @@ from edu_grader_api.models import (
     GeneratedQuestionDraftRevision,
     GenerationAttempt,
     GenerationControlState,
+    GenerationDefaultChangeRequest,
+    GenerationDefaultChangeStatus,
+    GenerationDefaultConfiguration,
+    GenerationDefaultSelection,
     GenerationGovernanceEntry,
     GenerationGovernanceTargetType,
     GenerationJob,
@@ -59,6 +63,40 @@ def session() -> Session:
     engine = create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
+        template = resolve_prompt_template("generator-v1", ("M1", "M2", "E1", "E2", "E3", "E4"))
+        configuration = GenerationDefaultConfiguration(
+            provider_name="fake",
+            model_version="fake-v1",
+            prompt_version="generator-v1",
+            prompt_template_fingerprint=template.fingerprint,
+            created_by_user_id=uuid4(),
+        )
+        request = GenerationDefaultChangeRequest(
+            configuration=configuration,
+            status=GenerationDefaultChangeStatus.APPLIED,
+            request_reason="Test default",
+            idempotency_key="test-default",
+            request_digest="a" * 64,
+            evaluation_report_sha256="b" * 64,
+            evaluation_record_digest="c" * 64,
+            evaluation_run_id="run",
+            evaluation_spec_id="spec",
+            evaluation_watermark=utc_now(),
+            evaluation_summary_json={},
+            submitted_by_user_id=uuid4(),
+        )
+        session.add_all(
+            [
+                configuration,
+                request,
+                GenerationDefaultSelection(
+                    scope="global",
+                    configuration=configuration,
+                    applied_change_request=request,
+                ),
+            ]
+        )
+        session.flush()
         yield session
 
 
@@ -847,6 +885,24 @@ def test_historical_job_with_unavailable_template_fails_without_creating_an_atte
     assert provider.calls == 0
 
 
+def test_job_with_changed_prompt_fingerprint_fails_without_creating_an_attempt(
+    session: Session,
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    job = create_or_get_job(session, request=generation_request(revision), actor=teacher)
+    job.prompt_template_fingerprint = "0" * 64
+    session.flush()
+
+    provider = FailIfCalledProvider()
+    run_generation_job(session, job=job, provider=provider)
+
+    assert job.status is GenerationJobStatus.FAILED
+    assert job.failure_code == "prompt_template_changed"
+    assert job.failed_count == job.requested_count
+    assert job.attempts == []
+    assert provider.calls == 0
+
+
 def test_cancellation_after_provider_returns_does_not_persist_a_draft(session: Session) -> None:
     teacher, revision = teacher_and_objective(session)
     job = create_or_get_job(session, request=generation_request(revision), actor=teacher)
@@ -955,13 +1011,10 @@ def test_generation_pipeline_blocks_provider_and_model_for_governed_entries(
         is_global=True,
     )
 
-    job = create_or_get_job(session, request=generation_request(revision), actor=teacher)
-    provider = FailIfCalledProvider()
-    run_generation_job(session, job=job, provider=provider)
+    with pytest.raises(GenerationServiceError) as error:
+        create_or_get_job(session, request=generation_request(revision), actor=teacher)
 
-    assert job.status is GenerationJobStatus.FAILED
-    assert job.failure_code in {"provider_control_blocked", "model_control_blocked"}
-    assert provider.calls == 0
+    assert str(error.value) in {"provider_control_blocked", "model_control_blocked"}
 
 
 def _generation_job_for_diversity_test(

@@ -3,7 +3,7 @@ export type PlatformRole = 'student' | 'teacher' | 'admin'
 const roleRoots: Record<PlatformRole, string> = {
   student: '/student',
   teacher: '/teacher',
-  admin: '/admin'
+  admin: '/platform'
 }
 
 export function allowedReturnPath(value: string | undefined): string {

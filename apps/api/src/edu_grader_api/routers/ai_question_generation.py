@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
-from hashlib import sha256
 import json
+from datetime import UTC, date, datetime
+from hashlib import sha256
 from typing import Annotated, Literal
 from uuid import UUID
 
 from edu_generator.contracts import GeneratedCandidate, ProviderFailure
-from edu_generator.openai_provider import OpenAIResponsesProvider
-from edu_generator.providers import FakeGenerationProvider, GenerationProvider
+from edu_generator.providers import GenerationProvider
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, func, or_, select, update
@@ -34,8 +33,8 @@ from ..models import (
     User,
 )
 from ..services.ai_question_review import (
-    ReviewAccessError,
     BatchAcceptanceItemInput,
+    ReviewAccessError,
     ReviewConflictError,
     ReviewStateError,
     accept_review_batch,
@@ -44,20 +43,22 @@ from ..services.ai_question_review import (
     recover_review_batch,
     reject_review_draft,
 )
+from ..services.budget_aware_verification import run_budget_aware_candidate_verification
 from ..services.generation import (
     GenerationJobRequest,
-    GenerationJobSnapshot,
     GenerationServiceError,
+    assert_generation_snapshot_prompt_current,
     cancel_generation_job,
     create_or_get_job,
     derive_generation_plan,
     generation_plan_item_for_ordinal,
     run_generation_job,
+    snapshot_for_new_generation,
+    snapshot_for_regeneration,
 )
-from ..services.budget_aware_verification import run_budget_aware_candidate_verification
+from ..services.generation_provider_registry import generation_provider
 from ..services.grader import HttpGraderClient
 from ..settings import settings
-
 
 router = APIRouter(prefix="/v1/ai-question-generation", tags=["AI question generation"])
 draft_router = APIRouter(prefix="/v1/ai-generated-questions", tags=["AI question generation"])
@@ -150,20 +151,23 @@ def create_generation_job_route(
     existing = _find_job_by_idempotency(session, actor=actor, idempotency_key=key)
     try:
         reserved = False
+        snapshot = None
         if existing is None:
+            snapshot = snapshot_for_new_generation(session, revision)
+            assert_generation_snapshot_prompt_current(snapshot, request.items)
             reserved = _enforce_generation_quota(
                 session,
                 actor=actor,
                 idempotency_key=idempotency_key,
                 requested_count=request.requested_count,
             )
-        job = create_or_get_job(session, request=request, actor=actor)
+        job = create_or_get_job(session, request=request, actor=actor, snapshot=snapshot)
         created = reserved
         if created:
             run_generation_job(
                 session,
                 job=job,
-                provider=_generation_provider(),
+                provider=_generation_provider(job.provider_name, job.model_version),
                 teacher_constraint=request.teacher_constraint,
             )
             _validate_generated_drafts(session, job=job)
@@ -178,7 +182,8 @@ def create_generation_job_route(
                     "status": job.status.value,
                     "requested_count": job.requested_count,
                     "succeeded_count": job.succeeded_count,
-                    "provider": _provider_name(),
+                    "provider": job.provider_name,
+                    "model_version": job.model_version,
                 },
             )
         session.commit()
@@ -383,11 +388,13 @@ def regenerate_draft_route(
         idempotency_key=key,
         teacher_constraint=body.teacher_constraint,
     )
-    snapshot = GenerationJobSnapshot.from_job(original)
     existing = _find_job_by_idempotency(session, actor=actor, idempotency_key=key)
     try:
+        snapshot = None
         reserved = False
         if existing is None:
+            snapshot = snapshot_for_regeneration(session, original)
+            assert_generation_snapshot_prompt_current(snapshot, [source_item])
             reserved = _enforce_generation_quota(
                 session,
                 actor=actor,
@@ -399,7 +406,7 @@ def regenerate_draft_route(
             run_generation_job(
                 session,
                 job=job,
-                provider=_generation_provider(),
+                provider=_generation_provider(job.provider_name, job.model_version),
                 teacher_constraint=body.teacher_constraint,
             )
             _validate_generated_drafts(session, job=job)
@@ -410,7 +417,12 @@ def regenerate_draft_route(
                 event_type="ai_generation.regenerated",
                 target_type="generation_job",
                 target_id=job.id,
-                metadata={"source_draft_id": str(draft.id), "status": job.status.value},
+                metadata={
+                    "source_draft_id": str(draft.id),
+                    "status": job.status.value,
+                    "provider": job.provider_name,
+                    "model_version": job.model_version,
+                },
             )
         session.commit()
     except GenerationServiceError as exc:
@@ -586,18 +598,10 @@ def accept_review_draft_route(
     return _decision_payload(result.decision)
 
 
-def _generation_provider() -> GenerationProvider:
-    if settings.generation_provider == "fake":
-        return FakeGenerationProvider(seed=0)
-    if settings.generation_provider == "openai":
-        return OpenAIResponsesProvider(
-            api_key=settings.openai_api_key,
-            model=settings.generator_openai_model,
-            base_url=settings.generator_openai_base_url,
-            allowed_hosts=settings.allowed_generator_provider_hosts,
-            timeout_seconds=settings.generator_timeout_seconds,
-        )
-    raise ProviderFailure("provider_not_configured", "generation provider is not configured")
+def _generation_provider(
+    provider_name: str | None, model_version: str | None
+) -> GenerationProvider:
+    return generation_provider(provider_name, model_version)
 
 
 def _validate_generated_drafts(session: Session, *, job: GenerationJob) -> None:
@@ -620,10 +624,6 @@ def _validate_generated_drafts(session: Session, *, job: GenerationJob) -> None:
                 revision=revision,
                 grader_client=grader_client,
             )
-
-
-def _provider_name() -> str:
-    return settings.generation_provider
 
 
 def _actor(session: Session, principal: CurrentPrincipal) -> User:
@@ -826,7 +826,7 @@ def _generation_count_since_utc_midnight(session: Session, *, tenant_id: UUID) -
     )
     if usage is not None:
         return usage.used_count
-    today = datetime.combine(quota_day, datetime.min.time(), tzinfo=timezone.utc)
+    today = datetime.combine(quota_day, datetime.min.time(), tzinfo=UTC)
     used = session.scalar(
         select(func.coalesce(func.sum(GenerationJob.requested_count), 0)).where(
             GenerationJob.tenant_id == tenant_id,
@@ -913,7 +913,7 @@ def _dialect_insert(session: Session, model: object) -> object:
 
 
 def _utc_today() -> date:
-    return datetime.now(timezone.utc).date()
+    return datetime.now(UTC).date()
 
 
 def _job_payload(job: GenerationJob) -> dict[str, object]:

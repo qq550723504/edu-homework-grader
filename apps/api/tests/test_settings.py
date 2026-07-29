@@ -68,6 +68,13 @@ def test_development_realm_users_do_not_require_profile_completion() -> None:
         assert "offline_access" in user["realmRoles"]
 
 
+def test_development_realm_user_ids_are_unique() -> None:
+    realm = json.loads(Path("infra/keycloak/edu-grader-realm.json").read_text(encoding="utf-8"))
+    user_ids = [user["id"] for user in realm["users"]]
+
+    assert len(user_ids) == len(set(user_ids))
+
+
 def test_compose_requires_sensitive_development_values_instead_of_embedding_defaults() -> None:
     compose = Path("compose.yaml").read_text(encoding="utf-8")
 
@@ -103,6 +110,23 @@ def test_production_settings_require_audit_key_and_processor_allowlist(
 def test_production_settings_reject_the_default_audit_key() -> None:
     with pytest.raises(ValueError, match="AUDIT_HMAC_KEY must not use the development default"):
         Settings(app_env="production", processor_allowed_hosts="grader")
+
+
+def test_production_generation_governance_requires_a_non_default_evidence_key() -> None:
+    with pytest.raises(
+        ValueError,
+        match="EVALUATION_EVIDENCE_HMAC_KEY must not use the development default",
+    ):
+        Settings(
+            app_env="production",
+            audit_hmac_key="x" * 32,
+            database_url="postgresql://edu_grader:secure-password@db.example/edu_grader",
+            oidc_issuer="https://identity.example/realms/edu-grader",
+            processor_allowed_hosts="grader",
+            student_activation_hmac_key="x" * 32,
+            keycloak_student_provisioner_client_secret="provisioner-secret",
+            generation_governance_admin_subjects="governance-admin-a,governance-admin-b",
+        )
 
 
 @pytest.mark.parametrize(

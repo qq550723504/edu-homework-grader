@@ -4,6 +4,7 @@ import { access, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { delimiter, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { E2E_EVALUATION_EVIDENCE_HMAC_KEY } from './e2e-runtime-config.mjs'
 
 const repositoryRoot = fileURLToPath(new URL('../../../', import.meta.url))
 const nonce = randomUUID()
@@ -34,6 +35,9 @@ const supervisorEnvironment = {
   OIDC_ISSUER: 'http://localhost:8080/realms/edu-grader',
   OIDC_SCHOOL_ID_CLAIM: 'school_id',
   OIDC_TENANT_SLUG: 'pilot',
+  GENERATION_GOVERNANCE_ADMIN_SUBJECTS: 'e2e-platform-admin-a,e2e-platform-admin-b',
+  EVALUATION_EVIDENCE_HMAC_KEY: E2E_EVALUATION_EVIDENCE_HMAC_KEY,
+  OPENAI_API_KEY: 'e2e-not-a-real-key',
   PYTHONPATH: pythonPath,
 }
 await writeFile(

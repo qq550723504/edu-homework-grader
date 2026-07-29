@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -13,18 +13,28 @@ from ..db import get_session
 from ..dependencies import require_role
 from ..models import (
     AuditLog,
-    ClassTeacher,
     Classroom,
+    ClassTeacher,
     GenerationControlState,
+    GenerationDefaultChangeRequest,
+    GenerationDefaultChangeStatus,
+    GenerationDefaultSelection,
     GenerationGovernanceEntry,
     GenerationGovernanceTargetType,
     Role,
     User,
 )
+from ..services.generation_default_governance import (
+    GenerationDefaultGovernanceError,
+    apply_change_request,
+    approve_change_request,
+    reject_change_request,
+    submit_change_request,
+    submit_rollback_request,
+)
 from ..services.generation_governance import assert_transition_is_valid
 from ..services.roster import RosterValidationError, import_roster, parse_roster
 from ..settings import settings
-
 
 router = APIRouter(prefix="/v1/admin", tags=["admin"])
 
@@ -45,6 +55,18 @@ class CreateGenerationGovernanceEntryRequest(BaseModel):
 
 class TransitionGenerationGovernanceEntryRequest(BaseModel):
     control_state: GenerationControlState
+
+
+class SubmitGenerationDefaultChangeRequest(BaseModel):
+    provider_name: str = Field(min_length=1, max_length=100)
+    model_version: str = Field(min_length=1, max_length=200)
+    prompt_version: str = Field(min_length=1, max_length=100)
+    request_reason: str = Field(min_length=1, max_length=1_000)
+    evaluation_report: dict[str, object]
+
+
+class GenerationDefaultDecisionRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=1_000)
 
 
 @router.post("/students/import")
@@ -179,6 +201,156 @@ def list_ai_generation_governance(
     return {"items": [_governance_entry_payload(entry) for entry in entries]}
 
 
+@router.get("/ai-generation-defaults")
+def get_ai_generation_defaults(
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.ADMIN))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    _require_global_governance_admin(principal)
+    selection = session.get(GenerationDefaultSelection, "global")
+    pending = session.scalars(
+        select(GenerationDefaultChangeRequest)
+        .where(
+            GenerationDefaultChangeRequest.status == GenerationDefaultChangeStatus.PENDING_APPROVAL
+        )
+        .order_by(GenerationDefaultChangeRequest.submitted_at.desc())
+    ).all()
+    history = session.scalars(
+        select(GenerationDefaultChangeRequest)
+        .where(
+            GenerationDefaultChangeRequest.status != GenerationDefaultChangeStatus.PENDING_APPROVAL
+        )
+        .order_by(GenerationDefaultChangeRequest.submitted_at.desc())
+    ).all()
+    return {
+        "current": None if selection is None else _default_selection_payload(selection),
+        "pending": [_default_change_request_payload(entry) for entry in pending],
+        "history": [_default_change_request_payload(entry) for entry in history],
+    }
+
+
+@router.post("/ai-generation-default-change-requests", status_code=status.HTTP_201_CREATED)
+def submit_ai_generation_default_change(
+    body: SubmitGenerationDefaultChangeRequest,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.ADMIN))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    actor = _platform_governance_actor(session, principal)
+    session.rollback()
+    try:
+        with session.begin():
+            change_request = submit_change_request(
+                session,
+                actor=actor,
+                provider_name=body.provider_name,
+                model_version=body.model_version,
+                prompt_version=body.prompt_version,
+                request_reason=body.request_reason,
+                evaluation_report=body.evaluation_report,
+                idempotency_key=idempotency_key,
+            )
+    except GenerationDefaultGovernanceError as exc:
+        raise _generation_default_error(exc) from exc
+    return _default_change_request_payload(change_request)
+
+
+@router.post("/ai-generation-default-change-requests/{request_id}/approve")
+def approve_ai_generation_default_change(
+    request_id: UUID,
+    body: GenerationDefaultDecisionRequest,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.ADMIN))],
+    session: Annotated[Session, Depends(get_session)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
+) -> dict[str, object]:
+    actor = _platform_governance_actor(session, principal)
+    session.rollback()
+    try:
+        with session.begin():
+            change_request = approve_change_request(
+                session,
+                request_id=request_id,
+                actor=actor,
+                approval_reason=body.reason,
+                idempotency_key=idempotency_key,
+            )
+    except GenerationDefaultGovernanceError as exc:
+        raise _generation_default_error(exc) from exc
+    return _default_change_request_payload(change_request)
+
+
+@router.post("/ai-generation-default-change-requests/{request_id}/reject")
+def reject_ai_generation_default_change(
+    request_id: UUID,
+    body: GenerationDefaultDecisionRequest,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.ADMIN))],
+    session: Annotated[Session, Depends(get_session)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
+) -> dict[str, object]:
+    actor = _platform_governance_actor(session, principal)
+    session.rollback()
+    try:
+        with session.begin():
+            change_request = reject_change_request(
+                session,
+                request_id=request_id,
+                actor=actor,
+                rejection_reason=body.reason,
+                idempotency_key=idempotency_key,
+            )
+    except GenerationDefaultGovernanceError as exc:
+        raise _generation_default_error(exc) from exc
+    return _default_change_request_payload(change_request)
+
+
+@router.post("/ai-generation-default-change-requests/{request_id}/apply")
+def apply_ai_generation_default_change(
+    request_id: UUID,
+    body: GenerationDefaultDecisionRequest,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.ADMIN))],
+    session: Annotated[Session, Depends(get_session)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
+) -> dict[str, object]:
+    actor = _platform_governance_actor(session, principal)
+    session.rollback()
+    try:
+        with session.begin():
+            change_request = apply_change_request(
+                session,
+                request_id=request_id,
+                actor=actor,
+                application_reason=body.reason,
+                idempotency_key=idempotency_key,
+            )
+    except GenerationDefaultGovernanceError as exc:
+        raise _generation_default_error(exc) from exc
+    return _default_change_request_payload(change_request)
+
+
+@router.post("/ai-generation-default-change-requests/{request_id}/rollback")
+def rollback_ai_generation_default_change(
+    request_id: UUID,
+    body: GenerationDefaultDecisionRequest,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.ADMIN))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    actor = _platform_governance_actor(session, principal)
+    session.rollback()
+    try:
+        with session.begin():
+            change_request = submit_rollback_request(
+                session,
+                actor=actor,
+                target_request_id=request_id,
+                request_reason=body.reason,
+                idempotency_key=idempotency_key,
+            )
+    except GenerationDefaultGovernanceError as exc:
+        raise _generation_default_error(exc) from exc
+    return _default_change_request_payload(change_request)
+
+
 @router.post("/ai-generation-governance", status_code=status.HTTP_201_CREATED)
 def create_ai_generation_governance(
     body: CreateGenerationGovernanceEntryRequest,
@@ -287,6 +459,14 @@ def _require_global_governance_admin(principal: CurrentPrincipal) -> None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
 
 
+def _platform_governance_actor(session: Session, principal: CurrentPrincipal) -> User:
+    _require_global_governance_admin(principal)
+    actor = session.get(User, UUID(principal.user_id))
+    if actor is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
+    return actor
+
+
 def _admin_governance_entry(
     session: Session, *, entry_id: UUID, tenant_id: UUID
 ) -> GenerationGovernanceEntry | None:
@@ -318,5 +498,57 @@ def _governance_entry_payload(entry: GenerationGovernanceEntry) -> dict[str, obj
     }
 
 
+def _default_selection_payload(entry: GenerationDefaultSelection) -> dict[str, object]:
+    configuration = entry.configuration
+    return {
+        "provider_name": configuration.provider_name,
+        "model_version": configuration.model_version,
+        "prompt_version": configuration.prompt_version,
+        "prompt_template_fingerprint": configuration.prompt_template_fingerprint,
+        "applied_change_request_id": str(entry.applied_change_request_id),
+        "updated_at": entry.updated_at.isoformat(),
+    }
+
+
+def _default_change_request_payload(entry: GenerationDefaultChangeRequest) -> dict[str, object]:
+    configuration = entry.configuration
+    return {
+        "id": str(entry.id),
+        "status": entry.status.value,
+        "provider_name": configuration.provider_name,
+        "model_version": configuration.model_version,
+        "prompt_version": configuration.prompt_version,
+        "prompt_template_fingerprint": configuration.prompt_template_fingerprint,
+        "request_reason": entry.request_reason,
+        "approval_reason": entry.approval_reason,
+        "application_reason": entry.application_reason,
+        "evaluation_report_sha256": entry.evaluation_report_sha256,
+        "evaluation_record_digest": entry.evaluation_record_digest,
+        "evaluation_run_id": entry.evaluation_run_id,
+        "evaluation_spec_id": entry.evaluation_spec_id,
+        "evaluation_summary": entry.evaluation_summary_json,
+        "submitted_at": entry.submitted_at.isoformat(),
+        "approved_at": entry.approved_at.isoformat() if entry.approved_at else None,
+        "applied_at": entry.applied_at.isoformat() if entry.applied_at else None,
+    }
+
+
 def _api_error(status_code: int, code: str) -> HTTPException:
     return HTTPException(status_code=status_code, detail={"code": code})
+
+
+def _generation_default_error(error: GenerationDefaultGovernanceError) -> HTTPException:
+    if error.code == "default_change_not_found":
+        return _api_error(status.HTTP_404_NOT_FOUND, error.code)
+    if error.code in {
+        "evaluation_candidate_mismatch",
+        "evaluation_report_invalid",
+        "evaluation_not_promotion_eligible",
+        "evaluation_prompt_template_mismatch",
+        "default_model_not_immutable",
+        "default_prompt_template_unavailable",
+        "default_change_request_reason_required",
+        "default_rollback_reason_required",
+    }:
+        return _api_error(status.HTTP_422_UNPROCESSABLE_CONTENT, error.code)
+    return _api_error(status.HTTP_409_CONFLICT, error.code)

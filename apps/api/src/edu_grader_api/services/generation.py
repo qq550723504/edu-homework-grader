@@ -42,6 +42,10 @@ from ..models import (
     utc_now,
 )
 from ..policies import validate_policy
+from ..services.generation_default_governance import (
+    GenerationDefaultGovernanceError,
+    resolve_active_default,
+)
 from ..services.generation_governance import (
     GenerationGovernanceError,
     assert_generation_configured_components_allowed,
@@ -117,6 +121,9 @@ class GenerationJobSnapshot:
     policy_catalog_version: str
     prompt_version: str
     curriculum_profile_id: UUID | None = None
+    provider_name: str = "unknown"
+    model_version: str = "unknown"
+    prompt_template_fingerprint: str = "unknown"
 
     @classmethod
     def from_job(cls, job: GenerationJob) -> GenerationJobSnapshot:
@@ -126,6 +133,9 @@ class GenerationJobSnapshot:
             policy_catalog_version=job.policy_version or "unknown",
             prompt_version=job.prompt_version or "unknown",
             curriculum_profile_id=job.curriculum_profile_id,
+            provider_name=job.provider_name or "unknown",
+            model_version=job.model_version or "unknown",
+            prompt_template_fingerprint=job.prompt_template_fingerprint or "unknown",
         )
 
 
@@ -166,7 +176,7 @@ def create_or_get_job(
         raise GenerationServiceError("requested question types are not allowed by the objective")
     if len(request.items) != request.requested_count:
         raise GenerationServiceError("generation_distribution_invalid")
-    active_snapshot = snapshot or _snapshot_from_active_revision(revision)
+    active_snapshot = snapshot or _snapshot_from_active_revision(session, revision)
     resolved_profile_id = active_snapshot.curriculum_profile_id or revision.objective.profile_id
     try:
         assert_generation_configured_components_allowed(
@@ -174,6 +184,8 @@ def create_or_get_job(
             tenant_id=actor.tenant_id,
             curriculum_profile_id=str(resolved_profile_id),
             prompt_version=active_snapshot.prompt_version,
+            provider_name=active_snapshot.provider_name,
+            model_version=active_snapshot.model_version,
         )
     except GenerationGovernanceError as exc:
         raise GenerationServiceError(str(exc)) from exc
@@ -196,7 +208,10 @@ def create_or_get_job(
         status=GenerationJobStatus.QUEUED,
         idempotency_key=request.idempotency_key,
         policy_version=active_snapshot.policy_catalog_version,
+        provider_name=active_snapshot.provider_name,
+        model_version=active_snapshot.model_version,
         prompt_version=active_snapshot.prompt_version,
+        prompt_template_fingerprint=active_snapshot.prompt_template_fingerprint,
         request_digest=request_digest,
     )
     session.add(job)
@@ -204,17 +219,69 @@ def create_or_get_job(
     return job
 
 
-def _snapshot_from_active_revision(revision: CurriculumObjectiveRevision) -> GenerationJobSnapshot:
+def _snapshot_from_active_revision(
+    session: Session, revision: CurriculumObjectiveRevision
+) -> GenerationJobSnapshot:
     grade_mapping = revision.objective.grade_mapping
     if grade_mapping is None:
         raise GenerationServiceError("curriculum objective revision requires a grade mapping")
+    try:
+        default = resolve_active_default(session)
+    except GenerationDefaultGovernanceError as exc:
+        raise GenerationServiceError(exc.code) from exc
     return GenerationJobSnapshot(
         grade=grade_mapping.internal_level,
         subject=revision.objective.subject,
         policy_catalog_version=GENERATION_POLICY_CATALOG_VERSION,
-        prompt_version=GENERATION_PROMPT_VERSION,
+        prompt_version=default.prompt_version,
         curriculum_profile_id=revision.objective.profile_id,
+        provider_name=default.provider_name,
+        model_version=default.model_version,
+        prompt_template_fingerprint=default.prompt_template_fingerprint,
     )
+
+
+def snapshot_for_new_generation(
+    session: Session, revision: CurriculumObjectiveRevision
+) -> GenerationJobSnapshot:
+    """Resolve the governed snapshot a new job must validate before quota use."""
+
+    return _snapshot_from_active_revision(session, revision)
+
+
+def snapshot_for_regeneration(session: Session, job: GenerationJob) -> GenerationJobSnapshot:
+    """Preserve an existing governed snapshot, or safely upgrade legacy jobs."""
+
+    snapshot = GenerationJobSnapshot.from_job(job)
+    if all(
+        value != "unknown"
+        for value in (
+            snapshot.provider_name,
+            snapshot.model_version,
+            snapshot.prompt_template_fingerprint,
+        )
+    ):
+        return snapshot
+    revision = session.get(CurriculumObjectiveRevision, job.curriculum_objective_revision_id)
+    if revision is None:
+        raise GenerationServiceError("curriculum objective revision was not found")
+    return _snapshot_from_active_revision(session, revision)
+
+
+def assert_generation_snapshot_prompt_current(
+    snapshot: GenerationJobSnapshot, items: Sequence[GenerationPlanItem]
+) -> PromptTemplate:
+    """Reject a persisted snapshot whose Prompt no longer resolves identically."""
+
+    try:
+        template = resolve_prompt_template(
+            snapshot.prompt_version, [item.question_type for item in items]
+        )
+    except ValueError as exc:
+        raise GenerationServiceError("prompt_template_unavailable") from exc
+    if template.fingerprint != snapshot.prompt_template_fingerprint:
+        raise GenerationServiceError("prompt_template_changed")
+    return template
 
 
 def run_generation_job(
@@ -258,12 +325,12 @@ def run_generation_job(
 
     request = _provider_request(session, job, teacher_constraint=teacher_constraint)
     try:
-        template = resolve_prompt_template(
-            request.prompt_version, [item.question_type for item in request.items]
+        template = assert_generation_snapshot_prompt_current(
+            GenerationJobSnapshot.from_job(job), request.items
         )
-    except ValueError:
+    except GenerationServiceError as exc:
         job.status = GenerationJobStatus.FAILED
-        job.failure_code = "prompt_template_unavailable"
+        job.failure_code = str(exc)
         job.failed_count = max(job.requested_count - job.succeeded_count, 0)
         job.finished_at = utc_now()
         session.flush()
@@ -300,6 +367,16 @@ def run_generation_job(
         if job.cancel_requested_at is None:
             session.expire(job)
             session.refresh(job)
+        if result.provider_name != job.provider_name or result.model_version != job.model_version:
+            _finish_attempt(
+                attempt,
+                status="failed",
+                failure_code="generation_provider_snapshot_mismatch",
+                started_at=started_at,
+            )
+            job.failure_code = "generation_provider_snapshot_mismatch"
+            session.flush()
+            break
         attempt.provider_name = result.provider_name
         attempt.model_version = result.model_version
         attempt.response_summary = {"candidate_count": len(result.candidates)}

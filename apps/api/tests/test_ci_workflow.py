@@ -6,7 +6,6 @@ from pathlib import Path
 
 import yaml
 
-
 CI_WORKFLOW_PATH = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "ci.yml"
 PUBLISH_WORKFLOW_PATH = (
     Path(__file__).resolve().parents[3] / ".github" / "workflows" / "publish-images.yml"
@@ -25,6 +24,9 @@ LIVE_GENERATOR_PROVIDER_ACCEPTANCE_WORKFLOW_PATH = (
     / ".github"
     / "workflows"
     / "live-generator-provider-acceptance.yml"
+)
+OPERATIONAL_AI_EVALUATION_WORKFLOW_PATH = (
+    Path(__file__).resolve().parents[3] / ".github" / "workflows" / "ai-evaluation-operational.yml"
 )
 HEAVY_JOB_NAMES = (
     "python",
@@ -118,6 +120,13 @@ def test_ci_runs_for_pull_requests_and_merged_main_revisions() -> None:
 
     assert "pull_request:" in workflow
     assert re.search(r"push:\n\s+branches: \[main\]", workflow)
+
+
+def test_compose_based_ci_jobs_supply_required_evaluation_evidence_key() -> None:
+    jobs = workflow_data(CI_WORKFLOW_PATH)["jobs"]
+
+    for job_name in ("compose", "live-grader-integration"):
+        assert jobs[job_name]["env"]["EVALUATION_EVIDENCE_HMAC_KEY"]
 
 
 def test_publish_waits_for_successful_main_ci_and_uses_its_head_sha() -> None:
@@ -224,6 +233,7 @@ def test_release_guard_allows_docs_only_descendant_but_rejects_code_descendant(
     docs_result = subprocess.run(
         [bash_executable(), "-euo", "pipefail", "-c", guard],
         cwd=runner,
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -235,6 +245,7 @@ def test_release_guard_allows_docs_only_descendant_but_rejects_code_descendant(
     code_result = subprocess.run(
         [bash_executable(), "-euo", "pipefail", "-c", guard],
         cwd=runner,
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -321,6 +332,21 @@ def test_live_generator_acceptance_resolves_manual_refs_to_full_commit_shas() ->
     assert "github.rest.repos.getCommit" in workflow
     assert "ref: targetRef.trim()" in workflow
     assert "core.setOutput('target_ref', commit.data.sha);" in workflow
+
+
+def test_operational_evaluation_executes_only_trusted_main_code() -> None:
+    workflow = OPERATIONAL_AI_EVALUATION_WORKFLOW_PATH.read_text(encoding="utf-8")
+    evaluation_job = workflow_data(OPERATIONAL_AI_EVALUATION_WORKFLOW_PATH)["jobs"]["evaluate"]
+    signing_step = named_step(evaluation_job, "Export facts and compare explicit versions")
+
+    assert "target_ref" not in workflow
+    assert "ref: main" in workflow
+    assert "if: github.ref == 'refs/heads/main'" in workflow
+    assert "EVALUATION_EVIDENCE_HMAC_KEY" not in evaluation_job["env"]
+    assert (
+        signing_step["env"]["EVALUATION_EVIDENCE_HMAC_KEY"]
+        == "${{ secrets.EVALUATION_EVIDENCE_HMAC_KEY }}"
+    )
 
 
 def test_manual_rollback_passes_github_environment_sha_to_powershell() -> None:

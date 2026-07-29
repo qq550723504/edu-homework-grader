@@ -1,10 +1,13 @@
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from queue import Queue
 from threading import Event, Thread
 from uuid import UUID, uuid4
 
 import pytest
+from edu_generator.prompt_templates import resolve_prompt_template
+from edu_generator.providers import FakeGenerationProvider
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event, func, select
@@ -12,7 +15,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from edu_generator.providers import FakeGenerationProvider
+import edu_grader_api.routers.ai_question_generation as generation_router
+import edu_grader_api.routers.ai_question_validation as validation_router
 from edu_grader_api.auth import (
     CurrentPrincipal,
     VerifiedIdentity,
@@ -32,15 +36,20 @@ from edu_grader_api.models import (
     CurriculumProfileStatus,
     CurriculumRevisionStatus,
     CurriculumSourceRecord,
-    GenerationControlState,
-    GenerationGovernanceTargetType,
-    GenerationJob,
-    GenerationBatchAcceptance,
-    GenerationGovernanceEntry,
-    GenerationJobStatus,
     GeneratedQuestionDraft,
     GeneratedQuestionDraftRevision,
     GeneratedQuestionReviewDecision,
+    GenerationBatchAcceptance,
+    GenerationControlState,
+    GenerationDefaultChangeRequest,
+    GenerationDefaultChangeStatus,
+    GenerationDefaultConfiguration,
+    GenerationDefaultSelection,
+    GenerationGovernanceEntry,
+    GenerationGovernanceTargetType,
+    GenerationJob,
+    GenerationJobStatus,
+    GenerationQuotaUsage,
     GenerationValidationRun,
     QuestionVersion,
     Role,
@@ -50,13 +59,9 @@ from edu_grader_api.models import (
     ValidationFindingSeverity,
     ValidationRunStatus,
 )
-from edu_grader_api.settings import settings
-import edu_grader_api.routers.ai_question_validation as validation_router
-import edu_grader_api.routers.ai_question_generation as generation_router
+from edu_grader_api.services import question_verification
 from edu_grader_api.services.generation import GENERATION_PROMPT_VERSION
-import edu_grader_api.services.question_verification as question_verification
-from edu_generator.prompt_templates import resolve_prompt_template
-
+from edu_grader_api.settings import settings
 
 ISSUER = "http://localhost:8080/realms/edu-grader"
 
@@ -78,6 +83,38 @@ def session() -> Session:
     )
     Base.metadata.create_all(engine)
     session = Session(engine)
+    template = resolve_prompt_template("generator-v1", ("M1", "M2", "E1", "E2", "E3", "E4"))
+    configuration = GenerationDefaultConfiguration(
+        provider_name="fake",
+        model_version="fake-v1",
+        prompt_version="generator-v1",
+        prompt_template_fingerprint=template.fingerprint,
+        created_by_user_id=uuid4(),
+    )
+    change_request = GenerationDefaultChangeRequest(
+        configuration=configuration,
+        status=GenerationDefaultChangeStatus.APPLIED,
+        request_reason="Test default",
+        idempotency_key="test-default",
+        request_digest="a" * 64,
+        evaluation_report_sha256="b" * 64,
+        evaluation_record_digest="c" * 64,
+        evaluation_run_id="run",
+        evaluation_spec_id="spec",
+        evaluation_watermark=datetime.now(tz=UTC),
+        evaluation_summary_json={},
+        submitted_by_user_id=uuid4(),
+    )
+    session.add_all(
+        [
+            configuration,
+            change_request,
+            GenerationDefaultSelection(
+                scope="global", configuration=configuration, applied_change_request=change_request
+            ),
+        ]
+    )
+    session.flush()
     yield session
     session.close()
 
@@ -480,6 +517,71 @@ def test_regenerated_job_has_initial_validation_run(client: TestClient, session:
     assert [item["revision_number"] for item in response.json()["items"]] == [1]
 
 
+def test_legacy_regeneration_without_a_default_returns_a_stable_rejection(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client, teacher, revision, idempotency_key="legacy-regeneration-source"
+    )
+    source = session.get(GenerationJob, UUID(str(created["id"])))
+    selection = session.get(GenerationDefaultSelection, "global")
+    assert source is not None
+    assert selection is not None
+    source.provider_name = None
+    source.model_version = None
+    source.prompt_template_fingerprint = None
+    session.delete(selection)
+    session.commit()
+    source_draft = fetch_only_draft(client, headers, created["id"])
+
+    response = client.post(
+        f"/v1/ai-generated-questions/{source_draft['id']}/regenerate",
+        headers=headers | {"Idempotency-Key": "legacy-regeneration-without-default"},
+        json={},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": {"code": "generation_request_rejected"}}
+
+
+def test_legacy_regeneration_replays_before_resolving_a_missing_default(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client, teacher, revision, idempotency_key="legacy-regeneration-replay-source"
+    )
+    source = session.get(GenerationJob, UUID(str(created["id"])))
+    assert source is not None
+    source.provider_name = None
+    source.model_version = None
+    source.prompt_template_fingerprint = None
+    session.commit()
+    source_draft = fetch_only_draft(client, headers, created["id"])
+    replay_headers = headers | {"Idempotency-Key": "legacy-regeneration-replay"}
+
+    first = client.post(
+        f"/v1/ai-generated-questions/{source_draft['id']}/regenerate",
+        headers=replay_headers,
+        json={},
+    )
+    assert first.status_code == 201
+    selection = session.get(GenerationDefaultSelection, "global")
+    assert selection is not None
+    session.delete(selection)
+    session.commit()
+
+    replay = client.post(
+        f"/v1/ai-generated-questions/{source_draft['id']}/regenerate",
+        headers=replay_headers,
+        json={},
+    )
+
+    assert replay.status_code == 201
+    assert replay.json()["id"] == first.json()["id"]
+
+
 def fetch_only_draft(
     client: TestClient, headers: dict[str, str], job_id: object
 ) -> dict[str, object]:
@@ -618,7 +720,7 @@ def test_generation_create_with_globally_blocked_prompt_does_not_call_provider(
         is_global=True,
     )
     blocking_provider = FailIfCalledProvider()
-    monkeypatch.setattr(generation_router, "_generation_provider", lambda: blocking_provider)
+    monkeypatch.setattr(generation_router, "_generation_provider", lambda *_args: blocking_provider)
 
     response = client.post(
         "/v1/ai-question-generation/jobs",
@@ -659,7 +761,7 @@ def test_generation_create_with_tenant_canary_override_on_global_prompt_canary(
     monkeypatch.setattr(
         generation_router,
         "_generation_provider",
-        lambda: FakeGenerationProvider(seed=7),
+        lambda *_args: FakeGenerationProvider(seed=7),
     )
 
     response = client.post(
@@ -1017,6 +1119,59 @@ def test_generation_regeneration_preserves_original_job_snapshot(
         regenerated.policy_version,
         regenerated.prompt_version,
     ) == expected_snapshot
+
+
+def test_regeneration_rejects_a_stale_prompt_snapshot_before_reserving_quota(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client, teacher, revision, idempotency_key="stale-regeneration-source"
+    )
+    source = session.get(GenerationJob, UUID(str(created["id"])))
+    assert source is not None
+    source.prompt_template_fingerprint = "0" * 64
+    session.commit()
+    draft = fetch_only_draft(client, headers, created["id"])
+    usage_before = session.scalar(select(GenerationQuotaUsage))
+    assert usage_before is not None
+    used_count_before = usage_before.used_count
+
+    response = client.post(
+        f"/v1/ai-generated-questions/{draft['id']}/regenerate",
+        headers=headers | {"Idempotency-Key": "stale-regeneration"},
+        json={},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": {"code": "generation_request_rejected"}}
+    usage_after = session.scalar(select(GenerationQuotaUsage))
+    assert usage_after is not None
+    assert usage_after.used_count == used_count_before
+
+
+def test_new_generation_rejects_a_stale_default_prompt_before_reserving_quota(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    default = session.scalar(select(GenerationDefaultConfiguration))
+    assert default is not None
+    default.prompt_template_fingerprint = "0" * 64
+    session.commit()
+
+    response = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=authorize(client, teacher) | {"Idempotency-Key": "stale-default-prompt"},
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "items": [{"question_type": "M1", "difficulty_band": "standard"}],
+            "requested_count": 1,
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": {"code": "generation_request_rejected"}}
+    assert session.scalar(select(GenerationQuotaUsage)) is None
 
 
 def test_generation_regeneration_inherits_ordinal_difficulty_plan_and_snapshot(

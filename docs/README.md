@@ -15,6 +15,7 @@
 ## AI 出题运行与质量
 
 - [生产事实评估运行手册](operations/ai-evaluation-operational.md)：只读数据库水位、去标识化导出、显式 baseline/candidate、治理审批和报告 Artifact。
+- [AI 生成默认配置治理运行手册](operations/ai-generation-default-governance.md)：双人审批、应用、就绪检查、Job 快照与受控回滚。
 - [AI 出题实施计划](ai-question-generation-plan.md)：Generator、验证、教师工作台、评估与治理的总体边界。
 - [试点上线检查表](pilot-checklist.md#f-ai-质量与治理42438399)：教师黄金集、正式阈值、Provider 政策、预算和课程/数学语义边界。
 

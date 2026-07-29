@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from copy import deepcopy
-from decimal import Decimal, InvalidOperation
-from datetime import datetime, timedelta, timezone
 import unicodedata
+from copy import deepcopy
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
+from typing import ClassVar
 from uuid import UUID
 
 from edu_generator.contracts import GenerationPlanItem
+from edu_generator.prompt_templates import resolve_prompt_template
 from edu_generator.providers import FakeGenerationProvider
 from jwt.exceptions import InvalidTokenError
 from sqlalchemy import select
@@ -17,8 +19,8 @@ from .models import (
     Assignment,
     AssignmentItem,
     AssignmentStatus,
-    ClassTeacher,
     Classroom,
+    ClassTeacher,
     CurriculumActivityType,
     CurriculumGradeMapping,
     CurriculumObjective,
@@ -29,10 +31,17 @@ from .models import (
     CurriculumSourceRecord,
     Enrollment,
     GeneratedQuestionDraftRevision,
+    GenerationControlState,
+    GenerationDefaultChangeRequest,
+    GenerationDefaultChangeStatus,
+    GenerationDefaultConfiguration,
+    GenerationDefaultSelection,
+    GenerationGovernanceEntry,
+    GenerationGovernanceTargetType,
     GenerationJob,
     GenerationValidationRun,
-    GuardianConsentStatus,
     GradingPolicy,
+    GuardianConsentStatus,
     Question,
     QuestionVersion,
     Role,
@@ -45,6 +54,10 @@ from .models import (
     VersionStatus,
 )
 from .services.ai_question_review import create_review_revision
+from .services.ai_evaluation_operational import (
+    OperationalEvaluationReport,
+    signed_operational_evaluation_evidence,
+)
 from .services.generation import (
     GenerationJobRequest,
     GenerationJobSnapshot,
@@ -53,10 +66,12 @@ from .services.generation import (
 )
 from .services.grader import EmbeddingDependencyVersion, SemanticSimilarityResult
 from .services.questions import GradeResult
-
+from .settings import settings
 
 STUDENT_TOKEN = "e2e-student-token"
 TEACHER_TOKEN = "e2e-teacher-token"
+PLATFORM_ADMIN_A_TOKEN = "e2e-platform-admin-a-token"
+PLATFORM_ADMIN_B_TOKEN = "e2e-platform-admin-b-token"
 E2E_ISSUER = "http://localhost:8080/realms/edu-grader"
 AI_REVIEW_JOB_KEY = "e2e-ai-review-batch-v1"
 AI_REVIEW_OBJECTIVE_REVISION_ID = UUID("00000000-0000-0000-0000-000000000037")
@@ -89,7 +104,7 @@ M2_EVIDENCE = {
 
 
 class StaticE2EVerifier:
-    _identities = {
+    _identities: ClassVar[dict[str, VerifiedIdentity]] = {
         STUDENT_TOKEN: VerifiedIdentity(
             issuer=E2E_ISSUER,
             subject="e2e-student",
@@ -98,6 +113,16 @@ class StaticE2EVerifier:
         TEACHER_TOKEN: VerifiedIdentity(
             issuer=E2E_ISSUER,
             subject="e2e-teacher",
+            school_id=None,
+        ),
+        PLATFORM_ADMIN_A_TOKEN: VerifiedIdentity(
+            issuer=E2E_ISSUER,
+            subject="e2e-platform-admin-a",
+            school_id=None,
+        ),
+        PLATFORM_ADMIN_B_TOKEN: VerifiedIdentity(
+            issuer=E2E_ISSUER,
+            subject="e2e-platform-admin-b",
             school_id=None,
         ),
     }
@@ -300,6 +325,139 @@ class DeterministicE2EGraderClient:
 DeterministicM2Client = DeterministicE2EGraderClient
 
 
+def _e2e_baseline_evidence(*, fingerprint: str, now: datetime) -> dict[str, object]:
+    passing_gate = {
+        "policy_id": "e2e-default-governance-policy-v1",
+        "promotion_eligible": True,
+        "metrics": {},
+        "violations": [],
+        "rejection_reason_counts": {},
+        "cost_per_final_accepted_question": None,
+        "end_to_end_duration_ms": {},
+    }
+    report = OperationalEvaluationReport(
+        spec_id="e2e-baseline-spec",
+        exporter_version="e2e-export-v1",
+        run_id="e2e-baseline-run",
+        tenant_id="pilot",
+        watermark=now,
+        baseline={
+            "provider_name": "fake",
+            "model_id": "fake-v0",
+            "prompt_version": "generator-v1",
+            "prompt_template_fingerprint": fingerprint,
+            "validator_version": "verification-v1",
+        },
+        candidate={
+            "provider_name": "fake",
+            "model_id": "fake-v1",
+            "prompt_version": "generator-v1",
+            "prompt_template_fingerprint": fingerprint,
+            "validator_version": "verification-v1",
+        },
+        promotion_eligible=True,
+        export_manifest={
+            "exporter_version": "e2e-export-v1",
+            "run_id": "e2e-baseline-run",
+            "tenant_id": "pilot",
+            "watermark": now,
+            "record_count": 1,
+            "issue_count": 0,
+            "record_digest": "0" * 64,
+            "source_counts": {"accepted_directly": 1},
+        },
+        baseline_gate=passing_gate,
+        candidate_gate=passing_gate,
+    )
+    return signed_operational_evaluation_evidence(
+        report, hmac_key=settings.evaluation_evidence_hmac_key
+    )
+
+
+def _seed_generation_default(session: Session, actor: User, now: datetime) -> None:
+    """Seed a real, active default so ordinary E2E generation starts fail-closed."""
+
+    template = resolve_prompt_template("generator-v1", ("M1", "M2", "E1", "E2", "E3", "E4"))
+    configuration = GenerationDefaultConfiguration(
+        provider_name="fake",
+        model_version="fake-v1",
+        prompt_version="generator-v1",
+        prompt_template_fingerprint=template.fingerprint,
+        created_by_user_id=actor.id,
+    )
+    session.add(configuration)
+    session.flush()
+    evidence = _e2e_baseline_evidence(fingerprint=template.fingerprint, now=now)
+    initial_request = GenerationDefaultChangeRequest(
+        configuration_id=configuration.id,
+        status=GenerationDefaultChangeStatus.APPLIED,
+        request_reason="E2E baseline default",
+        application_reason="E2E fixture initialization",
+        idempotency_key="e2e-initial-generation-default",
+        request_digest="0" * 64,
+        evaluation_report_sha256="0" * 64,
+        evaluation_record_digest="0" * 64,
+        evaluation_run_id="e2e-baseline-run",
+        evaluation_spec_id="e2e-baseline-spec",
+        evaluation_watermark=now,
+        evaluation_evidence_json=evidence,
+        evaluation_summary_json={},
+        submitted_by_user_id=actor.id,
+        approved_by_user_id=actor.id,
+        applied_by_user_id=actor.id,
+        approved_at=now,
+        applied_at=now,
+    )
+    session.add(initial_request)
+    session.flush()
+    session.add(
+        GenerationDefaultSelection(
+            scope="global",
+            configuration_id=configuration.id,
+            applied_change_request_id=initial_request.id,
+        )
+    )
+    session.add_all(
+        [
+            GenerationGovernanceEntry(
+                is_global=True,
+                target_type=GenerationGovernanceTargetType.PROVIDER,
+                target_key="fake",
+                control_state=GenerationControlState.ACTIVE,
+                created_by_user_id=actor.id,
+            ),
+            GenerationGovernanceEntry(
+                is_global=True,
+                target_type=GenerationGovernanceTargetType.MODEL,
+                target_key="fake-v1",
+                control_state=GenerationControlState.ACTIVE,
+                created_by_user_id=actor.id,
+            ),
+            GenerationGovernanceEntry(
+                is_global=True,
+                target_type=GenerationGovernanceTargetType.PROVIDER,
+                target_key="openai",
+                control_state=GenerationControlState.ACTIVE,
+                created_by_user_id=actor.id,
+            ),
+            GenerationGovernanceEntry(
+                is_global=True,
+                target_type=GenerationGovernanceTargetType.MODEL,
+                target_key="gpt-5.6-terra",
+                control_state=GenerationControlState.ACTIVE,
+                created_by_user_id=actor.id,
+            ),
+            GenerationGovernanceEntry(
+                is_global=True,
+                target_type=GenerationGovernanceTargetType.PROMPT_VERSION,
+                target_key="generator-v1",
+                control_state=GenerationControlState.ACTIVE,
+                created_by_user_id=actor.id,
+            ),
+        ]
+    )
+
+
 def seed_demo_assignment(session: Session) -> None:
     tenant = session.scalar(select(Tenant).where(Tenant.slug == "pilot"))
     if tenant is not None:
@@ -325,7 +483,7 @@ def seed_demo_assignment(session: Session) -> None:
             session.commit()
             return
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     tenant = tenant or Tenant(slug="pilot", name="E2E Pilot School")
     teacher = User(
         tenant=tenant,
@@ -341,6 +499,20 @@ def seed_demo_assignment(session: Session) -> None:
         oidc_issuer=E2E_ISSUER,
         oidc_subject="e2e-student",
         display_name="E2E Student",
+    )
+    platform_admin_a = User(
+        tenant=tenant,
+        role=Role.ADMIN,
+        oidc_issuer=E2E_ISSUER,
+        oidc_subject="e2e-platform-admin-a",
+        display_name="E2E Platform Admin A",
+    )
+    platform_admin_b = User(
+        tenant=tenant,
+        role=Role.ADMIN,
+        oidc_issuer=E2E_ISSUER,
+        oidc_subject="e2e-platform-admin-b",
+        display_name="E2E Platform Admin B",
     )
     classroom = Classroom(
         tenant=tenant,
@@ -418,6 +590,8 @@ def seed_demo_assignment(session: Session) -> None:
             tenant,
             teacher,
             student,
+            platform_admin_a,
+            platform_admin_b,
             classroom,
             policy,
             text_policy,
@@ -430,6 +604,7 @@ def seed_demo_assignment(session: Session) -> None:
         ]
     )
     session.flush()
+    _seed_generation_default(session, platform_admin_a, now)
     version.published_by_user_id = teacher.id
     text_version.published_by_user_id = teacher.id
     session.add_all(
@@ -546,6 +721,11 @@ def _seed_ai_review_batch(session: Session, *, tenant: Tenant, teacher: User) ->
             subject="E2E G7 M1 M2 review batch",
             policy_catalog_version="2026.07",
             prompt_version="generator-v1",
+            provider_name="fake",
+            model_version="fake-v1",
+            prompt_template_fingerprint=resolve_prompt_template(
+                "generator-v1", ("M1", "M2")
+            ).fingerprint,
         ),
     )
     run_generation_job(session, job=job, provider=FakeGenerationProvider(seed=0))

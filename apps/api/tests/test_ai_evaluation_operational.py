@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -42,8 +42,11 @@ from edu_grader_api.services.ai_evaluation_operational import (
     EvaluationExportSpec,
     EvaluationVersionSelector,
     OperationalEvaluationSpec,
+    SignedOperationalEvaluationEvidence,
+    _matches,
     compare_evaluation_records,
     export_evaluation_records,
+    verify_operational_evaluation_evidence,
     write_operational_artifacts,
 )
 
@@ -124,7 +127,7 @@ def _tenant_and_teacher(session: Session):
 
 
 def _accepted_edited_draft(session: Session):
-    observed_at = datetime(2026, 7, 23, 10, 0, tzinfo=timezone.utc)
+    observed_at = datetime(2026, 7, 23, 10, 0, tzinfo=UTC)
     tenant, teacher = _tenant_and_teacher(session)
     profile, objective_revision = _curriculum(session)
     job = GenerationJob(
@@ -324,7 +327,7 @@ def test_export_maps_final_review_revision_without_sensitive_content(session: Se
 def test_export_fails_closed_when_validation_evidence_is_missing(session: Session) -> None:
     tenant, teacher = _tenant_and_teacher(session)
     profile, objective_revision = _curriculum(session)
-    observed_at = datetime(2026, 7, 23, 11, 0, tzinfo=timezone.utc)
+    observed_at = datetime(2026, 7, 23, 11, 0, tzinfo=UTC)
     job = GenerationJob(
         tenant_id=tenant.id,
         teacher_user_id=teacher.id,
@@ -443,6 +446,7 @@ def _selector(model_id: str) -> EvaluationVersionSelector:
         provider_name="openai",
         model_id=model_id,
         prompt_version="generator-v3",
+        prompt_template_fingerprint="f" * 64,
         validator_version="verification-v5",
     )
 
@@ -453,7 +457,7 @@ def _comparison_spec(tenant_id) -> OperationalEvaluationSpec:
         export=EvaluationExportSpec(
             tenant_id=tenant_id,
             run_id="operational-run-v1",
-            watermark=datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc),
+            watermark=datetime(2026, 7, 23, 12, 0, tzinfo=UTC),
         ),
         baseline=_selector("gpt-5.6-terra"),
         candidate=_selector("gpt-5.6-sol"),
@@ -489,7 +493,10 @@ def _records_for_version(model_id: str, *, candidate_regression: bool = False):
                 validator_version="verification-v5",
                 difficulty_band="standard",
                 seed=index,
-                parameters={"provider_name": "openai"},
+                parameters={
+                    "provider_name": "openai",
+                    "prompt_template_fingerprint": "f" * 64,
+                },
                 content_fingerprint=(
                     f"{model_id}-{question_type}".encode().hex()[:64].ljust(64, "0")
                 ),
@@ -508,6 +515,17 @@ def _records_for_version(model_id: str, *, candidate_regression: bool = False):
             )
         )
     return records
+
+
+def test_record_matching_requires_the_declared_prompt_fingerprint() -> None:
+    selector = _selector("gpt-5.6-terra")
+    record = _records_for_version("gpt-5.6-terra")[0]
+
+    assert _matches(record, selector)
+    record.parameters["prompt_template_fingerprint"] = "unknown"
+    assert not _matches(record, selector)
+    record.parameters["prompt_template_fingerprint"] = "0" * 64
+    assert not _matches(record, selector)
 
 
 def _active_governance(session: Session, selectors) -> None:
@@ -546,7 +564,7 @@ def _manifest(tenant_id) -> EvaluationExportManifest:
         exporter_version="operational-ai-evaluation-export-v1",
         run_id="operational-run-v1",
         tenant_id=str(tenant_id),
-        watermark=datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc),
+        watermark=datetime(2026, 7, 23, 12, 0, tzinfo=UTC),
         record_count=12,
         issue_count=0,
         record_digest="e" * 64,
@@ -645,3 +663,30 @@ def test_write_operational_artifacts_never_serializes_candidate_content(
     assert "Original sensitive candidate prompt" not in all_content
     assert "Edited private candidate prompt" not in all_content
     assert "teacher@example.test" not in all_content
+
+
+def test_write_operational_artifacts_can_emit_signed_governance_evidence(
+    session: Session, tmp_path: Path
+) -> None:
+    tenant, _draft, observed_at = _accepted_edited_draft(session)
+    exported = export_evaluation_records(
+        session,
+        EvaluationExportSpec(
+            tenant_id=tenant.id,
+            run_id="signed-artifact-run",
+            watermark=observed_at + timedelta(minutes=1),
+        ),
+    )
+    report = compare_evaluation_records(
+        session,
+        records=exported.records,
+        spec=_comparison_spec(tenant.id),
+        manifest=exported.manifest,
+    )
+
+    write_operational_artifacts(exported, report, tmp_path, evidence_hmac_key="k" * 32)
+
+    evidence = SignedOperationalEvaluationEvidence.model_validate_json(
+        (tmp_path / "report.json").read_text(encoding="utf-8")
+    )
+    assert verify_operational_evaluation_evidence(evidence, hmac_key="k" * 32)

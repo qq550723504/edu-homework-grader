@@ -13,10 +13,10 @@ describe('authentication route policy', () => {
   it('maps the API-confirmed role to the only permitted workspace', () => {
     expect(roleHome('student')).toBe('/student')
     expect(roleHome('teacher')).toBe('/teacher')
-    expect(roleHome('admin')).toBe('/admin')
+    expect(roleHome('admin')).toBe('/platform')
     expect(hasRequiredRole('student', '/student/assignments/a-1')).toBe(true)
     expect(hasRequiredRole('student', '/teacher')).toBe(false)
     expect(hasRequiredRole('teacher', '/teacher')).toBe(true)
-    expect(hasRequiredRole('admin', '/admin')).toBe(true)
+    expect(hasRequiredRole('admin', '/platform')).toBe(true)
   })
 })

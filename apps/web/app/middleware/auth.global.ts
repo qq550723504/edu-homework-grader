@@ -1,7 +1,7 @@
 import { hasRequiredRole, type PlatformRole } from '../lib/auth-routing'
 
 export default defineNuxtRouteMiddleware(async (to) => {
-  if (!['/student', '/teacher', '/admin'].some((prefix) => to.path === prefix || to.path.startsWith(`${prefix}/`))) {
+  if (!['/student', '/teacher', '/platform'].some((prefix) => to.path === prefix || to.path.startsWith(`${prefix}/`))) {
     return
   }
 

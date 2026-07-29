@@ -66,8 +66,10 @@ test('student keeps text and math drafts with their own questions after switchin
   await expect(page.getByText('同步状态：已同步')).toBeVisible()
 
   const assignmentId = new URL(page.url()).pathname.split('/').at(-1)!
-  const savedDetail = await assignmentDetail(request, assignmentId)
-  expect(savedDetail.items[1].answer).toEqual({
+  await expect.poll(async () => {
+    const savedDetail = await assignmentDetail(request, assignmentId)
+    return savedDetail.items[1].answer
+  }).toEqual({
     format: 'text-v1',
     text: 'A concise explanation.',
   })

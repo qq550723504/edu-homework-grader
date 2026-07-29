@@ -116,6 +116,7 @@ jobs:
       POSTGRES_PASSWORD: ci-postgres-password
       DATABASE_URL: postgresql+psycopg://edu_grader:ci-postgres-password@postgres:5432/edu_grader
       AUDIT_HMAC_KEY: ci-only-audit-key-at-least-thirty-two-bytes
+      EVALUATION_EVIDENCE_HMAC_KEY: ci-only-evaluation-evidence-key-at-least-thirty-two-bytes
       KEYCLOAK_ADMIN_USERNAME: ci-keycloak-admin
       KEYCLOAK_ADMIN_PASSWORD: ci-keycloak-admin-password
       KEYCLOAK_POSTGRES_PASSWORD: ci-keycloak-postgres-password
@@ -148,6 +149,7 @@ jobs:
       POSTGRES_PASSWORD: ci-postgres-password
       DATABASE_URL: postgresql+psycopg://edu_grader:ci-postgres-password@postgres:5432/edu_grader
       AUDIT_HMAC_KEY: ci-only-audit-key-at-least-thirty-two-bytes
+      EVALUATION_EVIDENCE_HMAC_KEY: ci-only-evaluation-evidence-key-at-least-thirty-two-bytes
       KEYCLOAK_ADMIN_USERNAME: ci-keycloak-admin
       KEYCLOAK_ADMIN_PASSWORD: ci-keycloak-admin-password
       KEYCLOAK_POSTGRES_PASSWORD: ci-keycloak-postgres-password

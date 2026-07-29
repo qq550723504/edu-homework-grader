@@ -11,9 +11,18 @@ from edu_grader_api.e2e_support import (
 from edu_grader_api.models import (
     GeneratedQuestionDraft,
     GeneratedQuestionDraftRevision,
+    GenerationControlState,
+    GenerationDefaultChangeRequest,
+    GenerationGovernanceEntry,
+    GenerationGovernanceTargetType,
     GenerationJob,
     GenerationValidationRun,
 )
+from edu_grader_api.services.ai_evaluation_operational import (
+    SignedOperationalEvaluationEvidence,
+    verify_operational_evaluation_evidence,
+)
+from edu_grader_api.settings import settings
 
 
 def test_e2e_grader_evaluates_m1_numeric_answers_against_the_rule() -> None:
@@ -98,10 +107,71 @@ def test_ai_review_seed_is_idempotent() -> None:
             validation_count = session.scalar(
                 select(func.count()).select_from(GenerationValidationRun)
             )
+            active_global_controls = set(
+                session.execute(
+                    select(
+                        GenerationGovernanceEntry.target_type,
+                        GenerationGovernanceEntry.target_key,
+                        GenerationGovernanceEntry.control_state,
+                    ).where(GenerationGovernanceEntry.is_global.is_(True))
+                ).all()
+            )
 
             assert len(job_ids) == 1
             assert draft_count == 2
             assert revision_count == 3
             assert validation_count == 2
+            assert {
+                (
+                    GenerationGovernanceTargetType.PROVIDER,
+                    "fake",
+                    GenerationControlState.ACTIVE,
+                ),
+                (
+                    GenerationGovernanceTargetType.MODEL,
+                    "fake-v1",
+                    GenerationControlState.ACTIVE,
+                ),
+                (
+                    GenerationGovernanceTargetType.PROVIDER,
+                    "openai",
+                    GenerationControlState.ACTIVE,
+                ),
+                (
+                    GenerationGovernanceTargetType.MODEL,
+                    "gpt-5.6-terra",
+                    GenerationControlState.ACTIVE,
+                ),
+                (
+                    GenerationGovernanceTargetType.PROMPT_VERSION,
+                    "generator-v1",
+                    GenerationControlState.ACTIVE,
+                ),
+            } <= active_global_controls
+    finally:
+        engine.dispose()
+
+
+def test_e2e_default_seed_retains_currently_verifiable_evidence() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    try:
+        with Session(engine) as session:
+            seed_demo_assignment(session)
+            initial_request = session.scalar(
+                select(GenerationDefaultChangeRequest).where(
+                    GenerationDefaultChangeRequest.idempotency_key
+                    == "e2e-initial-generation-default"
+                )
+            )
+
+            assert initial_request is not None
+            assert initial_request.evaluation_evidence_json is not None
+            evidence = SignedOperationalEvaluationEvidence.model_validate(
+                initial_request.evaluation_evidence_json
+            )
+            assert verify_operational_evaluation_evidence(
+                evidence, hmac_key=settings.evaluation_evidence_hmac_key
+            )
     finally:
         engine.dispose()

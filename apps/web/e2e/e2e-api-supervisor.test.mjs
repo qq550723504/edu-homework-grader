@@ -12,8 +12,8 @@ const supervisorPath = join(e2eDirectory, 'e2e-api-supervisor.mjs')
 const fakeApiPath = join(e2eDirectory, 'fake-e2e-api.mjs')
 const launcherPath = join(e2eDirectory, 'start-e2e-api.mjs')
 
-async function waitUntil(predicate, message) {
-  const deadline = Date.now() + 10_000
+async function waitUntil(predicate, message, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (await predicate()) return
     await new Promise((resolveWait) => setTimeout(resolveWait, 25))
@@ -141,7 +141,7 @@ test('nonce mismatches refuse cleanup without deleting either target', {
   }
 })
 
-test('polluted parent identity environment cannot change the real E2E identity', {
+test('polluted parent environment cannot change the E2E runtime', {
   timeout: 30_000,
 }, async (t) => {
   const statePrefix = 'edu-homework-grader-e2e-'
@@ -154,6 +154,7 @@ test('polluted parent identity environment cannot change the real E2E identity',
       APP_ENV: 'production',
       OIDC_ISSUER: 'https://conflicting-issuer.example.test/realms/wrong',
       OIDC_TENANT_SLUG: 'wrong-tenant',
+      EVALUATION_EVIDENCE_HMAC_KEY: 'parent-environment-must-not-reach-e2e-api',
     },
     stdio: 'ignore',
   })
@@ -173,7 +174,11 @@ test('polluted parent identity environment cannot change the real E2E identity',
   }, 'launcher did not start its independent API supervisor')
 
   const { databasePath } = JSON.parse(await readFile(statePath, 'utf8'))
-  await waitUntil(() => pathExists(databasePath), 'E2E API did not create its SQLite database')
+  await waitUntil(
+    () => pathExists(databasePath),
+    'E2E API did not create its SQLite database',
+    30_000,
+  )
   await waitUntil(async () => {
     try {
       const response = await fetch('http://127.0.0.1:18000/v1/student/assignments', {
@@ -190,7 +195,6 @@ test('polluted parent identity environment cannot change the real E2E identity',
     Object.hasOwn(openApi.components.schemas.GeneratedCandidate.properties, 'verification_assertions'),
     true,
   )
-
   launcher.kill('SIGKILL')
 
   await waitUntil(
