@@ -6,7 +6,6 @@ from pathlib import Path
 
 import yaml
 
-
 CI_WORKFLOW_PATH = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "ci.yml"
 PUBLISH_WORKFLOW_PATH = (
     Path(__file__).resolve().parents[3] / ".github" / "workflows" / "publish-images.yml"
@@ -120,6 +119,13 @@ def test_ci_runs_for_pull_requests_and_merged_main_revisions() -> None:
     assert re.search(r"push:\n\s+branches: \[main\]", workflow)
 
 
+def test_compose_based_ci_jobs_supply_required_evaluation_evidence_key() -> None:
+    jobs = workflow_data(CI_WORKFLOW_PATH)["jobs"]
+
+    for job_name in ("compose", "live-grader-integration"):
+        assert jobs[job_name]["env"]["EVALUATION_EVIDENCE_HMAC_KEY"]
+
+
 def test_publish_waits_for_successful_main_ci_and_uses_its_head_sha() -> None:
     workflow = PUBLISH_WORKFLOW_PATH.read_text(encoding="utf-8")
 
@@ -224,6 +230,7 @@ def test_release_guard_allows_docs_only_descendant_but_rejects_code_descendant(
     docs_result = subprocess.run(
         [bash_executable(), "-euo", "pipefail", "-c", guard],
         cwd=runner,
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -235,6 +242,7 @@ def test_release_guard_allows_docs_only_descendant_but_rejects_code_descendant(
     code_result = subprocess.run(
         [bash_executable(), "-euo", "pipefail", "-c", guard],
         cwd=runner,
+        check=False,
         capture_output=True,
         text=True,
     )
