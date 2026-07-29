@@ -54,6 +54,10 @@ from .models import (
     VersionStatus,
 )
 from .services.ai_question_review import create_review_revision
+from .services.ai_evaluation_operational import (
+    OperationalEvaluationReport,
+    signed_operational_evaluation_evidence,
+)
 from .services.generation import (
     GenerationJobRequest,
     GenerationJobSnapshot,
@@ -62,6 +66,7 @@ from .services.generation import (
 )
 from .services.grader import EmbeddingDependencyVersion, SemanticSimilarityResult
 from .services.questions import GradeResult
+from .settings import settings
 
 STUDENT_TOKEN = "e2e-student-token"
 TEACHER_TOKEN = "e2e-teacher-token"
@@ -320,6 +325,55 @@ class DeterministicE2EGraderClient:
 DeterministicM2Client = DeterministicE2EGraderClient
 
 
+def _e2e_baseline_evidence(*, fingerprint: str, now: datetime) -> dict[str, object]:
+    passing_gate = {
+        "policy_id": "e2e-default-governance-policy-v1",
+        "promotion_eligible": True,
+        "metrics": {},
+        "violations": [],
+        "rejection_reason_counts": {},
+        "cost_per_final_accepted_question": None,
+        "end_to_end_duration_ms": {},
+    }
+    report = OperationalEvaluationReport(
+        spec_id="e2e-baseline-spec",
+        exporter_version="e2e-export-v1",
+        run_id="e2e-baseline-run",
+        tenant_id="pilot",
+        watermark=now,
+        baseline={
+            "provider_name": "fake",
+            "model_id": "fake-v0",
+            "prompt_version": "generator-v1",
+            "prompt_template_fingerprint": fingerprint,
+            "validator_version": "verification-v1",
+        },
+        candidate={
+            "provider_name": "fake",
+            "model_id": "fake-v1",
+            "prompt_version": "generator-v1",
+            "prompt_template_fingerprint": fingerprint,
+            "validator_version": "verification-v1",
+        },
+        promotion_eligible=True,
+        export_manifest={
+            "exporter_version": "e2e-export-v1",
+            "run_id": "e2e-baseline-run",
+            "tenant_id": "pilot",
+            "watermark": now,
+            "record_count": 1,
+            "issue_count": 0,
+            "record_digest": "0" * 64,
+            "source_counts": {"accepted_directly": 1},
+        },
+        baseline_gate=passing_gate,
+        candidate_gate=passing_gate,
+    )
+    return signed_operational_evaluation_evidence(
+        report, hmac_key=settings.evaluation_evidence_hmac_key
+    )
+
+
 def _seed_generation_default(session: Session, actor: User, now: datetime) -> None:
     """Seed a real, active default so ordinary E2E generation starts fail-closed."""
 
@@ -333,6 +387,7 @@ def _seed_generation_default(session: Session, actor: User, now: datetime) -> No
     )
     session.add(configuration)
     session.flush()
+    evidence = _e2e_baseline_evidence(fingerprint=template.fingerprint, now=now)
     initial_request = GenerationDefaultChangeRequest(
         configuration_id=configuration.id,
         status=GenerationDefaultChangeStatus.APPLIED,
@@ -345,6 +400,7 @@ def _seed_generation_default(session: Session, actor: User, now: datetime) -> No
         evaluation_run_id="e2e-baseline-run",
         evaluation_spec_id="e2e-baseline-spec",
         evaluation_watermark=now,
+        evaluation_evidence_json=evidence,
         evaluation_summary_json={},
         submitted_by_user_id=actor.id,
         approved_by_user_id=actor.id,

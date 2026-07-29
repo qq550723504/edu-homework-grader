@@ -12,11 +12,17 @@ from edu_grader_api.models import (
     GeneratedQuestionDraft,
     GeneratedQuestionDraftRevision,
     GenerationControlState,
+    GenerationDefaultChangeRequest,
     GenerationGovernanceEntry,
     GenerationGovernanceTargetType,
     GenerationJob,
     GenerationValidationRun,
 )
+from edu_grader_api.services.ai_evaluation_operational import (
+    SignedOperationalEvaluationEvidence,
+    verify_operational_evaluation_evidence,
+)
+from edu_grader_api.settings import settings
 
 
 def test_e2e_grader_evaluates_m1_numeric_answers_against_the_rule() -> None:
@@ -142,5 +148,30 @@ def test_ai_review_seed_is_idempotent() -> None:
                     GenerationControlState.ACTIVE,
                 ),
             } <= active_global_controls
+    finally:
+        engine.dispose()
+
+
+def test_e2e_default_seed_retains_currently_verifiable_evidence() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    try:
+        with Session(engine) as session:
+            seed_demo_assignment(session)
+            initial_request = session.scalar(
+                select(GenerationDefaultChangeRequest).where(
+                    GenerationDefaultChangeRequest.idempotency_key
+                    == "e2e-initial-generation-default"
+                )
+            )
+
+            assert initial_request is not None
+            assert initial_request.evaluation_evidence_json is not None
+            evidence = SignedOperationalEvaluationEvidence.model_validate(
+                initial_request.evaluation_evidence_json
+            )
+            assert verify_operational_evaluation_evidence(
+                evidence, hmac_key=settings.evaluation_evidence_hmac_key
+            )
     finally:
         engine.dispose()
