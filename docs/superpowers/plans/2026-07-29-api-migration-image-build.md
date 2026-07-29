@@ -55,7 +55,9 @@ Expected: FAIL because the workflow does not exist.
 - [ ] **Step 3: Implement the minimal workflow**
 
 Create a `workflow_dispatch` workflow with one `build` job. Validate
-`inputs.source_sha` in Bash before checkout; checkout that SHA; log into GHCR
+`inputs.source_sha` in Bash with `[[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]`
+before checkout; checkout that SHA; use the repository's already pinned
+`docker/login-action` and `docker/build-push-action` revisions; log into GHCR
 using `secrets.GITHUB_TOKEN`; invoke `docker/build-push-action` for context
 `.` and `apps/api/Dockerfile`; push only the SHA tag. Validate the build digest
 against `^sha256:[0-9a-f]{64}$`, write it to
