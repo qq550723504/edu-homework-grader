@@ -6,7 +6,7 @@
 
 **Architecture:** A PostgreSQL 16 init container produces a custom-format dump in an emptyDir; an rclone S3/TencentCOS container uploads the dump plus its SHA-256 sidecar. A separate local operator command creates the COS Secret, and recovery uses a uniquely named temporary PostgreSQL Pod without changing production resources.
 
-**Tech Stack:** Kubernetes batch/v1 CronJob and Job, PostgreSQL 16 pg_dump/pg_restore, rclone S3 TencentCOS backend, PowerShell 7, Pester 6, Kustomize.
+**Tech Stack:** Kubernetes batch/v1 CronJob, PostgreSQL 16 pg_dump/pg_restore, rclone S3 TencentCOS backend, PowerShell 7, Pester 6, Kustomize.
 
 ## Global Constraints
 
@@ -217,7 +217,7 @@ Expected: FAIL because the recovery script does not exist.
 
 - [ ] **Step 3: Implement the isolated drill.**
 
-Validate both user inputs before native commands. Derive $runId = "postgres-recovery-$BackupTimestamp", create only resources named from it, start a PostgreSQL 16 recovery pod with emptyDir, and wait for pg_isready. Create a separate recovery Job that fetches the exact COS dump and checksum, validates sha256sum -c, and transfers pg_restore --clean --if-exists --no-owner into the recovery Pod. Run these read-only queries inside that Pod:
+Validate both user inputs before native commands. Derive $runId = "postgres-recovery-$BackupTimestamp" and create only one recovery Pod named from it. Its rclone init container fetches the exact COS dump and checksum into the shared emptyDir and validates sha256sum -c before PostgreSQL starts. Wait for pg_isready, then use the local operator's kubectl exec to invoke pg_restore --clean --if-exists --no-owner inside the recovery Pod. Run these read-only queries inside that Pod:
 
     SELECT 'question_versions', count(*) FROM question_versions;
     SELECT 'assignments', count(*) FROM assignments;
@@ -226,7 +226,7 @@ Validate both user inputs before native commands. Derive $runId = "postgres-reco
     SELECT 'guardian_consents', count(*) FROM guardian_consents;
     SELECT 'audit_logs', count(*) FROM audit_logs;
 
-Delete only the $runId Pod and Job in a finally block, unless -KeepRecoveryArtifacts is passed. Do not delete or patch any production data store, Secret, application workload, Service, PVC, or Ingress.
+Delete only the $runId Pod in a finally block, unless -KeepRecoveryArtifacts is passed. Do not delete or patch any production data store, Secret, application workload, Service, PVC, or Ingress.
 
 - [ ] **Step 4: Verify GREEN.**
 

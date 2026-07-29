@@ -84,18 +84,19 @@ Versioning the prefix makes a future format migration non-destructive.
 against a missing backup or the production PostgreSQL pod.
 
 The script creates a uniquely named, short-lived PostgreSQL 16 recovery Pod with
-an `emptyDir` data directory in the edu namespace. It downloads the selected
-dump and checksum with a recovery Job that receives only the COS Secret, verifies
-the SHA-256 checksum before invoking `pg_restore`, and exposes the database only
-inside the recovery Pod. It then verifies the presence of the pilot's critical
+an `emptyDir` data directory in the edu namespace. Its rclone init container
+receives only the COS Secret, downloads the selected dump and checksum, and
+verifies the SHA-256 checksum before the PostgreSQL container starts. The local
+operator script invokes `pg_restore` only inside that recovery Pod, which exposes
+the database nowhere else. It then verifies the presence of the pilot's critical
 tables and records their row counts: question versions, assignments, attempts,
 grading runs, guardian consents, and audit logs. A failed checksum, restore, or
 validation leaves the production database untouched and returns a non-zero exit
 code.
 
-By default, the recovery Pod and temporary Jobs are deleted only after the
-validation summary has been printed. `-KeepRecoveryArtifacts` retains them for
-operator investigation; this option does not publish a Service, Ingress, or PVC.
+By default, the recovery Pod is deleted only after the validation summary has
+been printed. `-KeepRecoveryArtifacts` retains it for operator investigation;
+this option does not publish a Service, Ingress, or PVC.
 
 ## Failure handling
 
