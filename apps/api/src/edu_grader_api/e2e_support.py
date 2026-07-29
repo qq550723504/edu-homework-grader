@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unicodedata
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import ClassVar
 from uuid import UUID
@@ -31,10 +31,13 @@ from .models import (
     CurriculumSourceRecord,
     Enrollment,
     GeneratedQuestionDraftRevision,
+    GenerationControlState,
     GenerationDefaultChangeRequest,
     GenerationDefaultChangeStatus,
     GenerationDefaultConfiguration,
     GenerationDefaultSelection,
+    GenerationGovernanceEntry,
+    GenerationGovernanceTargetType,
     GenerationJob,
     GenerationValidationRun,
     GradingPolicy,
@@ -358,6 +361,45 @@ def _seed_generation_default(session: Session, actor: User, now: datetime) -> No
             applied_change_request_id=initial_request.id,
         )
     )
+    session.add_all(
+        [
+            GenerationGovernanceEntry(
+                is_global=True,
+                target_type=GenerationGovernanceTargetType.PROVIDER,
+                target_key="fake",
+                control_state=GenerationControlState.ACTIVE,
+                created_by_user_id=actor.id,
+            ),
+            GenerationGovernanceEntry(
+                is_global=True,
+                target_type=GenerationGovernanceTargetType.MODEL,
+                target_key="fake-v1",
+                control_state=GenerationControlState.ACTIVE,
+                created_by_user_id=actor.id,
+            ),
+            GenerationGovernanceEntry(
+                is_global=True,
+                target_type=GenerationGovernanceTargetType.PROVIDER,
+                target_key="openai",
+                control_state=GenerationControlState.ACTIVE,
+                created_by_user_id=actor.id,
+            ),
+            GenerationGovernanceEntry(
+                is_global=True,
+                target_type=GenerationGovernanceTargetType.MODEL,
+                target_key="gpt-5.6-terra",
+                control_state=GenerationControlState.ACTIVE,
+                created_by_user_id=actor.id,
+            ),
+            GenerationGovernanceEntry(
+                is_global=True,
+                target_type=GenerationGovernanceTargetType.PROMPT_VERSION,
+                target_key="generator-v1",
+                control_state=GenerationControlState.ACTIVE,
+                created_by_user_id=actor.id,
+            ),
+        ]
+    )
 
 
 def seed_demo_assignment(session: Session) -> None:
@@ -385,7 +427,7 @@ def seed_demo_assignment(session: Session) -> None:
             session.commit()
             return
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     tenant = tenant or Tenant(slug="pilot", name="E2E Pilot School")
     teacher = User(
         tenant=tenant,

@@ -11,6 +11,9 @@ from edu_grader_api.e2e_support import (
 from edu_grader_api.models import (
     GeneratedQuestionDraft,
     GeneratedQuestionDraftRevision,
+    GenerationControlState,
+    GenerationGovernanceEntry,
+    GenerationGovernanceTargetType,
     GenerationJob,
     GenerationValidationRun,
 )
@@ -98,10 +101,46 @@ def test_ai_review_seed_is_idempotent() -> None:
             validation_count = session.scalar(
                 select(func.count()).select_from(GenerationValidationRun)
             )
+            active_global_controls = set(
+                session.execute(
+                    select(
+                        GenerationGovernanceEntry.target_type,
+                        GenerationGovernanceEntry.target_key,
+                        GenerationGovernanceEntry.control_state,
+                    ).where(GenerationGovernanceEntry.is_global.is_(True))
+                ).all()
+            )
 
             assert len(job_ids) == 1
             assert draft_count == 2
             assert revision_count == 3
             assert validation_count == 2
+            assert {
+                (
+                    GenerationGovernanceTargetType.PROVIDER,
+                    "fake",
+                    GenerationControlState.ACTIVE,
+                ),
+                (
+                    GenerationGovernanceTargetType.MODEL,
+                    "fake-v1",
+                    GenerationControlState.ACTIVE,
+                ),
+                (
+                    GenerationGovernanceTargetType.PROVIDER,
+                    "openai",
+                    GenerationControlState.ACTIVE,
+                ),
+                (
+                    GenerationGovernanceTargetType.MODEL,
+                    "gpt-5.6-terra",
+                    GenerationControlState.ACTIVE,
+                ),
+                (
+                    GenerationGovernanceTargetType.PROMPT_VERSION,
+                    "generator-v1",
+                    GenerationControlState.ACTIVE,
+                ),
+            } <= active_global_controls
     finally:
         engine.dispose()
