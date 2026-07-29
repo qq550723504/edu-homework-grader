@@ -26,6 +26,7 @@ from .routers.questions import router as questions_router
 from .routers.questions import version_router as question_versions_router
 from .routers.reviews import metrics_router, publication_router
 from .routers.reviews import router as reviews_router
+from .routers.operational_evaluations import router as operational_evaluations_router
 from .routers.teacher import router as teacher_router
 from .services.generation_default_governance import (
     GenerationDefaultGovernanceError,
@@ -60,6 +61,7 @@ app.include_router(reviews_router)
 app.include_router(publication_router)
 app.include_router(metrics_router)
 app.include_router(teacher_router)
+app.include_router(operational_evaluations_router)
 
 
 @app.get("/health", tags=["system"])

@@ -33,6 +33,10 @@ def _require_production_security_controls(
     generator_provider_allowed_hosts: str,
     student_activation_hmac_key: str,
     keycloak_student_provisioner_client_secret: str,
+    github_operational_evaluation_audience: str,
+    github_operational_evaluation_repository_id: str,
+    github_operational_evaluation_owner_id: str,
+    github_operational_evaluation_workflow_ref: str,
 ) -> None:
     if app_env != "production":
         return
@@ -48,6 +52,16 @@ def _require_production_security_controls(
             )
         if len(evaluation_evidence_hmac_key.encode("utf-8")) < 32:
             raise ValueError("EVALUATION_EVIDENCE_HMAC_KEY must be at least 32 bytes in production")
+        github_trust_values = {
+            "GITHUB_OPERATIONAL_EVALUATION_AUDIENCE": github_operational_evaluation_audience,
+            "GITHUB_OPERATIONAL_EVALUATION_REPOSITORY_ID": github_operational_evaluation_repository_id,
+            "GITHUB_OPERATIONAL_EVALUATION_OWNER_ID": github_operational_evaluation_owner_id,
+            "GITHUB_OPERATIONAL_EVALUATION_WORKFLOW_REF": github_operational_evaluation_workflow_ref,
+        }
+        if any(not value.strip() for value in github_trust_values.values()):
+            raise ValueError(
+                "GITHUB_OPERATIONAL_EVALUATION trust configuration is required in production"
+            )
     if len(student_activation_hmac_key.encode("utf-8")) < 32:
         raise ValueError("STUDENT_ACTIVATION_HMAC_KEY must be at least 32 bytes in production")
     if not keycloak_student_provisioner_client_secret:
@@ -117,6 +131,13 @@ class Settings(BaseSettings):
     keycloak_admin_base_url: str = "http://keycloak:8080"
     keycloak_student_provisioner_client_id: str = "student-provisioner"
     keycloak_student_provisioner_client_secret: str = ""
+    github_operational_evaluation_audience: str = ""
+    github_operational_evaluation_repository_id: str = ""
+    github_operational_evaluation_owner_id: str = ""
+    github_operational_evaluation_workflow_ref: str = ""
+    operational_evaluation_namespace: str = "edu-homework-grader"
+    operational_evaluation_executor_image: str = ""
+    operational_evaluation_callback_base_url: str = "http://api:8000"
     processor_allowed_hosts: str = "grader,languagetool,localhost"
     generation_provider: str = "fake"
     openai_api_key: str = ""
@@ -153,6 +174,10 @@ class Settings(BaseSettings):
             "generator_provider_allowed_hosts",
             "student_activation_hmac_key",
             "keycloak_student_provisioner_client_secret",
+            "github_operational_evaluation_audience",
+            "github_operational_evaluation_repository_id",
+            "github_operational_evaluation_owner_id",
+            "github_operational_evaluation_workflow_ref",
         )
         if any(field not in info.data for field in required_fields):
             return ai_duplicate_similarity_threshold
@@ -173,6 +198,18 @@ class Settings(BaseSettings):
             student_activation_hmac_key=info.data["student_activation_hmac_key"],
             keycloak_student_provisioner_client_secret=info.data[
                 "keycloak_student_provisioner_client_secret"
+            ],
+            github_operational_evaluation_audience=info.data[
+                "github_operational_evaluation_audience"
+            ],
+            github_operational_evaluation_repository_id=info.data[
+                "github_operational_evaluation_repository_id"
+            ],
+            github_operational_evaluation_owner_id=info.data[
+                "github_operational_evaluation_owner_id"
+            ],
+            github_operational_evaluation_workflow_ref=info.data[
+                "github_operational_evaluation_workflow_ref"
             ],
         )
         return ai_duplicate_similarity_threshold

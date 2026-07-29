@@ -85,6 +85,7 @@ spec:
       labels:
         app.kubernetes.io/name: api
     spec:
+      serviceAccountName: operational-evaluation-api
       initContainers:
         - name: migrate
           image: ghcr.io/qq550723504/edu-homework-grader-api:sha-not-published
@@ -156,6 +157,22 @@ spec:
             - name: KEYCLOAK_STUDENT_PROVISIONER_CLIENT_SECRET
               valueFrom:
                 secretKeyRef: {name: edu-grader-runtime, key: KEYCLOAK_STUDENT_PROVISIONER_CLIENT_SECRET}
+            - name: GITHUB_OPERATIONAL_EVALUATION_AUDIENCE
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: GITHUB_OPERATIONAL_EVALUATION_AUDIENCE}
+            - name: GITHUB_OPERATIONAL_EVALUATION_REPOSITORY_ID
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: GITHUB_OPERATIONAL_EVALUATION_REPOSITORY_ID}
+            - name: GITHUB_OPERATIONAL_EVALUATION_OWNER_ID
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: GITHUB_OPERATIONAL_EVALUATION_OWNER_ID}
+            - name: GITHUB_OPERATIONAL_EVALUATION_WORKFLOW_REF
+              valueFrom:
+                secretKeyRef: {name: edu-grader-runtime, key: GITHUB_OPERATIONAL_EVALUATION_WORKFLOW_REF}
+            - name: OPERATIONAL_EVALUATION_EXECUTOR_IMAGE
+              value: ghcr.io/qq550723504/edu-homework-grader-api:sha-not-published
+            - name: OPERATIONAL_EVALUATION_CALLBACK_BASE_URL
+              value: http://api:8000
           readinessProbe:
             httpGet:
               path: /infrastructure-ready

@@ -10,15 +10,17 @@ A run fails closed when required evidence is missing or contradictory. In partic
 
 ## Protected environment
 
-Create a GitHub Environment named `ai-evaluation-operational`. Restrict it to the protected `main` branch and add required reviewers where appropriate. The repository workflow checks out `main` unconditionally before it reads the signing key; operational evidence is intentionally not produced from arbitrary branches, tags, or commits.
+Create a GitHub Environment named `ai-evaluation-operational`. Restrict it to the protected `main` branch and add required reviewers where appropriate. The workflow runs only from `main` through `workflow_dispatch`; the API additionally rejects tokens unless they identify the exact `ai-evaluation-operational.yml@refs/heads/main` workflow, the immutable repository and owner IDs, public repository visibility, and a GitHub-hosted runner.
 
-Configure:
+Configure these GitHub Environment **variables** (not secrets):
 
-- Secret `DATABASE_URL`: a read-only PostgreSQL connection scoped to the evaluation tenant or replica.
-- Secret or variable `OPERATIONAL_EVALUATION_SPEC_JSON`: the exact export and comparison policy described below.
-- Secret `EVALUATION_EVIDENCE_HMAC_KEY`: a 32-byte-or-longer key shared with the API runtime secret. It signs `report.json`; only this protected environment may read the key.
+- `OPERATIONAL_EVALUATION_API_URL`: `https://edu.getkr.com/v1/internal/operational-evaluations`.
+- `OPERATIONAL_EVALUATION_AUDIENCE`: the audience configured in the production API trust settings.
+- `OPERATIONAL_EVALUATION_SPEC_JSON`: the exact export and comparison policy described below.
 
-Do not use an application owner credential. The database role needs `SELECT` only on curriculum, generation, validation, review, governance, question, and grading-policy tables used by the exporter.
+The workflow has no database URL, HMAC key, kubeconfig, PAT, or cluster credential. It requests a short-lived GitHub OIDC token for each API request. The in-cluster executor receives an independent `operational-evaluation-runtime` Secret containing a `SELECT`-only PostgreSQL URL and the HMAC key; it never receives `edu-grader-runtime`.
+
+Before the first deployment, run `scripts/k8s/bootstrap-operational-evaluation.ps1` from an operator workstation with cluster access. It creates or rotates the database reader, writes the dedicated executor Secret, and adds only the GitHub trust values to `edu-grader-runtime`. It grants `SELECT` only to the exporter’s reviewed table list and fails if PostgreSQL reports any `INSERT`, `UPDATE`, or `DELETE` privilege on that list. It requires the repository ID, owner ID, exact workflow reference, audience, and a digest-pinned API image. It does not print passwords, HMAC keys, database URLs, or OIDC tokens.
 
 ## Specification
 
@@ -103,7 +105,9 @@ Exit code `0` means both versions meet their individual gates, governance approv
 
 ## Artifacts
 
-The command writes:
+The GitHub workflow waits for the in-cluster Job, downloads only its signed `report.json`, and uploads that file as `operational-ai-evaluation-<run-id>` for 30 days. The API retains the same signed report plus sanitized run metadata for exactly 30 days; the daily retention Job then deletes the metadata and its per-run callback Secret.
+
+For a local, read-only diagnostic run, the command writes:
 
 - `records.jsonl`: de-identified facts used for the decision;
 - `manifest.json`: exporter version, watermark, counts, and deterministic digest;
@@ -111,8 +115,10 @@ The command writes:
 - `report.json`: a machine-readable signed envelope containing the gates, comparisons, and violations;
 - `report.html`: human-readable rendering of the same report.
 
-Operational artifacts are sensitive internal quality evidence even though they exclude student and candidate content. Keep them behind repository/environment access controls and apply the configured retention period.
+Operational artifacts are sensitive internal quality evidence even though they exclude student and candidate content. Keep them behind repository/environment access controls and apply the configured retention period. Do not upload local `records.jsonl`, `manifest.json`, or `export-issues.json` to GitHub Actions.
 
 ## Interpretation limits
 
 A missing cost or seed is recorded explicitly in the safe `parameters` metadata rather than fabricated. Current cost values are only authoritative when the generation attempt persisted Provider usage data. Teacher-calibrated thresholds, pedagogical adjudication, and shadow/canary rollout decisions remain governed by issue #42; this exporter does not replace those human decisions.
+
+An empty production dataset can complete the transport path, but it is promotion-ineligible because the evidence minimums and required strata are not met. Do not create or promote a generation default merely to prove this operational path.

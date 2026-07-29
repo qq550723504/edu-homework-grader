@@ -1,0 +1,142 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: operational-evaluation-api
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: operational-evaluation-executor
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: operational-evaluation-retention
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: operational-evaluation-api
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: operational-evaluation-retention
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: operational-evaluation-api
+subjects:
+  - kind: ServiceAccount
+    name: operational-evaluation-api
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: operational-evaluation-api
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: operational-evaluation-retention
+subjects:
+  - kind: ServiceAccount
+    name: operational-evaluation-retention
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: operational-evaluation-retention
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: operational-evaluation-default-deny
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: operational-evaluation
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: operational-evaluation-executor-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: operational-evaluation
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: api
+      ports:
+        - protocol: TCP
+          port: 8000
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: operational-evaluation-retention
+spec:
+  schedule: "15 4 * * *"
+  timeZone: Asia/Singapore
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          serviceAccountName: operational-evaluation-retention
+          restartPolicy: Never
+          containers:
+            - name: expire
+              image: ghcr.io/qq550723504/edu-homework-grader-api:sha-not-published
+              command: ["python", "-m", "edu_grader_api.cli.expire_operational_evaluations"]
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: edu-grader-runtime
+                      key: DATABASE_URL

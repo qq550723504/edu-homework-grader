@@ -12,6 +12,7 @@ dependencies = [
   "fastapi==0.139.0",
   "httpx>=0.28,<1",
   "jsonschema>=4.26,<5",
+  "kubernetes>=33,<34",
   "pydantic-settings>=2.10,<3",
   "psycopg[binary]>=3.2,<4",
   "pyjwt[crypto]>=2.10,<3",

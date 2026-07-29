@@ -25,7 +25,7 @@ users: []
             $kindMatch = [regex]::Match($document, '(?m)^kind:\s*(\S+)\s*$')
             $metadataMatch = [regex]::Match(
                 $document,
-                '(?ms)^metadata:\s*\r?\n(?<body>.*?)(?=^\S)'
+                '(?ms)^metadata:\s*\r?\n(?<body>.*?)(?=^\S|\z)'
             )
             if (-not $kindMatch.Success -or -not $metadataMatch.Success) {
                 continue
@@ -70,10 +70,20 @@ users: []
             'Deployment/languagetool'
             'Deployment/web'
             'CronJob/student-activation-expiry'
+            'CronJob/operational-evaluation-retention'
+            'ServiceAccount/operational-evaluation-api'
+            'ServiceAccount/operational-evaluation-executor'
+            'ServiceAccount/operational-evaluation-retention'
+            'Role/operational-evaluation-api'
+            'Role/operational-evaluation-retention'
+            'RoleBinding/operational-evaluation-api'
+            'RoleBinding/operational-evaluation-retention'
+            'NetworkPolicy/operational-evaluation-default-deny'
+            'NetworkPolicy/operational-evaluation-executor-egress'
         )
         $actual = @($Resources | ForEach-Object { "$($_.Kind)/$($_.Name)" })
 
-        $actual | Should -HaveCount 5
+        $actual | Should -HaveCount 15
         foreach ($key in $expected) {
             $actual | Should -Contain $key
         }
@@ -111,8 +121,13 @@ users: []
 '@
         }
 
-        if ($joined -eq 'get cronjob student-activation-expiry --output json --namespace edu-homework-grader') {
-            return '{"metadata":{"name":"student-activation-expiry"},"spec":{"jobTemplate":{"spec":{"template":{"spec":{"containers":[{"name":"expire","image":"registry.example/api-cron@sha256:old-cron"}]}}}}}}'
+        if ($joined -eq 'get cronjob student-activation-expiry operational-evaluation-retention --output json --namespace edu-homework-grader') {
+            return @'
+{"items":[
+  {"metadata":{"name":"student-activation-expiry"},"spec":{"jobTemplate":{"spec":{"template":{"spec":{"containers":[{"name":"expire","image":"registry.example/api-cron@sha256:old-cron"}]}}}}}},
+  {"metadata":{"name":"operational-evaluation-retention"},"spec":{"jobTemplate":{"spec":{"template":{"spec":{"containers":[{"name":"expire","image":"registry.example/api-eval-cron@sha256:old-eval-cron"}]}}}}}}
+]}
+'@
         }
 
         if ($joined -match '^get deployment (api|grader|web|languagetool) --output json --namespace edu-homework-grader$') {
@@ -271,7 +286,7 @@ BeforeEach {
         )
         Assert-ManagedReleaseObjects -Resources $resources
         $images = @(Get-WorkloadImages -Resources $resources)
-        $images | Should -HaveCount 6
+        $images | Should -HaveCount 7
         foreach ($image in $images) {
             $image | Should -Match ([regex]::Escape(":$validSha") + '$')
             $image | Should -Not -Match 'sha-not-published'
@@ -359,7 +374,7 @@ BeforeEach {
         )
         Assert-ManagedReleaseObjects -Resources $rollbackResources
         $rollbackImages = @(Get-WorkloadImages -Resources $rollbackResources)
-        $rollbackImages | Should -HaveCount 6
+        $rollbackImages | Should -HaveCount 7
         foreach ($expectedImage in @(
             'registry.example/migrate@sha256:old-migrate'
             'registry.example/api@sha256:old-api'
@@ -367,6 +382,7 @@ BeforeEach {
             'registry.example/web@sha256:old-web'
             'registry.example/languagetool@sha256:old-language'
             'registry.example/api-cron@sha256:old-cron'
+            'registry.example/api-eval-cron@sha256:old-eval-cron'
         )) {
             $rollbackImages | Should -Contain $expectedImage
         }
