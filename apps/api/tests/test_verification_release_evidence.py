@@ -193,6 +193,7 @@ def test_reusable_evidence_workflow_pulls_published_candidate_images() -> None:
     assert "docker/login-action@" in workflow
     assert 'docker pull "$RELEASE_EVIDENCE_GRADER_IMAGE"' in workflow
     assert 'docker pull "$RELEASE_EVIDENCE_LANGUAGETOOL_IMAGE"' in workflow
+    assert r"\\n" not in workflow
 
 
 def test_source_revision_prefers_explicit_evidence_revision(
