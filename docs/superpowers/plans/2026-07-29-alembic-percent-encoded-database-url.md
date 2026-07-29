@@ -29,7 +29,7 @@
 - Consumes: `settings.database_url: str`.
 - Produces: online connection construction with `create_engine(settings.database_url, poolclass=pool.NullPool)`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 import os
@@ -58,13 +58,13 @@ def test_offline_alembic_migrations_accept_a_percent_encoded_database_url() -> N
     assert "invalid interpolation syntax" not in completed.stderr
 ```
 
-- [ ] **Step 2: Run the test and confirm red**
+- [x] **Step 2: Run the test and confirm red**
 
 Run: `python -m pytest apps/api/tests/test_alembic_url_configuration.py -q`
 
 Expected: `FAIL` with `ValueError: invalid interpolation syntax` from `config.set_main_option`.
 
-- [ ] **Step 3: Make the minimal implementation change**
+- [x] **Step 3: Make the minimal implementation change**
 
 Replace the SQLAlchemy import and online connection construction with:
 
@@ -80,7 +80,7 @@ def run_migrations_online() -> None:
 
 Delete `config.set_main_option("sqlalchemy.url", settings.database_url)` and delete the `engine_from_config(...)` call.
 
-- [ ] **Step 4: Verify green and focused migration coverage**
+- [x] **Step 4: Verify green and focused migration coverage**
 
 Run:
 
@@ -91,7 +91,7 @@ python -m pytest apps/api/tests/test_curriculum_models.py apps/api/tests/test_qu
 
 Expected: all selected tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add apps/api/alembic/env.py apps/api/tests/test_alembic_url_configuration.py
@@ -107,7 +107,7 @@ git commit -m "fix: support percent encoded Alembic database URLs"
 - Consumes: the pushed fix commit and label `build-migration-image` on PR `#158`.
 - Produces: a validated digest-pinned GHCR API image and a successful one-time migration Job.
 
-- [ ] **Step 1: Push and trigger a new image build**
+- [x] **Step 1: Push and trigger a new image build**
 
 Run:
 
@@ -121,7 +121,7 @@ gh api --method POST repos/qq550723504/edu-homework-grader/issues/158/labels -f 
 
 Expected: a `Build API migration image` run starts for the current branch SHA.
 
-- [ ] **Step 2: Validate the immutable artifact**
+- [x] **Step 2: Validate the immutable artifact**
 
 Run:
 
@@ -137,7 +137,7 @@ $image = "ghcr.io/qq550723504/edu-homework-grader-api@$digest"
 
 Expected: `$image` is a digest-pinned GHCR reference derived from the completed HEAD workflow.
 
-- [ ] **Step 3: Run and inspect migration completion**
+- [x] **Step 3: Run and inspect migration completion**
 
 Run:
 
@@ -157,7 +157,7 @@ Expected: context is `pilot-64.90.22.137`, the Job completes, and it reports rev
 - Consumes: the migrated schema, existing backup CronJob, and isolated recovery drill.
 - Produces: a fresh successful backup and recovery evidence record without credentials.
 
-- [ ] **Step 1: Run a fresh backup**
+- [x] **Step 1: Run a fresh backup**
 
 Run:
 
@@ -170,7 +170,7 @@ $backupTimestamp = (kubectl -n edu-homework-grader logs "job/$jobName" | Select-
 
 Expected: the Job completes and logs a UTC COS timestamp.
 
-- [ ] **Step 2: Run the isolated recovery drill**
+- [x] **Step 2: Run the isolated recovery drill**
 
 Run:
 
@@ -183,6 +183,6 @@ Run:
 
 Expected: checksum verification, isolated restore, and migrated-table checks succeed.
 
-- [ ] **Step 3: Record verified evidence**
+- [x] **Step 3: Record verified evidence**
 
 Update the runbook with the timestamp, successful Job names, and immutable migration image digest. Run `git diff --check`; commit only the runbook evidence update.

@@ -135,4 +135,23 @@ timestamp, COS object prefix, temporary recovery Pod name, checksum result, six
 table-group count labels, and command exit statuses in Issue #153. Do not record
 credentials, database URLs, dump URLs, dump content, or table rows.
 
-Keep `backup_restore_drill_verified` false until that evidence exists.
+Keep `backup_restore_drill_verified` false until that evidence exists, then
+update the machine-readable release evidence to `true`.
+
+## Verified execution: 2026-07-29
+
+The following P0 recovery evidence was collected in Kubernetes context
+`pilot-64.90.22.137`, namespace `edu-homework-grader`:
+
+- Migration Job `postgres-migrate-20260729083508` completed with API image
+  `ghcr.io/qq550723504/edu-homework-grader-api@sha256:f1223dc9e0c8f368ca6d91ecf38d486f8d467f6b9a51f24dfb2fd95de2c1bd1d`
+  and Alembic revision `0026_question_content_snapshots`.
+- Backup Job `postgres-backup-manual-20260729083548` completed and verified the
+  COS object pair for UTC backup timestamp `20260729T083551Z`.
+- The isolated recovery drill completed successfully against that timestamp in
+  temporary Pod `postgres-recovery-20260729t083551z`; it verified the checksum
+  and queried all six required table groups.
+- The new schema contained no application rows at the time of the drill, so all
+  six reported counts were `0`. This is expected for the freshly initialized
+  pilot database and still proves that the restored migrated tables exist and
+  are queryable.
