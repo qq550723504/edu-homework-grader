@@ -56,6 +56,9 @@ Describe 'PostgreSQL COS backup documentation' {
         $document | Should -Match 'postgres-backup'
         $document | Should -Match '14 days'
         $document | Should -Match 'edu-homework-grader/postgres/'
+        $document | Should -Match 'Build API migration image'
+        $document | Should -Match 'api-migration-image-digest'
+        $document | Should -Match '@sha256'
         $document | Should -Match "postgres-backup-manual-' \+ \(Get-Date -AsUTC -Format 'yyyyMMddHHmmss'\)"
         $document | Should -Not -Match "postgres-backup-manual-\$\(Get-Date -AsUTC -Format 'yyyyMMddTHHmmssZ'\)"
         $document | Should -Not -Match 'AKID'

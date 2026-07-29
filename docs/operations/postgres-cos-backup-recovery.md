@@ -43,6 +43,21 @@ $region = Read-Host 'Approved COS region'
 The command creates `Secret/edu-grader-backup-cos`. It refuses to replace an
 existing Secret unless the operator explicitly adds `-Replace`.
 
+## Build the migration image
+
+Use the **Build API migration image** GitHub Actions workflow with the approved
+40-character source SHA. It builds and publishes only the API image; it does
+not deploy production or access Kubernetes.
+
+After the workflow succeeds, download its `api-migration-image-digest` artifact
+and read the `sha256` value from `api-migration-image-digest.txt`. Form the
+digest-pinned image reference without using the mutable SHA tag:
+
+```powershell
+$digest = Read-Host 'SHA-256 digest from api-migration-image-digest.txt'
+$image = "ghcr.io/qq550723504/edu-homework-grader-api@$digest"
+```
+
 ## Initialize the application schema
 
 For a newly created PostgreSQL StatefulSet, run the real Alembic history from
