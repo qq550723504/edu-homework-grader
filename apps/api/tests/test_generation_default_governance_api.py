@@ -205,4 +205,8 @@ def test_platform_governance_admin_submits_redacted_default_change(
 
     assert response.status_code == 201
     assert response.json()["status"] == "pending_approval"
+    assert (
+        response.json()["prompt_template_fingerprint"]
+        == resolve_prompt_template("generator-v1", ("M1", "M2", "E1", "E2", "E3", "E4")).fingerprint
+    )
     assert "evaluation_report" not in response.json()

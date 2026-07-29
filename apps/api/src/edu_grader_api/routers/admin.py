@@ -13,8 +13,8 @@ from ..db import get_session
 from ..dependencies import require_role
 from ..models import (
     AuditLog,
-    ClassTeacher,
     Classroom,
+    ClassTeacher,
     GenerationControlState,
     GenerationDefaultChangeRequest,
     GenerationDefaultChangeStatus,
@@ -24,7 +24,6 @@ from ..models import (
     Role,
     User,
 )
-from ..services.generation_governance import assert_transition_is_valid
 from ..services.generation_default_governance import (
     GenerationDefaultGovernanceError,
     apply_change_request,
@@ -33,9 +32,9 @@ from ..services.generation_default_governance import (
     submit_change_request,
     submit_rollback_request,
 )
+from ..services.generation_governance import assert_transition_is_valid
 from ..services.roster import RosterValidationError, import_roster, parse_roster
 from ..settings import settings
-
 
 router = APIRouter(prefix="/v1/admin", tags=["admin"])
 
@@ -519,6 +518,7 @@ def _default_change_request_payload(entry: GenerationDefaultChangeRequest) -> di
         "provider_name": configuration.provider_name,
         "model_version": configuration.model_version,
         "prompt_version": configuration.prompt_version,
+        "prompt_template_fingerprint": configuration.prompt_template_fingerprint,
         "request_reason": entry.request_reason,
         "approval_reason": entry.approval_reason,
         "application_reason": entry.application_reason,

@@ -49,11 +49,12 @@ const requestReason = ref('')
 const evaluationReport = ref('')
 const submissionIdempotencyKey = ref<string | null>(null)
 const rollbackIdempotencyKeys = ref<Record<string, { key: string; reason: string }>>({})
+const decisionIdempotencyKeys = ref<Record<string, { key: string; reason: string }>>({})
 watch([providerName, modelVersion, promptVersion, requestReason, evaluationReport], () => { submissionIdempotencyKey.value = null })
 function canRollback(item: NonNullable<GenerationDefaultSummary['history']>[number]): boolean {
   const current = summary.value?.current
   return (item.status === 'superseded' || item.status === 'rolled_back')
-    && !(current && item.provider_name === current.provider_name && item.model_version === current.model_version && item.prompt_version === current.prompt_version)
+    && !(current && item.provider_name === current.provider_name && item.model_version === current.model_version && item.prompt_version === current.prompt_version && item.prompt_template_fingerprint === current.prompt_template_fingerprint)
 }
 function isGovernanceAuthorizationFailure(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false
@@ -74,8 +75,10 @@ async function load() {
   }
 }
 async function csrfToken(): Promise<string> { const principal = await fetchCurrentPrincipal($fetch); if (!principal.csrf_token) throw new Error('登录会话已过期，请重新登录。'); return principal.csrf_token }
-async function decide(id: string, action: 'approve' | 'reject') { const reason = window.prompt(action === 'approve' ? '审批说明' : '拒绝原因')?.trim(); if (!reason) return; saving.value = true; try { await decideGenerationDefaultChange($fetch, await csrfToken(), crypto.randomUUID(), id, action, reason); message.value = '操作已保存。'; await load() } catch { message.value = '操作失败。' } finally { saving.value = false } }
-async function apply(id: string) { const reason = window.prompt('应用说明')?.trim(); if (!reason) return; saving.value = true; try { await decideGenerationDefaultChange($fetch, await csrfToken(), crypto.randomUUID(), id, 'apply', reason); message.value = '默认配置已应用。'; await load() } catch { message.value = '应用失败。' } finally { saving.value = false } }
+function retainedDecisionKey(id: string, action: 'approve' | 'reject' | 'apply', reason: string): string { const target = `${id}:${action}`; const retained = decisionIdempotencyKeys.value[target]; const key = retained?.reason === reason ? retained.key : crypto.randomUUID(); decisionIdempotencyKeys.value[target] = { key, reason }; return key }
+function clearDecisionKey(id: string, action: 'approve' | 'reject' | 'apply') { delete decisionIdempotencyKeys.value[`${id}:${action}`] }
+async function decide(id: string, action: 'approve' | 'reject') { const reason = window.prompt(action === 'approve' ? '审批说明' : '拒绝原因')?.trim(); if (!reason) return; saving.value = true; try { await decideGenerationDefaultChange($fetch, await csrfToken(), retainedDecisionKey(id, action, reason), id, action, reason); clearDecisionKey(id, action); message.value = '操作已保存。'; await load() } catch { message.value = '操作失败。' } finally { saving.value = false } }
+async function apply(id: string) { const reason = window.prompt('应用说明')?.trim(); if (!reason) return; saving.value = true; try { await decideGenerationDefaultChange($fetch, await csrfToken(), retainedDecisionKey(id, 'apply', reason), id, 'apply', reason); clearDecisionKey(id, 'apply'); message.value = '默认配置已应用。'; await load() } catch { message.value = '应用失败。' } finally { saving.value = false } }
 async function rollback(id: string) { const reason = window.prompt('回滚原因')?.trim(); if (!reason) return; saving.value = true; try { const retained = rollbackIdempotencyKeys.value[id]; const key = retained?.reason === reason ? retained.key : crypto.randomUUID(); rollbackIdempotencyKeys.value[id] = { key, reason }; await rollbackGenerationDefaultChange($fetch, await csrfToken(), key, id, reason); delete rollbackIdempotencyKeys.value[id]; message.value = '已提交回滚申请。'; await load() } catch { message.value = '回滚申请失败。' } finally { saving.value = false } }
 async function submit() {
   let report: Record<string, unknown>

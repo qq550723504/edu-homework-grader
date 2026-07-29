@@ -68,6 +68,13 @@ def test_development_realm_users_do_not_require_profile_completion() -> None:
         assert "offline_access" in user["realmRoles"]
 
 
+def test_development_realm_user_ids_are_unique() -> None:
+    realm = json.loads(Path("infra/keycloak/edu-grader-realm.json").read_text(encoding="utf-8"))
+    user_ids = [user["id"] for user in realm["users"]]
+
+    assert len(user_ids) == len(set(user_ids))
+
+
 def test_compose_requires_sensitive_development_values_instead_of_embedding_defaults() -> None:
     compose = Path("compose.yaml").read_text(encoding="utf-8")
 

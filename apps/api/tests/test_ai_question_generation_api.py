@@ -545,6 +545,43 @@ def test_legacy_regeneration_without_a_default_returns_a_stable_rejection(
     assert response.json() == {"detail": {"code": "generation_request_rejected"}}
 
 
+def test_legacy_regeneration_replays_before_resolving_a_missing_default(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    headers, created = create_generation_job(
+        client, teacher, revision, idempotency_key="legacy-regeneration-replay-source"
+    )
+    source = session.get(GenerationJob, UUID(str(created["id"])))
+    assert source is not None
+    source.provider_name = None
+    source.model_version = None
+    source.prompt_template_fingerprint = None
+    session.commit()
+    source_draft = fetch_only_draft(client, headers, created["id"])
+    replay_headers = headers | {"Idempotency-Key": "legacy-regeneration-replay"}
+
+    first = client.post(
+        f"/v1/ai-generated-questions/{source_draft['id']}/regenerate",
+        headers=replay_headers,
+        json={},
+    )
+    assert first.status_code == 201
+    selection = session.get(GenerationDefaultSelection, "global")
+    assert selection is not None
+    session.delete(selection)
+    session.commit()
+
+    replay = client.post(
+        f"/v1/ai-generated-questions/{source_draft['id']}/regenerate",
+        headers=replay_headers,
+        json={},
+    )
+
+    assert replay.status_code == 201
+    assert replay.json()["id"] == first.json()["id"]
+
+
 def fetch_only_draft(
     client: TestClient, headers: dict[str, str], job_id: object
 ) -> dict[str, object]:

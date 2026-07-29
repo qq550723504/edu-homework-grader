@@ -390,9 +390,10 @@ def regenerate_draft_route(
     )
     existing = _find_job_by_idempotency(session, actor=actor, idempotency_key=key)
     try:
-        snapshot = snapshot_for_regeneration(session, original)
+        snapshot = None
         reserved = False
         if existing is None:
+            snapshot = snapshot_for_regeneration(session, original)
             assert_generation_snapshot_prompt_current(snapshot, [source_item])
             reserved = _enforce_generation_quota(
                 session,
