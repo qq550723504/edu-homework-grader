@@ -379,6 +379,7 @@ def submit_rollback_request(
         }
         or selection is None
         or target.id == selection.applied_change_request_id
+        or target.configuration_id == selection.configuration_id
     ):
         raise GenerationDefaultGovernanceError("default_rollback_target_invalid")
     request_digest = _canonical_sha256(

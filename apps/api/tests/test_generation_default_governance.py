@@ -341,6 +341,7 @@ def test_rollback_is_a_new_approved_change_request(
     session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service = governance_service()
+    monkeypatch.setattr(service, "supports_generation_provider", lambda *_: True)
     submitter = platform_admin(session)
     approver = platform_admin(session, subject="platform-approver")
     original = service.submit_change_request(
@@ -363,10 +364,10 @@ def test_rollback_is_a_new_approved_change_request(
         session,
         actor=submitter,
         provider_name="fake",
-        model_version="fake-v1",
+        model_version="fake-v2",
         prompt_version="generator-v1",
         request_reason="Upgrade governed default",
-        evaluation_report=passing_report(baseline_model_id="fake-v1"),
+        evaluation_report=passing_report(model_id="fake-v2", baseline_model_id="fake-v1"),
         idempotency_key="promote-6",
     )
     service.approve_change_request(
@@ -644,6 +645,71 @@ def test_rollback_rejects_the_active_default_as_its_own_target(session: Session)
             target_request_id=current.id,
             request_reason="No-op rollback",
             idempotency_key="active-default-rollback",
+        )
+
+    assert error.value.code == "default_rollback_target_invalid"
+
+
+def test_rollback_rejects_a_historical_request_with_the_active_configuration(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = governance_service()
+    monkeypatch.setattr(service, "supports_generation_provider", lambda *_: True)
+    submitter = platform_admin(session)
+    approver = platform_admin(session, subject="platform-approver")
+    original = service.submit_change_request(
+        session,
+        actor=submitter,
+        provider_name="fake",
+        model_version="fake-v1",
+        prompt_version="generator-v1",
+        request_reason="Initial governed default",
+        evaluation_report=passing_report(),
+        idempotency_key="historical-active-original",
+    )
+    service.approve_change_request(
+        session, request_id=original.id, actor=approver, approval_reason="Verified"
+    )
+    service.apply_change_request(
+        session, request_id=original.id, actor=submitter, application_reason="Release"
+    )
+    replacement = service.submit_change_request(
+        session,
+        actor=submitter,
+        provider_name="fake",
+        model_version="fake-v2",
+        prompt_version="generator-v1",
+        request_reason="Replacement governed default",
+        evaluation_report=passing_report(model_id="fake-v2", baseline_model_id="fake-v1"),
+        idempotency_key="historical-active-replacement",
+    )
+    service.approve_change_request(
+        session, request_id=replacement.id, actor=approver, approval_reason="Verified"
+    )
+    service.apply_change_request(
+        session, request_id=replacement.id, actor=submitter, application_reason="Release"
+    )
+    rollback = service.submit_rollback_request(
+        session,
+        actor=submitter,
+        target_request_id=original.id,
+        request_reason="Restore original default",
+        idempotency_key="historical-active-restore",
+    )
+    service.approve_change_request(
+        session, request_id=rollback.id, actor=approver, approval_reason="Verified"
+    )
+    service.apply_change_request(
+        session, request_id=rollback.id, actor=submitter, application_reason="Restore"
+    )
+
+    with pytest.raises(service.GenerationDefaultGovernanceError) as error:
+        service.submit_rollback_request(
+            session,
+            actor=submitter,
+            target_request_id=original.id,
+            request_reason="No-op rollback to the current configuration",
+            idempotency_key="historical-active-noop",
         )
 
     assert error.value.code == "default_rollback_target_invalid"
