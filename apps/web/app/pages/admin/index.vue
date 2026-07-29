@@ -23,16 +23,16 @@
           <button :disabled="saving" type="submit">提交晋级申请</button>
         </form>
         <h3>待审批</h3>
-        <ul><li v-for="item in summary?.pending" :key="item.id">{{ item.model_version }} / {{ item.prompt_version }}：{{ item.request_reason }}<small v-if="item.evaluation_summary">评估：{{ item.evaluation_summary.promotion_eligible ? '可晋级' : '不可晋级' }}，{{ item.evaluation_summary.record_count ?? 0 }} 条样本，{{ item.evaluation_summary.issue_count ?? 0 }} 个导出问题，候选门禁 {{ item.evaluation_summary.candidate_gate?.violations?.length ?? 0 }} 项违规。</small> <button :disabled="saving" type="button" @click="decide(item.id, 'approve')">批准</button><button :disabled="saving" type="button" @click="decide(item.id, 'reject')">拒绝</button></li></ul>
+        <ul><li v-for="item in summary?.pending" :key="item.id">{{ item.provider_name }} / {{ item.model_version }} / {{ item.prompt_version }}：{{ item.request_reason }}<small v-if="item.evaluation_summary">评估：{{ item.evaluation_summary.promotion_eligible ? '可晋级' : '不可晋级' }}，{{ item.evaluation_summary.record_count ?? 0 }} 条样本，{{ item.evaluation_summary.issue_count ?? 0 }} 个导出问题，候选门禁 {{ item.evaluation_summary.candidate_gate?.violations?.length ?? 0 }} 项违规。</small> <button :disabled="saving" type="button" @click="decide(item.id, 'approve')">批准</button><button :disabled="saving" type="button" @click="decide(item.id, 'reject')">拒绝</button></li></ul>
         <h3>历史</h3>
-        <ul><li v-for="item in summary?.history" :key="item.id">{{ item.status }}：{{ item.model_version }} / {{ item.prompt_version }} <button v-if="item.status === 'approved'" :disabled="saving" type="button" @click="apply(item.id)">应用</button><button v-if="item.status === 'superseded' || item.status === 'rolled_back'" :disabled="saving" type="button" @click="rollback(item.id)">申请回滚</button></li></ul>
+        <ul><li v-for="item in summary?.history" :key="item.id">{{ item.status }}：{{ item.provider_name }} / {{ item.model_version }} / {{ item.prompt_version }} <button v-if="item.status === 'approved'" :disabled="saving" type="button" @click="apply(item.id)">应用</button><button v-if="canRollback(item)" :disabled="saving" type="button" @click="rollback(item.id)">申请回滚</button></li></ul>
       </template>
     </section>
   </main>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 
 import { fetchCurrentPrincipal } from '../../lib/student-api'
 import { decideGenerationDefaultChange, fetchGenerationDefaults, rollbackGenerationDefaultChange, submitGenerationDefaultChange, type GenerationDefaultSummary } from '../../lib/admin-generation-defaults'
@@ -47,6 +47,13 @@ const modelVersion = ref('')
 const promptVersion = ref('generator-v1')
 const requestReason = ref('')
 const evaluationReport = ref('')
+const submissionIdempotencyKey = ref<string | null>(null)
+watch([providerName, modelVersion, promptVersion, requestReason, evaluationReport], () => { submissionIdempotencyKey.value = null })
+function canRollback(item: NonNullable<GenerationDefaultSummary['history']>[number]): boolean {
+  const current = summary.value?.current
+  return (item.status === 'superseded' || item.status === 'rolled_back')
+    && !(current && item.provider_name === current.provider_name && item.model_version === current.model_version && item.prompt_version === current.prompt_version)
+}
 function isGovernanceAuthorizationFailure(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false
   const statusCode = (error as { statusCode?: unknown }).statusCode
@@ -74,13 +81,15 @@ async function submit() {
   try { report = JSON.parse(evaluationReport.value) as Record<string, unknown> } catch { message.value = '已签名运营评估证据必须是有效 JSON。'; return }
   saving.value = true
   try {
-    await submitGenerationDefaultChange($fetch, await csrfToken(), crypto.randomUUID(), {
+    submissionIdempotencyKey.value ??= crypto.randomUUID()
+    await submitGenerationDefaultChange($fetch, await csrfToken(), submissionIdempotencyKey.value, {
       provider_name: providerName.value, model_version: modelVersion.value, prompt_version: promptVersion.value,
       request_reason: requestReason.value, evaluation_report: report,
     })
     message.value = '已提交晋级申请。'
     evaluationReport.value = ''
     requestReason.value = ''
+    submissionIdempotencyKey.value = null
     await load()
   } catch { message.value = '晋级申请失败。' } finally { saving.value = false }
 }

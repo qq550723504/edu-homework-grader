@@ -367,6 +367,16 @@ def run_generation_job(
         if job.cancel_requested_at is None:
             session.expire(job)
             session.refresh(job)
+        if result.provider_name != job.provider_name or result.model_version != job.model_version:
+            _finish_attempt(
+                attempt,
+                status="failed",
+                failure_code="generation_provider_snapshot_mismatch",
+                started_at=started_at,
+            )
+            job.failure_code = "generation_provider_snapshot_mismatch"
+            session.flush()
+            break
         attempt.provider_name = result.provider_name
         attempt.model_version = result.model_version
         attempt.response_summary = {"candidate_count": len(result.candidates)}
