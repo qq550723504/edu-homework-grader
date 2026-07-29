@@ -14,7 +14,7 @@ services:
       retries: 30
 
   languagetool:
-    image: edu-homework-grader/languagetool:release-evidence
+    image: ${RELEASE_EVIDENCE_LANGUAGETOOL_IMAGE:-edu-homework-grader/languagetool:release-evidence}
     build:
       context: ../languagetool
     ports:
@@ -47,7 +47,7 @@ services:
         condition: service_healthy
 
   grader:
-    image: edu-homework-grader/grader:release-evidence
+    image: ${RELEASE_EVIDENCE_GRADER_IMAGE:-edu-homework-grader/grader:release-evidence}
     build:
       context: ../..
       dockerfile: services/grader/Dockerfile
@@ -76,7 +76,7 @@ services:
         condition: service_healthy
 
   language-connect-grader:
-    image: edu-homework-grader/grader:release-evidence
+    image: ${RELEASE_EVIDENCE_GRADER_IMAGE:-edu-homework-grader/grader:release-evidence}
     build:
       context: ../..
       dockerfile: services/grader/Dockerfile

@@ -39,6 +39,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: verification-release-evidence-${{ github.event.pull_request.number || inputs.source_sha || github.ref }}
@@ -116,6 +117,54 @@ jobs:
               encoding="utf-8",
           )
           PY
+
+      - name: Prepare published candidate images
+        if: inputs.image_digests != ''
+        shell: bash
+        env:
+          IMAGE_DIGESTS: ${{ inputs.image_digests }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+
+          digests = json.loads(os.environ["IMAGE_DIGESTS"])
+          expected = {"api", "grader", "web", "languagetool"}
+          if not isinstance(digests, dict) or set(digests) != expected:
+              raise SystemExit("image_digests must contain exactly api, grader, web and languagetool")
+          if not all(
+              isinstance(digest, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
+              for digest in digests.values()
+          ):
+              raise SystemExit("image_digests must contain only SHA-256 digests")
+
+          owner = os.environ["GITHUB_REPOSITORY_OWNER"]
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+              output.write(
+                  "RELEASE_EVIDENCE_GRADER_IMAGE="
+                  f"ghcr.io/{owner}/edu-homework-grader-grader@{digests['grader']}\\n"
+              )
+              output.write(
+                  "RELEASE_EVIDENCE_LANGUAGETOOL_IMAGE="
+                  f"ghcr.io/{owner}/edu-homework-grader-languagetool@{digests['languagetool']}\\n"
+              )
+          PY
+
+      - name: Log in to candidate image registry
+        if: inputs.image_digests != ''
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull published candidate images
+        if: inputs.image_digests != ''
+        shell: bash
+        run: |
+          docker pull "$RELEASE_EVIDENCE_GRADER_IMAGE"
+          docker pull "$RELEASE_EVIDENCE_LANGUAGETOOL_IMAGE"
 
       - name: Execute release evidence scenarios
         id: evidence
