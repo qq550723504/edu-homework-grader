@@ -424,7 +424,7 @@ labels:
 resources:
   - application.yaml
   - student-activation-expiry.yaml
-  - operational-evaluation.yaml
+  - operational-evaluation-retention.yaml
 patches:
   - path: managed-keycloak-exclusion.yaml
 '@

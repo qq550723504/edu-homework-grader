@@ -26,4 +26,12 @@ Describe 'bootstrap-operational-evaluation' {
         $source | Should -Match 'operational-evaluation-runtime'
         $source | Should -Not -Match 'Write-(Host|Output).*?(PASSWORD|HMAC|DATABASE_URL|TOKEN)'
     }
+
+    It 'bootstraps privileged evaluation infrastructure before release automation manages images' {
+        $source = Get-Content -Raw $scriptPath
+
+        $source | Should -Match 'operational-evaluation\.yaml'
+        $source | Should -Match 'operational-evaluation-retention\.yaml'
+        $source | Should -Match 'kubectl apply --server-side --force-conflicts --filename'
+    }
 }
