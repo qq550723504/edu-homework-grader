@@ -43,6 +43,25 @@ $region = Read-Host 'Approved COS region'
 The command creates `Secret/edu-grader-backup-cos`. It refuses to replace an
 existing Secret unless the operator explicitly adds `-Replace`.
 
+## Initialize the application schema
+
+For a newly created PostgreSQL StatefulSet, run the real Alembic history from
+the approved API image before treating a backup-and-restore drill as meaningful.
+The migration runner accepts only a GHCR image pinned by SHA-256 digest; do not
+use a mutable tag or an ad-hoc source container.
+
+```powershell
+$image = Read-Host 'Approved API image pinned with @sha256 digest'
+./scripts/k8s/run-postgres-migration.ps1 `
+  -Namespace edu-homework-grader `
+  -Image $image `
+  -ConfirmMigration
+```
+
+The command creates exactly one bounded Job, reads only `DATABASE_URL` from
+`edu-grader-runtime`, waits for completion, and prints the resulting Alembic
+revision. Keep the Job logs as part of the P0 evidence.
+
 ## Enable and run the weekly backup
 
 The `postgres-backup` CronJob runs every Sunday at 03:15 in Asia/Singapore. It
