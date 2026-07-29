@@ -241,6 +241,14 @@ def _snapshot_from_active_revision(
     )
 
 
+def snapshot_for_new_generation(
+    session: Session, revision: CurriculumObjectiveRevision
+) -> GenerationJobSnapshot:
+    """Resolve the governed snapshot a new job must validate before quota use."""
+
+    return _snapshot_from_active_revision(session, revision)
+
+
 def snapshot_for_regeneration(session: Session, job: GenerationJob) -> GenerationJobSnapshot:
     """Preserve an existing governed snapshot, or safely upgrade legacy jobs."""
 

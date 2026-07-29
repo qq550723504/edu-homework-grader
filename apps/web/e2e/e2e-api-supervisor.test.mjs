@@ -141,7 +141,7 @@ test('nonce mismatches refuse cleanup without deleting either target', {
   }
 })
 
-test('polluted parent identity environment cannot change the real E2E identity', {
+test('polluted parent environment cannot change the E2E runtime', {
   timeout: 30_000,
 }, async (t) => {
   const statePrefix = 'edu-homework-grader-e2e-'
@@ -154,6 +154,7 @@ test('polluted parent identity environment cannot change the real E2E identity',
       APP_ENV: 'production',
       OIDC_ISSUER: 'https://conflicting-issuer.example.test/realms/wrong',
       OIDC_TENANT_SLUG: 'wrong-tenant',
+      EVALUATION_EVIDENCE_HMAC_KEY: 'parent-environment-must-not-reach-e2e-api',
     },
     stdio: 'ignore',
   })
@@ -194,7 +195,6 @@ test('polluted parent identity environment cannot change the real E2E identity',
     Object.hasOwn(openApi.components.schemas.GeneratedCandidate.properties, 'verification_assertions'),
     true,
   )
-
   launcher.kill('SIGKILL')
 
   await waitUntil(

@@ -1113,6 +1113,30 @@ def test_regeneration_rejects_a_stale_prompt_snapshot_before_reserving_quota(
     assert usage_after.used_count == used_count_before
 
 
+def test_new_generation_rejects_a_stale_default_prompt_before_reserving_quota(
+    client: TestClient, session: Session
+) -> None:
+    teacher, revision = teacher_and_objective(session)
+    default = session.scalar(select(GenerationDefaultConfiguration))
+    assert default is not None
+    default.prompt_template_fingerprint = "0" * 64
+    session.commit()
+
+    response = client.post(
+        "/v1/ai-question-generation/jobs",
+        headers=authorize(client, teacher) | {"Idempotency-Key": "stale-default-prompt"},
+        json={
+            "curriculum_objective_revision_id": str(revision.id),
+            "items": [{"question_type": "M1", "difficulty_band": "standard"}],
+            "requested_count": 1,
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": {"code": "generation_request_rejected"}}
+    assert session.scalar(select(GenerationQuotaUsage)) is None
+
+
 def test_generation_regeneration_inherits_ordinal_difficulty_plan_and_snapshot(
     client: TestClient, session: Session
 ) -> None:

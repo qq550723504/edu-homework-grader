@@ -53,6 +53,7 @@ from ..services.generation import (
     derive_generation_plan,
     generation_plan_item_for_ordinal,
     run_generation_job,
+    snapshot_for_new_generation,
     snapshot_for_regeneration,
 )
 from ..services.generation_provider_registry import generation_provider
@@ -150,14 +151,17 @@ def create_generation_job_route(
     existing = _find_job_by_idempotency(session, actor=actor, idempotency_key=key)
     try:
         reserved = False
+        snapshot = None
         if existing is None:
+            snapshot = snapshot_for_new_generation(session, revision)
+            assert_generation_snapshot_prompt_current(snapshot, request.items)
             reserved = _enforce_generation_quota(
                 session,
                 actor=actor,
                 idempotency_key=idempotency_key,
                 requested_count=request.requested_count,
             )
-        job = create_or_get_job(session, request=request, actor=actor)
+        job = create_or_get_job(session, request=request, actor=actor, snapshot=snapshot)
         created = reserved
         if created:
             run_generation_job(

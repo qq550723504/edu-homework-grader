@@ -1,5 +1,6 @@
 import { expect, test, type Browser, type Page } from '@playwright/test'
 import { createHmac } from 'node:crypto'
+import { E2E_EVALUATION_EVIDENCE_HMAC_KEY } from './e2e-runtime-config.mjs'
 
 const webBaseUrl = 'http://127.0.0.1:13000'
 const ADMIN_A_TOKEN = 'e2e-platform-admin-a-token'
@@ -54,7 +55,7 @@ const evaluationEvidence = {
 }
 const evaluationReport = JSON.stringify({
   report: evaluationEvidence,
-  signature: createHmac('sha256', 'development-only-evaluation-evidence-hmac-key')
+  signature: createHmac('sha256', E2E_EVALUATION_EVIDENCE_HMAC_KEY)
     .update(canonicalJson(evaluationEvidence))
     .digest('hex'),
 })

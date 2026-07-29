@@ -20,6 +20,9 @@ export default defineConfig({
     {
       command: 'node e2e/start-e2e-api.mjs',
       url: `${apiBaseUrl}/health`,
+      env: {
+        EVALUATION_EVIDENCE_HMAC_KEY: 'parent-environment-must-not-reach-e2e-api',
+      },
       reuseExistingServer: false,
       timeout: 120_000,
     },
