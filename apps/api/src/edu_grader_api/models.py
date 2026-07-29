@@ -864,6 +864,9 @@ class GenerationDefaultChangeRequest(Base):
     evaluation_run_id: Mapped[str] = mapped_column(String(200), nullable=False)
     evaluation_spec_id: Mapped[str] = mapped_column(String(200), nullable=False)
     evaluation_watermark: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    evaluation_evidence_json: Mapped[dict[str, object] | None] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql")
+    )
     evaluated_against_selection_request_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("generation_default_change_requests.id")
     )

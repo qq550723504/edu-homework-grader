@@ -132,6 +132,8 @@ def submit_change_request(
             prompt_version=prompt_version,
             prompt_template_fingerprint=template.fingerprint,
         )
+    if selection is not None and configuration.id == selection.configuration_id:
+        raise GenerationDefaultGovernanceError("default_change_matches_active_configuration")
 
     change_request = GenerationDefaultChangeRequest(
         configuration=configuration,
@@ -144,6 +146,7 @@ def submit_change_request(
         evaluation_run_id=report.run_id,
         evaluation_spec_id=report.spec_id,
         evaluation_watermark=report.watermark,
+        evaluation_evidence_json=evaluation_report,
         evaluated_against_selection_request_id=(
             selection.applied_change_request_id if selection is not None else None
         ),
@@ -301,6 +304,9 @@ def apply_change_request(
         return change_request
     if change_request.status is not GenerationDefaultChangeStatus.APPROVED:
         raise GenerationDefaultGovernanceError("default_change_not_approved")
+    if change_request.evaluation_evidence_json is None:
+        raise GenerationDefaultGovernanceError("evaluation_evidence_untrusted")
+    _validated_report(change_request.evaluation_evidence_json)
     configuration = change_request.configuration
     if not supports_generation_provider(configuration.provider_name, configuration.model_version):
         raise GenerationDefaultGovernanceError("default_provider_not_configured")
@@ -412,6 +418,7 @@ def submit_rollback_request(
         evaluation_run_id=target.evaluation_run_id,
         evaluation_spec_id=target.evaluation_spec_id,
         evaluation_watermark=target.evaluation_watermark,
+        evaluation_evidence_json=target.evaluation_evidence_json,
         evaluated_against_selection_request_id=selection.applied_change_request_id,
         evaluation_summary_json=target.evaluation_summary_json,
         submitted_by_user_id=actor.id,

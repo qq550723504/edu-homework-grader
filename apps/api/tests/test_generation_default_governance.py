@@ -297,6 +297,42 @@ def test_submit_replays_after_evaluation_evidence_key_rotation(
     assert replay.id == request.id
 
 
+def test_apply_rejects_evidence_signed_by_a_rotated_key(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = governance_service()
+    submitter = platform_admin(session)
+    approver = platform_admin(session, subject="platform-approver")
+    change_request = service.submit_change_request(
+        session,
+        actor=submitter,
+        provider_name="fake",
+        model_version="fake-v1",
+        prompt_version="generator-v1",
+        request_reason="Promote verified candidate",
+        evaluation_report=passing_report(),
+        idempotency_key="rotated-key-application",
+    )
+    service.approve_change_request(
+        session,
+        request_id=change_request.id,
+        actor=approver,
+        approval_reason="Verified before key rotation",
+    )
+    monkeypatch.setattr(service.settings, "evaluation_evidence_hmac_key", "r" * 32)
+
+    with pytest.raises(service.GenerationDefaultGovernanceError) as error:
+        service.apply_change_request(
+            session,
+            request_id=change_request.id,
+            actor=submitter,
+            application_reason="Apply revoked evidence",
+        )
+
+    assert error.value.code == "evaluation_evidence_untrusted"
+    assert change_request.status is GenerationDefaultChangeStatus.APPROVED
+
+
 def test_submit_rejects_provider_pair_missing_from_runtime_registry(session: Session) -> None:
     service = governance_service()
     admin = platform_admin(session)
@@ -389,8 +425,50 @@ def test_submitter_cannot_approve_own_change_request(session: Session) -> None:
     assert error.value.code == "default_change_self_approval_forbidden"
 
 
-def test_apply_selects_new_default_and_supersedes_previous_request(session: Session) -> None:
+def test_submit_rejects_a_candidate_with_the_active_configuration(session: Session) -> None:
     service = governance_service()
+    submitter = platform_admin(session)
+    approver = platform_admin(session, subject="platform-approver")
+    active = service.submit_change_request(
+        session,
+        actor=submitter,
+        provider_name="fake",
+        model_version="fake-v1",
+        prompt_version="generator-v1",
+        request_reason="Initial governed default",
+        evaluation_report=passing_report(),
+        idempotency_key="active-default",
+    )
+    service.approve_change_request(
+        session, request_id=active.id, actor=approver, approval_reason="Verified"
+    )
+    service.apply_change_request(
+        session, request_id=active.id, actor=submitter, application_reason="Release"
+    )
+    report = passing_report(baseline_model_id="fake-v1")["report"]
+    report["candidate"]["validator_version"] = "verification-v2"
+
+    with pytest.raises(service.GenerationDefaultGovernanceError) as error:
+        service.submit_change_request(
+            session,
+            actor=submitter,
+            provider_name="fake",
+            model_version="fake-v1",
+            prompt_version="generator-v1",
+            request_reason="Reapply unchanged default",
+            evaluation_report=signed_report(report),
+            idempotency_key="same-active-default",
+        )
+
+    assert error.value.code == "default_change_matches_active_configuration"
+
+
+def test_apply_selects_new_default_and_supersedes_previous_request(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = governance_service()
+    monkeypatch.setattr(service, "supports_generation_provider", lambda *_: True)
+    activate_global_components(session, model_version="fake-v2")
     submitter = platform_admin(session)
     approver = platform_admin(session, subject="platform-approver")
     original = service.submit_change_request(
@@ -413,10 +491,10 @@ def test_apply_selects_new_default_and_supersedes_previous_request(session: Sess
         session,
         actor=submitter,
         provider_name="fake",
-        model_version="fake-v1",
+        model_version="fake-v2",
         prompt_version="generator-v1",
         request_reason="Upgrade governed default",
-        evaluation_report=passing_report(baseline_model_id="fake-v1"),
+        evaluation_report=passing_report(model_id="fake-v2", baseline_model_id="fake-v1"),
         idempotency_key="promote-4",
     )
     service.approve_change_request(
@@ -426,7 +504,7 @@ def test_apply_selects_new_default_and_supersedes_previous_request(session: Sess
         session, request_id=replacement.id, actor=submitter, application_reason="Release"
     )
 
-    assert service.resolve_active_default(session).model_version == "fake-v1"
+    assert service.resolve_active_default(session).model_version == "fake-v2"
     assert original.status is GenerationDefaultChangeStatus.SUPERSEDED
     assert replacement.status is GenerationDefaultChangeStatus.APPLIED
 
@@ -647,8 +725,12 @@ def test_submit_binds_evidence_to_the_resolved_prompt_fingerprint(session: Sessi
     assert error.value.code == "evaluation_prompt_template_mismatch"
 
 
-def test_approval_is_timestamped_and_exact_retries_are_replayed(session: Session) -> None:
+def test_approval_is_timestamped_and_exact_retries_are_replayed(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
     service = governance_service()
+    monkeypatch.setattr(service, "supports_generation_provider", lambda *_: True)
+    activate_global_components(session, model_version="fake-v2")
     submitter = platform_admin(session)
     approver = platform_admin(session, subject="platform-approver")
     change_request = service.submit_change_request(
@@ -694,10 +776,10 @@ def test_approval_is_timestamped_and_exact_retries_are_replayed(session: Session
         session,
         actor=submitter,
         provider_name="fake",
-        model_version="fake-v1",
+        model_version="fake-v2",
         prompt_version="generator-v1",
         request_reason="Supersede the previous default",
-        evaluation_report=passing_report(baseline_model_id="fake-v1"),
+        evaluation_report=passing_report(model_id="fake-v2", baseline_model_id="fake-v1"),
         idempotency_key="superseding-request",
     )
     service.approve_change_request(
