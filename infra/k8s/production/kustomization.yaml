@@ -15,6 +15,7 @@ resources:
   - student-activation-expiry.yaml
   - keycloak-student-provisioner-sync.yaml
   - operational-evaluation.yaml
+  - operational-evaluation-retention.yaml
 configMapGenerator:
   - name: edu-grader-production-realm
     files:

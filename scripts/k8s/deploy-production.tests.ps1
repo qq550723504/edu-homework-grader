@@ -71,19 +71,10 @@ users: []
             'Deployment/web'
             'CronJob/student-activation-expiry'
             'CronJob/operational-evaluation-retention'
-            'ServiceAccount/operational-evaluation-api'
-            'ServiceAccount/operational-evaluation-executor'
-            'ServiceAccount/operational-evaluation-retention'
-            'Role/operational-evaluation-api'
-            'Role/operational-evaluation-retention'
-            'RoleBinding/operational-evaluation-api'
-            'RoleBinding/operational-evaluation-retention'
-            'NetworkPolicy/operational-evaluation-default-deny'
-            'NetworkPolicy/operational-evaluation-executor-egress'
         )
         $actual = @($Resources | ForEach-Object { "$($_.Kind)/$($_.Name)" })
 
-        $actual | Should -HaveCount 15
+        $actual | Should -HaveCount 6
         foreach ($key in $expected) {
             $actual | Should -Contain $key
         }
@@ -96,6 +87,7 @@ users: []
             '^Job/'
             'Namespace/'
             'postgres'
+            '^(ServiceAccount|Role|RoleBinding|NetworkPolicy)/operational-evaluation-'
         )) {
             $actual | Should -Not -Match $forbiddenPattern
         }

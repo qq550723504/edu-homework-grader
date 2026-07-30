@@ -160,4 +160,11 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Kubernetes could not apply GitHub operational evaluation trust configuration.'
 }
 
+$infrastructureManifest = Join-Path $PSScriptRoot '..\..\infra\k8s\production\operational-evaluation.yaml'
+$retentionWorkloadManifest = Join-Path $PSScriptRoot '..\..\infra\k8s\production\operational-evaluation-retention.yaml'
+& kubectl apply --server-side --force-conflicts --namespace $Namespace --filename $infrastructureManifest --filename $retentionWorkloadManifest
+if ($LASTEXITCODE -ne 0) {
+    throw 'Kubernetes could not apply the operational evaluation infrastructure.'
+}
+
 Write-Information "Bootstrapped operational evaluation runtime in namespace $Namespace."
