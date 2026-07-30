@@ -77,17 +77,17 @@ def test_realm_allows_only_administrators_to_manage_student_identity_attributes(
     assert school_id["validations"] == {"length": {"max": 100}}
 
 
-def test_production_keycloak_upgrade_job_reconciles_student_profile_without_invalid_policy_patch() -> (
-    None
-):
+def test_production_keycloak_upgrade_job_reconciles_the_complete_student_profile() -> None:
     manifest = Path("infra/k8s/production/keycloak-student-provisioner-sync.yaml").read_text(
         encoding="utf-8"
     )
 
-    assert manifest.count("name: keycloak-student-provisioner-sync-v3") == 3
-    assert "$KCADM get users/profile -r edu-grader" in manifest
-    assert '"name" : "school_id"' in manifest
-    assert "unmanagedAttributePolicy=DISABLED" not in manifest
+    assert manifest.count("name: keycloak-student-provisioner-sync-v4") == 3
+    assert "image: curlimages/curl:8.7.1" in manifest
+    assert "--request PUT" in manifest
+    assert "/admin/realms/edu-grader/users/profile" in manifest
+    assert '"unmanagedAttributePolicy": "DISABLED"' in manifest
+    assert '"name": "school_id"' in manifest
 
 
 def test_development_realm_users_do_not_require_profile_completion() -> None:
