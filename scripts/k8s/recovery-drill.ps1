@@ -149,7 +149,7 @@ try {
     Invoke-Kubectl -Arguments @(
         'exec', '--namespace', $Namespace, $runId, '--',
         'sh', '-ec',
-        'pg_restore --clean --if-exists --no-owner --host=127.0.0.1 --username=edu_recovery --dbname=edu_recovery /recovery/edu_grader.dump'
+        'pg_restore --clean --if-exists --no-owner --no-acl --host=127.0.0.1 --username=edu_recovery --dbname=edu_recovery /recovery/edu_grader.dump'
     ) | Out-Null
 
     $validationSql = @"
