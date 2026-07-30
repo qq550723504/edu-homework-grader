@@ -101,7 +101,7 @@ GRANT SELECT ON TABLE public.generation_jobs, public.generation_attempts, public
   TO operational_evaluation_reader;
 "@
 
-$readerBootstrapSql | & kubectl exec --namespace $Namespace statefulset/postgres '--stdin' '--' `
+$null = $readerBootstrapSql | & kubectl exec --namespace $Namespace statefulset/postgres '--stdin' '--' `
     'sh' '-ec' 'PGPASSWORD="$POSTGRES_PASSWORD" exec psql --set=ON_ERROR_STOP=1 --username=edu_grader --dbname=edu_grader'
 if ($LASTEXITCODE -ne 0) {
     throw 'PostgreSQL could not configure the operational evaluation read-only role.'

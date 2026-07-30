@@ -12,6 +12,7 @@ Describe 'bootstrap-operational-evaluation' {
         $source | Should -Match 'has_table_privilege'
         $source | Should -Match 'NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS'
         $source | Should -Match "'--stdin'"
+        $source | Should -Match '\$null = \$readerBootstrapSql \| & kubectl exec'
         $source | Should -Not -Match 'GRANT (INSERT|UPDATE|DELETE|ALL)'
         $source | Should -Not -Match 'ALTER DEFAULT PRIVILEGES'
     }
