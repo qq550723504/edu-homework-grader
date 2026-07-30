@@ -68,7 +68,7 @@ def test_realm_allows_only_administrators_to_manage_student_identity_attributes(
     realm = json.loads(Path(realm_path).read_text(encoding="utf-8"))
 
     profile = realm["userProfile"]
-    assert profile["unmanagedAttributePolicy"] == "DISABLED"
+    assert profile["unmanagedAttributePolicy"] == "ADMIN_VIEW"
     school_id = next(
         attribute for attribute in profile["attributes"] if attribute["name"] == "school_id"
     )
@@ -83,10 +83,10 @@ def test_production_keycloak_upgrade_job_reconciles_the_complete_student_profile
     )
 
     assert manifest.count("name: keycloak-student-provisioner-sync-v4") == 3
-    assert "image: curlimages/curl:8.7.1" in manifest
-    assert "--request PUT" in manifest
-    assert "/admin/realms/edu-grader/users/profile" in manifest
-    assert '"unmanagedAttributePolicy": "DISABLED"' in manifest
+    assert "image: quay.io/keycloak/keycloak:26.4.7" in manifest
+    assert "$KCADM update users/profile -r edu-grader -f /scripts/user-profile.json" in manifest
+    assert "reconcile-profile.sh" not in manifest
+    assert '"unmanagedAttributePolicy": "ADMIN_VIEW"' in manifest
     assert '"name": "school_id"' in manifest
 
 

@@ -64,13 +64,19 @@ pwsh -NoProfile -File ./scripts/k8s/bootstrap-production-deployer.ps1 `
 
 ```powershell
 pwsh -NoProfile -File ./scripts/k8s/bootstrap-production-deployer.ps1 `
-  -UpgradeDeployerRbac -Confirm
+  -UpgradeDeployerRbac
 ```
 
-例如，Keycloak 学生档案同步的首次发布需要该步骤，以授予部署身份仅对命名的同步
-ConfigMap 的 `get`、`create`、`patch` 权限，以及同步 Job 的
-`get`、`create`、`patch`、`delete` 权限。运行后使用 `kubectl auth can-i`
-确认该身份拥有这些精确权限，再批准生产发布。
+部署身份只对既有 Keycloak 同步 ConfigMap 和 Job 具有 `get`、`patch` 权限；资源的
+创建、删除和重试必须经管理员受控的升级步骤完成。首次发布或同步 Job 失败后，运行：
+
+```powershell
+pwsh -NoProfile -File ./scripts/k8s/bootstrap-production-deployer.ps1 `
+  -UpgradeKeycloakStudentProvisioner
+```
+
+该步骤会重建命名同步 Job，并等待其成功完成；不会签发或上传新的 kubeconfig。成功后再
+批准生产发布。
 
 ## 正常发布
 

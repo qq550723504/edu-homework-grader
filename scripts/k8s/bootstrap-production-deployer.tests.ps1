@@ -99,6 +99,22 @@ exit /b 0
         }
     }
 
+    It 'bootstraps Keycloak reconciliation without creating or uploading a credential' {
+        $environment = New-FakeCommandEnvironment -Token (New-TestJwt -ExpiresAt ([DateTimeOffset]::UtcNow.AddHours(800)))
+        try {
+            { & $scriptPath -UpgradeKeycloakStudentProvisioner -InformationAction SilentlyContinue } | Should -Not -Throw
+
+            $commandLog = Get-Content -Raw $environment.LogPath
+            $commandLog | Should -Match '(?m)^kubectl delete job keycloak-student-provisioner-sync-v4 --ignore-not-found --namespace edu-homework-grader\r?$'
+            $commandLog | Should -Match '(?m)^kubectl apply --server-side --namespace edu-homework-grader --filename '
+            $commandLog | Should -Match '(?m)^kubectl wait --for=condition=complete job/keycloak-student-provisioner-sync-v4 --timeout=300s --namespace edu-homework-grader\r?$'
+            $commandLog | Should -Not -Match '(?m)^create token '
+            $commandLog | Should -Not -Match '(?m)^gh secret set '
+        } finally {
+            Restore-FakeCommandEnvironment -Environment $environment
+        }
+    }
+
     It 'rejects an arbitrary repository before invoking Kubernetes or GitHub' {
         Mock kubectl { throw 'kubectl must not run' }
         Mock gh { throw 'gh must not run' }
@@ -176,11 +192,11 @@ exit /b 0
   - apiGroups: [""]
     resources: ["configmaps"]
     resourceNames: ["keycloak-student-provisioner-sync-v4"]
-    verbs: ["get", "create", "patch"]
+    verbs: ["get", "patch"]
   - apiGroups: ["batch"]
     resources: ["jobs"]
     resourceNames: ["keycloak-student-provisioner-sync-v4"]
-    verbs: ["get", "create", "patch", "delete"]
+    verbs: ["get", "patch"]
   - apiGroups: [""]
     resources: ["endpoints"]
     resourceNames: ["api"]

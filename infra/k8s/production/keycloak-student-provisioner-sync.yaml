@@ -3,28 +3,12 @@ kind: ConfigMap
 metadata:
   name: keycloak-student-provisioner-sync-v4
 data:
-  reconcile-profile.sh: |
-    #!/bin/sh
-    set -eu
-    KEYCLOAK_URL=http://keycloak:8080
-    TOKEN_RESPONSE="$(curl --fail --silent --show-error \
-      --data-urlencode grant_type=password \
-      --data-urlencode client_id=admin-cli \
-      --data-urlencode username="$KEYCLOAK_ADMIN_USERNAME" \
-      --data-urlencode password="$KEYCLOAK_ADMIN_PASSWORD" \
-      "$KEYCLOAK_URL/realms/master/protocol/openid-connect/token")"
-    ACCESS_TOKEN="$(printf '%s' "$TOKEN_RESPONSE" | sed -n 's/.*"access_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-    test -n "$ACCESS_TOKEN"
-    curl --fail --silent --show-error --request PUT \
-      --header "Authorization: Bearer $ACCESS_TOKEN" \
-      --header "Content-Type: application/json" \
-      --data-binary @/scripts/user-profile.json \
-      "$KEYCLOAK_URL/admin/realms/edu-grader/users/profile"
   reconcile.sh: |
     #!/bin/sh
     set -eu
     KCADM=/opt/keycloak/bin/kcadm.sh
     $KCADM config credentials --server http://keycloak:8080 --realm master --user "$KEYCLOAK_ADMIN_USERNAME" --password "$KEYCLOAK_ADMIN_PASSWORD"
+    $KCADM update users/profile -r edu-grader -f /scripts/user-profile.json
     CLIENT_ID="$($KCADM get clients -r edu-grader -q clientId=student-provisioner --fields id --format csv --noquotes)"
     if [ -z "$CLIENT_ID" ]; then
       $KCADM create clients -r edu-grader -s clientId=student-provisioner -s enabled=true -s publicClient=false -s serviceAccountsEnabled=true -s standardFlowEnabled=false -s directAccessGrantsEnabled=false
@@ -36,7 +20,7 @@ data:
     done
   user-profile.json: |
     {
-      "unmanagedAttributePolicy": "DISABLED",
+      "unmanagedAttributePolicy": "ADMIN_VIEW",
       "attributes": [
         {
           "name": "username",
@@ -99,21 +83,6 @@ spec:
   template:
     spec:
       restartPolicy: OnFailure
-      initContainers:
-        - name: reconcile-profile
-          image: curlimages/curl:8.7.1
-          command: ["/bin/sh", "/scripts/reconcile-profile.sh"]
-          env:
-            - name: KEYCLOAK_ADMIN_USERNAME
-              valueFrom:
-                secretKeyRef: {name: edu-grader-runtime, key: KEYCLOAK_ADMIN_USERNAME}
-            - name: KEYCLOAK_ADMIN_PASSWORD
-              valueFrom:
-                secretKeyRef: {name: edu-grader-runtime, key: KEYCLOAK_ADMIN_PASSWORD}
-          volumeMounts:
-            - name: scripts
-              mountPath: /scripts
-              readOnly: true
       containers:
         - name: reconcile-client
           image: quay.io/keycloak/keycloak:26.4.7
