@@ -62,7 +62,10 @@ users: []
     }
 
     function Assert-ManagedReleaseObjects {
-        param([Parameter(Mandatory = $true)][object[]]$Resources)
+        param(
+            [Parameter(Mandatory = $true)][object[]]$Resources,
+            [Parameter(Mandatory = $true)][bool]$IncludesProductionAlert
+        )
 
         $expected = @(
             'Deployment/api'
@@ -71,11 +74,13 @@ users: []
             'Deployment/web'
             'CronJob/student-activation-expiry'
             'CronJob/operational-evaluation-retention'
-            'CronJob/production-alert'
         )
+        if ($IncludesProductionAlert) {
+            $expected += 'CronJob/production-alert'
+        }
         $actual = @($Resources | ForEach-Object { "$($_.Kind)/$($_.Name)" })
 
-        $actual | Should -HaveCount 7
+        $actual | Should -HaveCount $expected.Count
         foreach ($key in $expected) {
             $actual | Should -Contain $key
         }
@@ -114,14 +119,17 @@ users: []
 '@
         }
 
-        if ($joined -eq 'get cronjob student-activation-expiry operational-evaluation-retention production-alert --output json --namespace edu-homework-grader') {
+        if ($joined -eq 'get cronjob student-activation-expiry operational-evaluation-retention --output json --namespace edu-homework-grader') {
             return @'
 {"items":[
   {"metadata":{"name":"student-activation-expiry"},"spec":{"jobTemplate":{"spec":{"template":{"spec":{"containers":[{"name":"expire","image":"registry.example/api-cron@sha256:old-cron"}]}}}}}},
-  {"metadata":{"name":"operational-evaluation-retention"},"spec":{"jobTemplate":{"spec":{"template":{"spec":{"containers":[{"name":"expire","image":"registry.example/api-eval-cron@sha256:old-eval-cron"}]}}}}}},
-  {"metadata":{"name":"production-alert"},"spec":{"jobTemplate":{"spec":{"template":{"spec":{"containers":[{"name":"alert","image":"registry.example/api-alert@sha256:old-alert"}]}}}}}}
+  {"metadata":{"name":"operational-evaluation-retention"},"spec":{"jobTemplate":{"spec":{"template":{"spec":{"containers":[{"name":"expire","image":"registry.example/api-eval-cron@sha256:old-eval-cron"}]}}}}}}
 ]}
 '@
+        }
+
+        if ($joined -eq 'get cronjob production-alert --ignore-not-found --output json --namespace edu-homework-grader') {
+            return @()
         }
 
         if ($joined -match '^get deployment (api|grader|web|languagetool) --output json --namespace edu-homework-grader$') {
@@ -157,6 +165,10 @@ users: []
                 (Get-Content -Raw -LiteralPath $manifestPath)
             )
             return 'applied'
+        }
+
+        if ($joined -eq 'delete cronjob production-alert --ignore-not-found --namespace edu-homework-grader') {
+            return 'deleted'
         }
 
         if ($joined -match '^rollout status deployment/') {
@@ -278,7 +290,7 @@ BeforeEach {
             Get-ManifestResources `
                 -Content $global:DeployProductionTestState.AppliedManifests[0]
         )
-        Assert-ManagedReleaseObjects -Resources $resources
+        Assert-ManagedReleaseObjects -Resources $resources -IncludesProductionAlert $true
         $images = @(Get-WorkloadImages -Resources $resources)
         $images | Should -HaveCount 8
         foreach ($image in $images) {
@@ -366,9 +378,9 @@ BeforeEach {
             Get-ManifestResources `
                 -Content $global:DeployProductionTestState.AppliedManifests[1]
         )
-        Assert-ManagedReleaseObjects -Resources $rollbackResources
+        Assert-ManagedReleaseObjects -Resources $rollbackResources -IncludesProductionAlert $false
         $rollbackImages = @(Get-WorkloadImages -Resources $rollbackResources)
-        $rollbackImages | Should -HaveCount 8
+        $rollbackImages | Should -HaveCount 7
         foreach ($expectedImage in @(
             'registry.example/migrate@sha256:old-migrate'
             'registry.example/api@sha256:old-api'
@@ -377,12 +389,13 @@ BeforeEach {
             'registry.example/languagetool@sha256:old-language'
             'registry.example/api-cron@sha256:old-cron'
             'registry.example/api-eval-cron@sha256:old-eval-cron'
-            'registry.example/api-alert@sha256:old-alert'
         )) {
             $rollbackImages | Should -Contain $expectedImage
         }
         $global:DeployProductionTestState.AppliedManifests[1] |
             Should -Not -Match 'sha-not-published'
+        $global:DeployProductionTestState.KubectlCalls |
+            Should -Contain 'delete cronjob production-alert --ignore-not-found --namespace edu-homework-grader'
     }
 
     It 'rolls back when the API Service has no ready endpoints' {

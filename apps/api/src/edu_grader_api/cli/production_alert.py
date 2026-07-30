@@ -28,14 +28,14 @@ def check_database() -> None:
         connection.execute(text("SELECT 1"))
 
 
-def send_failure_email(failures: list[str]) -> None:
+def send_email(subject: str, body: str) -> None:
     sender = environment_value("ALERT_SMTP_SENDER")
     recipient = environment_value("ALERT_SMTP_RECIPIENT")
     message = EmailMessage()
     message["From"] = sender
     message["To"] = recipient
-    message["Subject"] = f"Production alert: {', '.join(failures)}"
-    message.set_content(f"Failed checks: {', '.join(failures)}")
+    message["Subject"] = subject
+    message.set_content(body)
 
     with smtplib.SMTP_SSL(
         environment_value("ALERT_SMTP_HOST"),
@@ -44,6 +44,17 @@ def send_failure_email(failures: list[str]) -> None:
     ) as smtp:
         smtp.login(sender, environment_value("ALERT_SMTP_AUTH_CODE"))
         smtp.send_message(message)
+
+
+def send_failure_email(failures: list[str]) -> None:
+    send_email(
+        f"Production alert: {', '.join(failures)}",
+        f"Failed checks: {', '.join(failures)}",
+    )
+
+
+def test_notification_requested() -> bool:
+    return os.environ.get("ALERT_TEST_NOTIFICATION", "").casefold() == "true"
 
 
 def run() -> int:
@@ -63,6 +74,8 @@ def run() -> int:
         failures.append("postgres")
 
     if not failures:
+        if test_notification_requested():
+            send_email("Production alert test", "Availability checks passed; test requested.")
         return 0
     send_failure_email(failures)
     return 1

@@ -30,13 +30,16 @@ the namespace-scoped Secret, and prints no Secret values.
 
 ## Delivery verification
 
-After a release deploys the CronJob, create one Job from it, wait for
-completion, confirm receipt of the test email, then delete the completed Job:
+After a release deploys the CronJob, create a one-off Job with its explicit
+test-notification mode enabled, wait for completion, confirm receipt of the
+test email, then delete the completed Job:
 
 ```powershell
 $utcStamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss')
 $jobName = "production-alert-test-$utcStamp"
-kubectl -n edu-homework-grader create job --from=cronjob/production-alert $jobName
+kubectl -n edu-homework-grader create job --from=cronjob/production-alert $jobName --dry-run=client -o yaml |
+  kubectl -n edu-homework-grader set env --local --filename - --output yaml ALERT_TEST_NOTIFICATION=true |
+  kubectl -n edu-homework-grader apply --filename -
 kubectl -n edu-homework-grader wait --for=condition=complete "job/$jobName" --timeout=5m
 kubectl -n edu-homework-grader delete job $jobName
 ```

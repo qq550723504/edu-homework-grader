@@ -48,6 +48,21 @@ def test_healthy_checks_do_not_open_smtp(monkeypatch: pytest.MonkeyPatch) -> Non
     assert alert.run() == 0
 
 
+def test_requested_delivery_test_sends_email_after_healthy_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    smtp = RecordingSmtp()
+    monkeypatch.setenv("ALERT_TEST_NOTIFICATION", "true")
+    monkeypatch.setattr(alert, "check_http", lambda _name, _url: None)
+    monkeypatch.setattr(alert, "check_database", lambda: None)
+    monkeypatch.setattr(alert.smtplib, "SMTP_SSL", lambda *_args, **_kwargs: smtp)
+
+    assert alert.run() == 0
+    assert smtp.message is not None
+    assert smtp.message["Subject"] == "Production alert test"
+    assert "test requested" in smtp.message.get_content()
+
+
 def test_http_check_rejects_non_success_response(monkeypatch: pytest.MonkeyPatch) -> None:
     class UnavailableResponse:
         status = 503
