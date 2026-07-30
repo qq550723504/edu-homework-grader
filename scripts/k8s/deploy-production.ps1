@@ -722,6 +722,13 @@ function Wait-ProductionHealthy {
     }
 }
 
+function Reset-KeycloakProfileReconciliation {
+    $null = Invoke-NativeTool -Tool 'kubectl' -Arguments @(
+        'delete', 'job', 'keycloak-student-provisioner-sync-v4', '--ignore-not-found',
+        '--namespace', $Namespace
+    )
+}
+
 function Restore-ManagedImages {
     param(
         [Parameter(Mandatory = $true)]
@@ -810,6 +817,7 @@ try {
             -Destination $targetDestination
     }
     $applyAttempted = $true
+    Reset-KeycloakProfileReconciliation
     Apply-RenderedRelease -ManifestPath $targetManifest
     Wait-ProductionHealthy
 

@@ -68,7 +68,8 @@ pwsh -NoProfile -File ./scripts/k8s/bootstrap-production-deployer.ps1 `
 ```
 
 例如，Keycloak 学生档案同步的首次发布需要该步骤，以授予部署身份仅对命名的同步
-ConfigMap 和 Job 的 `get`、`create`、`patch` 权限。运行后使用 `kubectl auth can-i`
+ConfigMap 的 `get`、`create`、`patch` 权限，以及同步 Job 的
+`get`、`create`、`patch`、`delete` 权限。运行后使用 `kubectl auth can-i`
 确认该身份拥有这些精确权限，再批准生产发布。
 
 ## 正常发布

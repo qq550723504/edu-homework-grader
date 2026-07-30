@@ -181,6 +181,10 @@ users: []
             return 'deleted'
         }
 
+        if ($joined -eq 'delete job keycloak-student-provisioner-sync-v4 --ignore-not-found --namespace edu-homework-grader') {
+            return 'deleted'
+        }
+
         if ($joined -match '^rollout status deployment/') {
             throw 'forbidden: User system:serviceaccount:edu-homework-grader:github-production-deployer cannot list resource "deployments"'
         }
@@ -378,6 +382,13 @@ BeforeEach {
             Should -Contain 'ConfigMap/keycloak-student-provisioner-sync-v4'
         $resources | ForEach-Object { "$($_.Kind)/$($_.Name)" } |
             Should -Contain 'Job/keycloak-student-provisioner-sync-v4'
+    }
+
+    It 'recreates the Keycloak profile reconciliation Job for each release' {
+        & $scriptPath -ImageSha $validSha -SkipPublicHealthCheck
+
+        $global:DeployProductionTestState.KubectlCalls |
+            Should -Contain 'delete job keycloak-student-provisioner-sync-v4 --ignore-not-found --namespace edu-homework-grader'
     }
 
     It 'fails the release when the Keycloak profile reconciliation Job fails' {

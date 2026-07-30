@@ -180,7 +180,7 @@ exit /b 0
   - apiGroups: ["batch"]
     resources: ["jobs"]
     resourceNames: ["keycloak-student-provisioner-sync-v4"]
-    verbs: ["get", "create", "patch"]
+    verbs: ["get", "create", "patch", "delete"]
   - apiGroups: [""]
     resources: ["endpoints"]
     resourceNames: ["api"]
