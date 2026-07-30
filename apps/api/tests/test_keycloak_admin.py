@@ -18,6 +18,8 @@ def test_keycloak_adapter_provisions_student_with_temporary_password() -> None:
             return httpx.Response(
                 201, headers={"Location": "http://keycloak:8080/admin/realms/edu-grader/users/kc-1"}
             )
+        if request.method == "GET" and request.url.path.endswith("/users/kc-1"):
+            return httpx.Response(200, json={"attributes": {"locale": ["zh-CN"]}})
         if request.url.path.endswith("/roles/student"):
             return httpx.Response(200, json={"id": "student-role", "name": "student"})
         return httpx.Response(204)
@@ -33,6 +35,14 @@ def test_keycloak_adapter_provisions_student_with_temporary_password() -> None:
 
     assert result == "kc-1"
     assert any(request.url.path.endswith("/role-mappings/realm") for request in requests)
+    attribute_request = next(
+        request
+        for request in requests
+        if request.method == "PUT" and request.url.path.endswith("/users/kc-1")
+    )
+    assert json.loads(attribute_request.content) == {
+        "attributes": {"locale": ["zh-CN"], "school_id": ["S-001"]}
+    }
     password_request = next(
         request for request in requests if request.url.path.endswith("/reset-password")
     )
