@@ -51,3 +51,41 @@ def test_keycloak_adapter_provisions_student_with_temporary_password() -> None:
         "value": "activation-code",
         "temporary": True,
     }
+
+
+def test_keycloak_adapter_reuses_case_normalized_existing_student() -> None:
+    from edu_grader_api.services.keycloak_admin import KeycloakAdminClient
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/protocol/openid-connect/token"):
+            return httpx.Response(200, json={"access_token": "service-token"})
+        if request.method == "GET" and request.url.path.endswith("/users"):
+            return httpx.Response(200, json=[{"id": "kc-existing"}])
+        if request.method == "GET" and request.url.path.endswith("/users/kc-existing"):
+            return httpx.Response(200, json={"attributes": {}})
+        if request.url.path.endswith("/roles/student"):
+            return httpx.Response(200, json={"id": "student-role", "name": "student"})
+        return httpx.Response(204)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = KeycloakAdminClient(
+            base_url="http://keycloak:8080",
+            realm="edu-grader",
+            client_id="student-provisioner",
+            client_secret="service-secret",
+            client=client,
+        ).ensure_student(school_id="RC-STUDENT-001", display_name="Ada", activation_code="code")
+
+    assert result == "kc-existing"
+    lookup = next(
+        request
+        for request in requests
+        if request.method == "GET" and request.url.path.endswith("/users")
+    )
+    assert lookup.url.params["username"] == "rc-student-001"
+    assert not any(
+        request.method == "POST" and request.url.path.endswith("/users") for request in requests
+    )
