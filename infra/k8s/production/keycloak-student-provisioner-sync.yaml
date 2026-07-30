@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: keycloak-student-provisioner-sync-v2
+  name: keycloak-student-provisioner-sync-v3
 data:
   reconcile.sh: |
     #!/bin/sh
@@ -12,7 +12,6 @@ data:
     if ! printf '%s\n' "$PROFILE" | grep -F '"name" : "school_id"' >/dev/null; then
       $KCADM update users/profile -r edu-grader -s 'attributes+={"name":"school_id","displayName":"School ID","validations":{"length":{"max":100}},"permissions":{"view":["admin"],"edit":["admin"]},"multivalued":false}'
     fi
-    $KCADM update users/profile -r edu-grader -s unmanagedAttributePolicy=DISABLED
     CLIENT_ID="$($KCADM get clients -r edu-grader -q clientId=student-provisioner --fields id --format csv --noquotes)"
     if [ -z "$CLIENT_ID" ]; then
       $KCADM create clients -r edu-grader -s clientId=student-provisioner -s enabled=true -s publicClient=false -s serviceAccountsEnabled=true -s standardFlowEnabled=false -s directAccessGrantsEnabled=false
@@ -26,7 +25,7 @@ data:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: keycloak-student-provisioner-sync-v2
+  name: keycloak-student-provisioner-sync-v3
 spec:
   backoffLimit: 6
   template:
@@ -53,5 +52,5 @@ spec:
       volumes:
         - name: scripts
           configMap:
-            name: keycloak-student-provisioner-sync-v2
+            name: keycloak-student-provisioner-sync-v3
             defaultMode: 0555
