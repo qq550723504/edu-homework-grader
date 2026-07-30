@@ -72,6 +72,7 @@ function ConvertTo-ReleaseImagesFromDigests {
         LanguageTool   = "$($ManagedRepositories.LanguageTool)@$($digests.languagetool)"
         ExpiryCronJob  = "$($ManagedRepositories.Api)@$($digests.api)"
         OperationalEvaluationRetentionCronJob = "$($ManagedRepositories.Api)@$($digests.api)"
+        ProductionAlertCronJob = "$($ManagedRepositories.Api)@$($digests.api)"
     }
 }
 
@@ -188,7 +189,7 @@ function Get-ManagedImages {
 
     $cronJobOutput = @(
         Invoke-NativeTool -Tool 'kubectl' -Arguments @(
-            'get', 'cronjob', 'student-activation-expiry', 'operational-evaluation-retention',
+            'get', 'cronjob', 'student-activation-expiry', 'operational-evaluation-retention', 'production-alert',
             '--output', 'json', '--namespace', $Namespace
         )
     )
@@ -227,6 +228,11 @@ function Get-ManagedImages {
             -Workloads @($cronJobDocument.items) `
             -WorkloadName 'operational-evaluation-retention' `
             -ContainerName 'expire' `
+            -CronJob
+        ProductionAlertCronJob = Get-NamedWorkloadImage `
+            -Workloads @($cronJobDocument.items) `
+            -WorkloadName 'production-alert' `
+            -ContainerName 'alert' `
             -CronJob
     }
 
@@ -311,7 +317,7 @@ function Add-ExactImagePatches {
         [string]$Destination
     )
 
-    $requiredKeys = @('ApiInit', 'Api', 'Grader', 'Web', 'LanguageTool', 'ExpiryCronJob', 'OperationalEvaluationRetentionCronJob')
+    $requiredKeys = @('ApiInit', 'Api', 'Grader', 'Web', 'LanguageTool', 'ExpiryCronJob', 'OperationalEvaluationRetentionCronJob', 'ProductionAlertCronJob')
     foreach ($key in $requiredKeys) {
         if (-not $Images.Contains($key)) {
             throw "Exact rollback image map is missing $key."
@@ -396,6 +402,23 @@ spec:
               image: $operationalEvaluationRetentionImage
 "@
 
+    $productionAlertImage = ConvertTo-YamlString ([string]$Images.ProductionAlertCronJob)
+    New-ExactImagePatch `
+        -Path (Join-Path $Destination 'managed-production-alert-image.yaml') `
+        -ApiVersion 'batch/v1' `
+        -Kind 'CronJob' `
+        -Name 'production-alert' `
+        -Spec @"
+spec:
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: alert
+              image: $productionAlertImage
+"@
+
     $kustomizationPath = Join-Path $Destination 'kustomization.yaml'
     $patchConfiguration = @'
   - path: managed-api-images.yaml
@@ -404,6 +427,7 @@ spec:
   - path: managed-languagetool-image.yaml
   - path: managed-expiry-image.yaml
   - path: managed-operational-evaluation-retention-image.yaml
+  - path: managed-production-alert-image.yaml
 '@
     Add-Content -LiteralPath $kustomizationPath -Value ("`n" + $patchConfiguration)
 }
@@ -425,6 +449,7 @@ resources:
   - application.yaml
   - student-activation-expiry.yaml
   - operational-evaluation-retention.yaml
+  - production-alert.yaml
 patches:
   - path: managed-keycloak-exclusion.yaml
 '@

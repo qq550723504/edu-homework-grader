@@ -157,7 +157,7 @@ exit /b 0
     verbs: ["get", "patch"]
   - apiGroups: ["batch"]
     resources: ["cronjobs"]
-    resourceNames: ["student-activation-expiry", "operational-evaluation-retention"]
+    resourceNames: ["student-activation-expiry", "operational-evaluation-retention", "production-alert"]
     verbs: ["get", "patch"]
   - apiGroups: [""]
     resources: ["endpoints"]
