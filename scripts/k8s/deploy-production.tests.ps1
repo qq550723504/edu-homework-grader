@@ -51,6 +51,9 @@ users: []
 
         $images = [System.Collections.Generic.List[string]]::new()
         foreach ($resource in $Resources) {
+            if ($resource.Kind -eq 'Job') {
+                continue
+            }
             foreach ($match in [regex]::Matches(
                 $resource.Content,
                 '(?m)^\s+(?:-\s+)?image:\s*(\S+)\s*$'
@@ -74,6 +77,8 @@ users: []
             'Deployment/web'
             'CronJob/student-activation-expiry'
             'CronJob/operational-evaluation-retention'
+            'ConfigMap/keycloak-student-provisioner-sync-v4'
+            'Job/keycloak-student-provisioner-sync-v4'
         )
         if ($IncludesProductionAlert) {
             $expected += 'CronJob/production-alert'
@@ -88,9 +93,7 @@ users: []
             'Deployment/(keycloak|redis)'
             'StatefulSet/'
             'Service/'
-            'ConfigMap/'
             'Ingress/'
-            '^Job/'
             'Namespace/'
             'postgres'
             '^(ServiceAccount|Role|RoleBinding|NetworkPolicy)/operational-evaluation-'
@@ -130,6 +133,13 @@ users: []
 
         if ($joined -eq 'get cronjob production-alert --ignore-not-found --output json --namespace edu-homework-grader') {
             return @()
+        }
+
+        if ($joined -eq 'get job keycloak-student-provisioner-sync-v4 --output json --namespace edu-homework-grader') {
+            if ($global:DeployProductionTestState.KeycloakProfileJobFailed) {
+                return '{"status":{"conditions":[{"type":"Failed","status":"True"}]}}'
+            }
+            return '{"status":{"conditions":[{"type":"Complete","status":"True"}]}}'
         }
 
         if ($joined -match '^get deployment (api|grader|web|languagetool) --output json --namespace edu-homework-grader$') {
@@ -256,6 +266,7 @@ BeforeEach {
         TargetDeploymentNeverReady = $false
         RollbackDeploymentNeverReady = $false
         TargetDeploymentStatusMissingOnFirstRead = $false
+        KeycloakProfileJobFailed = $false
         EndpointReady            = $true
     }
 }
@@ -353,6 +364,36 @@ BeforeEach {
             )
             $selector | Should -Not -Match 'app\.kubernetes\.io/part-of:'
         }
+    }
+
+    It 'includes the Keycloak profile reconciliation resources in every release' {
+        & $scriptPath -ImageSha $validSha -SkipPublicHealthCheck
+
+        $resources = @(
+            Get-ManifestResources `
+                -Content $global:DeployProductionTestState.AppliedManifests[0]
+        )
+
+        $resources | ForEach-Object { "$($_.Kind)/$($_.Name)" } |
+            Should -Contain 'ConfigMap/keycloak-student-provisioner-sync-v4'
+        $resources | ForEach-Object { "$($_.Kind)/$($_.Name)" } |
+            Should -Contain 'Job/keycloak-student-provisioner-sync-v4'
+    }
+
+    It 'does not give the release path ownership of Keycloak Job retries' {
+        & $scriptPath -ImageSha $validSha -SkipPublicHealthCheck
+
+        $global:DeployProductionTestState.KubectlCalls |
+            Should -Not -Match '^delete job keycloak-student-provisioner-sync-v4 '
+    }
+
+    It 'fails the release when the Keycloak profile reconciliation Job fails' {
+        $global:DeployProductionTestState.KeycloakProfileJobFailed = $true
+
+        { & $scriptPath -ImageSha $validSha -SkipPublicHealthCheck } |
+            Should -Throw '*Production release * failed; rollback succeeded.*'
+        $global:DeployProductionTestState.KubectlCalls |
+            Should -Contain 'get job keycloak-student-provisioner-sync-v4 --output json --namespace edu-homework-grader'
     }
 
     It 'treats omitted deployment status fields as not ready until the named deployment becomes ready' {

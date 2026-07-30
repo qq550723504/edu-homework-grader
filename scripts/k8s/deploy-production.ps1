@@ -477,6 +477,7 @@ resources:
   - application.yaml
   - student-activation-expiry.yaml
   - operational-evaluation-retention.yaml
+  - keycloak-student-provisioner-sync.yaml
 '@
     if ($IncludeProductionAlert) {
         $kustomization += [Environment]::NewLine + '  - production-alert.yaml'
@@ -673,6 +674,34 @@ function Wait-ApiServiceEndpoints {
     }
 }
 
+function Wait-KeycloakProfileReconciliation {
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($RolloutTimeoutSeconds)
+    while ($true) {
+        $jobOutput = @(
+            Invoke-NativeTool -Tool 'kubectl' -Arguments @(
+                'get', 'job', 'keycloak-student-provisioner-sync-v4',
+                '--output', 'json', '--namespace', $Namespace
+            )
+        )
+        $jobDocument = ConvertFrom-ToolJson `
+            -Output $jobOutput `
+            -Description 'Keycloak student provisioner reconciliation Job query'
+        $status = Get-OptionalPropertyValue -Object $jobDocument -Name 'status'
+        foreach ($condition in @(Get-OptionalPropertyValue -Object $status -Name 'conditions')) {
+            if ($condition.type -eq 'Complete' -and $condition.status -eq 'True') {
+                return
+            }
+            if ($condition.type -eq 'Failed' -and $condition.status -eq 'True') {
+                throw 'Keycloak student provisioner reconciliation Job failed.'
+            }
+        }
+        if ([DateTimeOffset]::UtcNow -ge $deadline) {
+            throw 'Keycloak student provisioner reconciliation Job did not complete.'
+        }
+        Start-Sleep -Seconds 5
+    }
+}
+
 function Wait-PublicHealth {
     $response = Invoke-WebRequest `
         -Uri $PublicHealthUri `
@@ -685,6 +714,7 @@ function Wait-PublicHealth {
 }
 
 function Wait-ProductionHealthy {
+    Wait-KeycloakProfileReconciliation
     Wait-DeploymentRollouts
     Wait-ApiServiceEndpoints
     if (-not $SkipPublicHealthCheck) {

@@ -2,13 +2,15 @@
 param(
     [string]$Namespace = 'edu-homework-grader',
     [switch]$ConfirmProductionCredential,
+    [switch]$UpgradeDeployerRbac,
+    [switch]$UpgradeKeycloakStudentProvisioner,
     [ValidateRange(1, 8760)]
     [int]$MinimumTokenLifetimeHours = 720
 )
 
 $ErrorActionPreference = 'Stop'
 
-if (-not $ConfirmProductionCredential) {
+if (-not $ConfirmProductionCredential -and -not $UpgradeDeployerRbac -and -not $UpgradeKeycloakStudentProvisioner) {
     throw 'Pass -ConfirmProductionCredential to create the GitHub production deploy credential.'
 }
 
@@ -16,7 +18,16 @@ if ($Namespace -ne 'edu-homework-grader') {
     throw 'The production deploy identity is restricted to the edu-homework-grader namespace.'
 }
 
-if (-not $PSCmdlet.ShouldProcess('qq550723504/edu-homework-grader production environment', 'replace KUBECONFIG_B64')) {
+$operation = if ($UpgradeKeycloakStudentProvisioner) {
+    'upgrade Keycloak student provisioner'
+}
+elseif ($UpgradeDeployerRbac) {
+    'upgrade github-production-deployer RBAC'
+}
+else {
+    'replace KUBECONFIG_B64'
+}
+if (-not $PSCmdlet.ShouldProcess('qq550723504/edu-homework-grader production environment', $operation)) {
     return
 }
 
@@ -25,6 +36,29 @@ $rbacManifest = Join-Path $PSScriptRoot '..\..\infra\k8s\production\github-produ
 & kubectl apply --server-side --filename $rbacManifest
 if ($LASTEXITCODE -ne 0) {
     throw 'Kubernetes could not apply the production deploy identity RBAC.'
+}
+
+if ($UpgradeDeployerRbac) {
+    Write-Information "Upgraded deploy identity RBAC in namespace $Namespace."
+    return
+}
+
+if ($UpgradeKeycloakStudentProvisioner) {
+    $studentProvisionerManifest = Join-Path $PSScriptRoot '..\..\infra\k8s\production\keycloak-student-provisioner-sync.yaml'
+    & kubectl delete job keycloak-student-provisioner-sync-v4 --ignore-not-found --namespace $Namespace
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Kubernetes could not remove the previous Keycloak student provisioner reconciliation Job.'
+    }
+    & kubectl apply --server-side --namespace $Namespace --filename $studentProvisionerManifest
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Kubernetes could not apply the Keycloak student provisioner reconciliation resources.'
+    }
+    & kubectl wait --for=condition=complete job/keycloak-student-provisioner-sync-v4 --timeout=300s --namespace $Namespace
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Keycloak student provisioner reconciliation Job did not complete.'
+    }
+    Write-Information "Upgraded Keycloak student provisioner in namespace $Namespace."
+    return
 }
 
 $token = & kubectl create token github-production-deployer --namespace $Namespace --duration=8760h

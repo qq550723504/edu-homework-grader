@@ -3,7 +3,7 @@
   "enabled": true,
   "displayName": "Edu Homework Grader (development)",
   "userProfile": {
-    "unmanagedAttributePolicy": "DISABLED",
+    "unmanagedAttributePolicy": "ADMIN_VIEW",
     "attributes": [
       {
         "name": "username",

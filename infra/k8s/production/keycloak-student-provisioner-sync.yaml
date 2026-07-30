@@ -1,18 +1,14 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: keycloak-student-provisioner-sync-v2
+  name: keycloak-student-provisioner-sync-v4
 data:
   reconcile.sh: |
     #!/bin/sh
     set -eu
     KCADM=/opt/keycloak/bin/kcadm.sh
     $KCADM config credentials --server http://keycloak:8080 --realm master --user "$KEYCLOAK_ADMIN_USERNAME" --password "$KEYCLOAK_ADMIN_PASSWORD"
-    PROFILE="$($KCADM get users/profile -r edu-grader)"
-    if ! printf '%s\n' "$PROFILE" | grep -F '"name" : "school_id"' >/dev/null; then
-      $KCADM update users/profile -r edu-grader -s 'attributes+={"name":"school_id","displayName":"School ID","validations":{"length":{"max":100}},"permissions":{"view":["admin"],"edit":["admin"]},"multivalued":false}'
-    fi
-    $KCADM update users/profile -r edu-grader -s unmanagedAttributePolicy=DISABLED
+    $KCADM update users/profile -r edu-grader -f /scripts/user-profile.json
     CLIENT_ID="$($KCADM get clients -r edu-grader -q clientId=student-provisioner --fields id --format csv --noquotes)"
     if [ -z "$CLIENT_ID" ]; then
       $KCADM create clients -r edu-grader -s clientId=student-provisioner -s enabled=true -s publicClient=false -s serviceAccountsEnabled=true -s standardFlowEnabled=false -s directAccessGrantsEnabled=false
@@ -22,18 +18,73 @@ data:
     for ROLE in manage-users query-users view-users view-realm; do
       $KCADM add-roles -r edu-grader --uusername service-account-student-provisioner --cclientid realm-management --rolename "$ROLE"
     done
+  user-profile.json: |
+    {
+      "unmanagedAttributePolicy": "ADMIN_VIEW",
+      "attributes": [
+        {
+          "name": "username",
+          "displayName": "${username}",
+          "validations": {
+            "length": {"min": 3, "max": 255},
+            "username-prohibited-characters": {},
+            "up-username-not-idn-homograph": {}
+          },
+          "permissions": {"view": ["admin", "user"], "edit": ["admin", "user"]},
+          "multivalued": false
+        },
+        {
+          "name": "email",
+          "displayName": "${email}",
+          "validations": {"email": {}, "length": {"max": 255}},
+          "required": {"roles": ["user"]},
+          "permissions": {"view": ["admin", "user"], "edit": ["admin", "user"]},
+          "multivalued": false
+        },
+        {
+          "name": "firstName",
+          "displayName": "${firstName}",
+          "validations": {"length": {"max": 255}, "person-name-prohibited-characters": {}},
+          "required": {"roles": ["user"]},
+          "permissions": {"view": ["admin", "user"], "edit": ["admin", "user"]},
+          "multivalued": false
+        },
+        {
+          "name": "lastName",
+          "displayName": "${lastName}",
+          "validations": {"length": {"max": 255}, "person-name-prohibited-characters": {}},
+          "required": {"roles": ["user"]},
+          "permissions": {"view": ["admin", "user"], "edit": ["admin", "user"]},
+          "multivalued": false
+        },
+        {
+          "name": "school_id",
+          "displayName": "School ID",
+          "validations": {"length": {"max": 100}},
+          "permissions": {"view": ["admin"], "edit": ["admin"]},
+          "multivalued": false
+        }
+      ],
+      "groups": [
+        {
+          "name": "user-metadata",
+          "displayHeader": "User metadata",
+          "displayDescription": "Attributes, which refer to user metadata"
+        }
+      ]
+    }
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: keycloak-student-provisioner-sync-v2
+  name: keycloak-student-provisioner-sync-v4
 spec:
   backoffLimit: 6
   template:
     spec:
       restartPolicy: OnFailure
       containers:
-        - name: reconcile
+        - name: reconcile-client
           image: quay.io/keycloak/keycloak:26.4.7
           command: ["/bin/sh", "/scripts/reconcile.sh"]
           env:
@@ -53,5 +104,5 @@ spec:
       volumes:
         - name: scripts
           configMap:
-            name: keycloak-student-provisioner-sync-v2
+            name: keycloak-student-provisioner-sync-v4
             defaultMode: 0555

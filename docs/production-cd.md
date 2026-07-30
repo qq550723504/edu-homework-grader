@@ -56,6 +56,28 @@ pwsh -NoProfile -File ./scripts/k8s/bootstrap-production-deployer.ps1 `
 工单、聊天或日志。发布 runner 只把它解码到权限受限的临时文件，job 结束时始终
 删除该文件。
 
+## 部署权限升级
+
+当发布路径新增受限 Kubernetes 资源时，必须先升级已部署的
+`github-production-deployer` Role，再批准首次包含该资源的发布。此操作不会签发或上传
+新的 kubeconfig：
+
+```powershell
+pwsh -NoProfile -File ./scripts/k8s/bootstrap-production-deployer.ps1 `
+  -UpgradeDeployerRbac
+```
+
+部署身份只对既有 Keycloak 同步 ConfigMap 和 Job 具有 `get`、`patch` 权限；资源的
+创建、删除和重试必须经管理员受控的升级步骤完成。首次发布或同步 Job 失败后，运行：
+
+```powershell
+pwsh -NoProfile -File ./scripts/k8s/bootstrap-production-deployer.ps1 `
+  -UpgradeKeycloakStudentProvisioner
+```
+
+该步骤会重建命名同步 Job，并等待其成功完成；不会签发或上传新的 kubeconfig。成功后再
+批准生产发布。
+
 ## 正常发布
 
 1. PR 全部检查通过后合并到受保护的 `main`。
