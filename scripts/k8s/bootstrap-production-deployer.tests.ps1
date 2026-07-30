@@ -85,6 +85,20 @@ exit /b 0
             Should -Throw -ExpectedMessage '*-ConfirmProductionCredential*'
     }
 
+    It 'upgrades deployer RBAC without creating or uploading a credential' {
+        $environment = New-FakeCommandEnvironment -Token (New-TestJwt -ExpiresAt ([DateTimeOffset]::UtcNow.AddHours(800)))
+        try {
+            { & $scriptPath -UpgradeDeployerRbac -InformationAction SilentlyContinue } | Should -Not -Throw
+
+            $commandLog = Get-Content -Raw $environment.LogPath
+            $commandLog | Should -Match '(?m)^kubectl apply --server-side --filename '
+            $commandLog | Should -Not -Match '(?m)^create token '
+            $commandLog | Should -Not -Match '(?m)^gh secret set '
+        } finally {
+            Restore-FakeCommandEnvironment -Environment $environment
+        }
+    }
+
     It 'rejects an arbitrary repository before invoking Kubernetes or GitHub' {
         Mock kubectl { throw 'kubectl must not run' }
         Mock gh { throw 'gh must not run' }

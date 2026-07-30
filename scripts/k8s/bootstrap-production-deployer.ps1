@@ -2,13 +2,14 @@
 param(
     [string]$Namespace = 'edu-homework-grader',
     [switch]$ConfirmProductionCredential,
+    [switch]$UpgradeDeployerRbac,
     [ValidateRange(1, 8760)]
     [int]$MinimumTokenLifetimeHours = 720
 )
 
 $ErrorActionPreference = 'Stop'
 
-if (-not $ConfirmProductionCredential) {
+if (-not $ConfirmProductionCredential -and -not $UpgradeDeployerRbac) {
     throw 'Pass -ConfirmProductionCredential to create the GitHub production deploy credential.'
 }
 
@@ -16,7 +17,13 @@ if ($Namespace -ne 'edu-homework-grader') {
     throw 'The production deploy identity is restricted to the edu-homework-grader namespace.'
 }
 
-if (-not $PSCmdlet.ShouldProcess('qq550723504/edu-homework-grader production environment', 'replace KUBECONFIG_B64')) {
+$operation = if ($UpgradeDeployerRbac) {
+    'upgrade github-production-deployer RBAC'
+}
+else {
+    'replace KUBECONFIG_B64'
+}
+if (-not $PSCmdlet.ShouldProcess('qq550723504/edu-homework-grader production environment', $operation)) {
     return
 }
 
@@ -25,6 +32,11 @@ $rbacManifest = Join-Path $PSScriptRoot '..\..\infra\k8s\production\github-produ
 & kubectl apply --server-side --filename $rbacManifest
 if ($LASTEXITCODE -ne 0) {
     throw 'Kubernetes could not apply the production deploy identity RBAC.'
+}
+
+if ($UpgradeDeployerRbac) {
+    Write-Information "Upgraded deploy identity RBAC in namespace $Namespace."
+    return
 }
 
 $token = & kubectl create token github-production-deployer --namespace $Namespace --duration=8760h
