@@ -28,6 +28,16 @@ Describe 'bootstrap-operational-evaluation' {
         $source | Should -Not -Match 'Write-(Host|Output).*?(PASSWORD|HMAC|DATABASE_URL|TOKEN)'
     }
 
+    It 'merges GitHub trust keys into the existing runtime secret' {
+        $source = Get-Content -Raw $scriptPath
+
+        $source | Should -Match '\$trustSecretPatch = @\{'
+        $source | Should -Match 'GITHUB_OPERATIONAL_EVALUATION_AUDIENCE'
+        $source | Should -Match 'ConvertTo-Json -Compress'
+        $source | Should -Match 'kubectl patch secret \$RuntimeSecretName'
+        $source | Should -Not -Match '''create'', ''secret'', ''generic'', \$RuntimeSecretName'
+    }
+
     It 'bootstraps privileged evaluation infrastructure before release automation manages images' {
         $source = Get-Content -Raw $scriptPath
 
