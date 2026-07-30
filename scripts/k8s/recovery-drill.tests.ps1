@@ -28,6 +28,7 @@ Describe 'recovery-drill' {
         $source | Should -Match 'rclone/rclone:1\.71\.0'
         $source | Should -Match 'emptyDir:'
         $source | Should -Match 'pg_restore --clean --if-exists --no-owner'
+        $source | Should -Match 'pg_restore --clean --if-exists --no-owner --no-acl'
         $source | Should -Match 'args:'
         $source | Should -Not -Match '(?m)^      command:\s*\r?\n        - postgres$'
         $source | Should -Match 'access_key_id = `\$COS_S3_ACCESS_KEY_ID'

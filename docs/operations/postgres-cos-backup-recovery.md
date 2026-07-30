@@ -155,3 +155,17 @@ The following P0 recovery evidence was collected in Kubernetes context
   six reported counts were `0`. This is expected for the freshly initialized
   pilot database and still proves that the restored migrated tables exist and
   are queryable.
+
+## Verified execution: 2026-07-30
+
+- The production schema was at Alembic revision
+  `0031_operational_evaluation_runs`.
+- Backup Job `postgres-backup-manual-20260730023517` completed with UTC backup
+  timestamp `20260730T023520Z`; the COS checksum verification reported two
+  matching files.
+- The isolated recovery drill completed with the temporary recovery Pod
+  automatically removed. The restore deliberately used `--no-owner --no-acl`,
+  so a production-only read role is not required in the isolated database.
+- The six required table-group validations completed. The source snapshot was
+  still empty, so each count was `0`; this verifies current-schema restoration
+  without creating test customer data.
