@@ -51,6 +51,9 @@ users: []
 
         $images = [System.Collections.Generic.List[string]]::new()
         foreach ($resource in $Resources) {
+            if ($resource.Kind -eq 'Job') {
+                continue
+            }
             foreach ($match in [regex]::Matches(
                 $resource.Content,
                 '(?m)^\s+(?:-\s+)?image:\s*(\S+)\s*$'
@@ -74,6 +77,8 @@ users: []
             'Deployment/web'
             'CronJob/student-activation-expiry'
             'CronJob/operational-evaluation-retention'
+            'ConfigMap/keycloak-student-provisioner-sync-v4'
+            'Job/keycloak-student-provisioner-sync-v4'
         )
         if ($IncludesProductionAlert) {
             $expected += 'CronJob/production-alert'
@@ -88,9 +93,7 @@ users: []
             'Deployment/(keycloak|redis)'
             'StatefulSet/'
             'Service/'
-            'ConfigMap/'
             'Ingress/'
-            '^Job/'
             'Namespace/'
             'postgres'
             '^(ServiceAccount|Role|RoleBinding|NetworkPolicy)/operational-evaluation-'
@@ -353,6 +356,20 @@ BeforeEach {
             )
             $selector | Should -Not -Match 'app\.kubernetes\.io/part-of:'
         }
+    }
+
+    It 'includes the Keycloak profile reconciliation resources in every release' {
+        & $scriptPath -ImageSha $validSha -SkipPublicHealthCheck
+
+        $resources = @(
+            Get-ManifestResources `
+                -Content $global:DeployProductionTestState.AppliedManifests[0]
+        )
+
+        $resources | ForEach-Object { "$($_.Kind)/$($_.Name)" } |
+            Should -Contain 'ConfigMap/keycloak-student-provisioner-sync-v4'
+        $resources | ForEach-Object { "$($_.Kind)/$($_.Name)" } |
+            Should -Contain 'Job/keycloak-student-provisioner-sync-v4'
     }
 
     It 'treats omitted deployment status fields as not ready until the named deployment becomes ready' {

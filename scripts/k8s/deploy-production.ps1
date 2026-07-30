@@ -477,6 +477,7 @@ resources:
   - application.yaml
   - student-activation-expiry.yaml
   - operational-evaluation-retention.yaml
+  - keycloak-student-provisioner-sync.yaml
 '@
     if ($IncludeProductionAlert) {
         $kustomization += [Environment]::NewLine + '  - production-alert.yaml'
