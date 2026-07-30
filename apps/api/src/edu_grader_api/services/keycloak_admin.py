@@ -44,6 +44,18 @@ class KeycloakAdminClient:
             )
             created.raise_for_status()
             user_id = created.headers["Location"].rstrip("/").rsplit("/", 1)[1]
+        existing = self.client.get(
+            f"{self.base_url}/admin/realms/{self.realm}/users/{user_id}", headers=headers
+        )
+        existing.raise_for_status()
+        existing_attributes = existing.json().get("attributes")
+        attributes = existing_attributes if isinstance(existing_attributes, dict) else {}
+        attributes["school_id"] = [school_id]
+        self.client.put(
+            f"{self.base_url}/admin/realms/{self.realm}/users/{user_id}",
+            json={"attributes": attributes},
+            headers=headers,
+        ).raise_for_status()
         role = self.client.get(
             f"{self.base_url}/admin/realms/{self.realm}/roles/{quote('student', safe='')}",
             headers=headers,
