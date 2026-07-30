@@ -62,7 +62,10 @@ users: []
     }
 
     function Assert-ManagedReleaseObjects {
-        param([Parameter(Mandatory = $true)][object[]]$Resources)
+        param(
+            [Parameter(Mandatory = $true)][object[]]$Resources,
+            [Parameter(Mandatory = $true)][bool]$IncludesProductionAlert
+        )
 
         $expected = @(
             'Deployment/api'
@@ -72,9 +75,12 @@ users: []
             'CronJob/student-activation-expiry'
             'CronJob/operational-evaluation-retention'
         )
+        if ($IncludesProductionAlert) {
+            $expected += 'CronJob/production-alert'
+        }
         $actual = @($Resources | ForEach-Object { "$($_.Kind)/$($_.Name)" })
 
-        $actual | Should -HaveCount 6
+        $actual | Should -HaveCount $expected.Count
         foreach ($key in $expected) {
             $actual | Should -Contain $key
         }
@@ -122,6 +128,10 @@ users: []
 '@
         }
 
+        if ($joined -eq 'get cronjob production-alert --ignore-not-found --output json --namespace edu-homework-grader') {
+            return @()
+        }
+
         if ($joined -match '^get deployment (api|grader|web|languagetool) --output json --namespace edu-homework-grader$') {
             $name = [string]$Arguments[2]
             $isTarget = $global:DeployProductionTestState.ApplyCount -eq 1
@@ -155,6 +165,10 @@ users: []
                 (Get-Content -Raw -LiteralPath $manifestPath)
             )
             return 'applied'
+        }
+
+        if ($joined -eq 'delete cronjob production-alert --ignore-not-found --namespace edu-homework-grader') {
+            return 'deleted'
         }
 
         if ($joined -match '^rollout status deployment/') {
@@ -276,9 +290,9 @@ BeforeEach {
             Get-ManifestResources `
                 -Content $global:DeployProductionTestState.AppliedManifests[0]
         )
-        Assert-ManagedReleaseObjects -Resources $resources
+        Assert-ManagedReleaseObjects -Resources $resources -IncludesProductionAlert $true
         $images = @(Get-WorkloadImages -Resources $resources)
-        $images | Should -HaveCount 7
+        $images | Should -HaveCount 8
         foreach ($image in $images) {
             $image | Should -Match ([regex]::Escape(":$validSha") + '$')
             $image | Should -Not -Match 'sha-not-published'
@@ -364,7 +378,7 @@ BeforeEach {
             Get-ManifestResources `
                 -Content $global:DeployProductionTestState.AppliedManifests[1]
         )
-        Assert-ManagedReleaseObjects -Resources $rollbackResources
+        Assert-ManagedReleaseObjects -Resources $rollbackResources -IncludesProductionAlert $false
         $rollbackImages = @(Get-WorkloadImages -Resources $rollbackResources)
         $rollbackImages | Should -HaveCount 7
         foreach ($expectedImage in @(
@@ -380,6 +394,8 @@ BeforeEach {
         }
         $global:DeployProductionTestState.AppliedManifests[1] |
             Should -Not -Match 'sha-not-published'
+        $global:DeployProductionTestState.KubectlCalls |
+            Should -Contain 'delete cronjob production-alert --ignore-not-found --namespace edu-homework-grader'
     }
 
     It 'rolls back when the API Service has no ready endpoints' {

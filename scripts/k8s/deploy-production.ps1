@@ -72,6 +72,7 @@ function ConvertTo-ReleaseImagesFromDigests {
         LanguageTool   = "$($ManagedRepositories.LanguageTool)@$($digests.languagetool)"
         ExpiryCronJob  = "$($ManagedRepositories.Api)@$($digests.api)"
         OperationalEvaluationRetentionCronJob = "$($ManagedRepositories.Api)@$($digests.api)"
+        ProductionAlertCronJob = "$($ManagedRepositories.Api)@$($digests.api)"
     }
 }
 
@@ -196,6 +197,21 @@ function Get-ManagedImages {
         -Output $cronJobOutput `
         -Description 'Managed CronJob query'
 
+    $productionAlertOutput = @(
+        Invoke-NativeTool -Tool 'kubectl' -Arguments @(
+            'get', 'cronjob', 'production-alert', '--ignore-not-found',
+            '--output', 'json', '--namespace', $Namespace
+        )
+    )
+    $productionAlertDocument = if ($productionAlertOutput.Count -eq 0) {
+        $null
+    }
+    else {
+        ConvertFrom-ToolJson `
+            -Output $productionAlertOutput `
+            -Description 'Production alert CronJob query'
+    }
+
     $images = [ordered]@{
         ApiInit       = Get-NamedWorkloadImage `
             -Workloads @($deploymentDocument.items) `
@@ -228,9 +244,22 @@ function Get-ManagedImages {
             -WorkloadName 'operational-evaluation-retention' `
             -ContainerName 'expire' `
             -CronJob
+        ProductionAlertCronJob = if ($null -eq $productionAlertDocument) {
+            $null
+        }
+        else {
+            Get-NamedWorkloadImage `
+                -Workloads @($productionAlertDocument) `
+                -WorkloadName 'production-alert' `
+                -ContainerName 'alert' `
+                -CronJob
+        }
     }
 
     foreach ($entry in $images.GetEnumerator()) {
+        if ($entry.Key -eq 'ProductionAlertCronJob' -and [string]::IsNullOrWhiteSpace($entry.Value)) {
+            continue
+        }
         Assert-CapturedImage -Image $entry.Value -Name $entry.Key
     }
     return $images
@@ -396,6 +425,28 @@ spec:
               image: $operationalEvaluationRetentionImage
 "@
 
+    if (-not [string]::IsNullOrWhiteSpace($Images.ProductionAlertCronJob)) {
+        $productionAlertImage = ConvertTo-YamlString ([string]$Images.ProductionAlertCronJob)
+        New-ExactImagePatch `
+            -Path (Join-Path $Destination 'managed-production-alert-image.yaml') `
+            -ApiVersion 'batch/v1' `
+            -Kind 'CronJob' `
+            -Name 'production-alert' `
+            -Spec @"
+spec:
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: alert
+              image: $productionAlertImage
+"@
+        Add-Content `
+            -LiteralPath (Join-Path $Destination 'kustomization.yaml') `
+            -Value "`n  - path: managed-production-alert-image.yaml"
+    }
+
     $kustomizationPath = Join-Path $Destination 'kustomization.yaml'
     $patchConfiguration = @'
   - path: managed-api-images.yaml
@@ -409,11 +460,12 @@ spec:
 }
 
 function Initialize-ReleaseKustomization {
-    param([Parameter(Mandatory = $true)][string]$Destination)
+    param(
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [switch]$IncludeProductionAlert
+    )
 
-    Set-Content `
-        -LiteralPath (Join-Path $Destination 'kustomization.yaml') `
-        -Value @'
+    $kustomization = @'
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: edu-homework-grader
@@ -425,9 +477,18 @@ resources:
   - application.yaml
   - student-activation-expiry.yaml
   - operational-evaluation-retention.yaml
+'@
+    if ($IncludeProductionAlert) {
+        $kustomization += [Environment]::NewLine + '  - production-alert.yaml'
+    }
+    $kustomization += @'
+
 patches:
   - path: managed-keycloak-exclusion.yaml
 '@
+    Set-Content `
+        -LiteralPath (Join-Path $Destination 'kustomization.yaml') `
+        -Value $kustomization
 
     Set-Content `
         -LiteralPath (Join-Path $Destination 'managed-keycloak-exclusion.yaml') `
@@ -460,7 +521,12 @@ function New-RenderedRelease {
     }
 
     Copy-Item -LiteralPath $ProductionManifestPath -Destination $Destination -Recurse
-    Initialize-ReleaseKustomization -Destination $Destination
+    $includeProductionAlert = $usingSha -or -not [string]::IsNullOrWhiteSpace(
+        $ExactImages.ProductionAlertCronJob
+    )
+    Initialize-ReleaseKustomization `
+        -Destination $Destination `
+        -IncludeProductionAlert:$includeProductionAlert
 
     Push-Location $Destination
     try {
@@ -635,11 +701,21 @@ function Restore-ManagedImages {
         [string]$Destination
     )
 
-    $rollbackManifest = New-RenderedRelease `
-        -ExactImages $Images `
-        -Destination $Destination
-    Apply-RenderedRelease -ManifestPath $rollbackManifest
-    Wait-DeploymentRollouts
+    try {
+        $rollbackManifest = New-RenderedRelease `
+            -ExactImages $Images `
+            -Destination $Destination
+        Apply-RenderedRelease -ManifestPath $rollbackManifest
+        Wait-DeploymentRollouts
+    }
+    finally {
+        if ([string]::IsNullOrWhiteSpace($Images.ProductionAlertCronJob)) {
+            $null = Invoke-NativeTool -Tool 'kubectl' -Arguments @(
+                'delete', 'cronjob', 'production-alert', '--ignore-not-found',
+                '--namespace', $Namespace
+            )
+        }
+    }
 }
 
 function Write-ReleaseSummary {

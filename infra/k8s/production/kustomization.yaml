@@ -16,6 +16,7 @@ resources:
   - keycloak-student-provisioner-sync.yaml
   - operational-evaluation.yaml
   - operational-evaluation-retention.yaml
+  - production-alert.yaml
 configMapGenerator:
   - name: edu-grader-production-realm
     files:

@@ -1,0 +1,70 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: production-alert
+spec:
+  schedule: "30 4 * * 0"
+  timeZone: Asia/Singapore
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 300
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: production-alert
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: alert
+              image: ghcr.io/qq550723504/edu-homework-grader-api:sha-not-published
+              command: ["python", "-m", "edu_grader_api.cli.production_alert"]
+              env:
+                - name: ALERT_PUBLIC_URL
+                  value: https://edu.getkr.com/
+                - name: ALERT_API_URL
+                  value: http://api:8000/infrastructure-ready
+                - name: ALERT_GRADER_URL
+                  value: http://grader:8010/health
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: edu-grader-runtime
+                      key: DATABASE_URL
+                - name: ALERT_SMTP_HOST
+                  valueFrom:
+                    secretKeyRef:
+                      name: production-alert-smtp
+                      key: ALERT_SMTP_HOST
+                - name: ALERT_SMTP_PORT
+                  valueFrom:
+                    secretKeyRef:
+                      name: production-alert-smtp
+                      key: ALERT_SMTP_PORT
+                - name: ALERT_SMTP_SENDER
+                  valueFrom:
+                    secretKeyRef:
+                      name: production-alert-smtp
+                      key: ALERT_SMTP_SENDER
+                - name: ALERT_SMTP_RECIPIENT
+                  valueFrom:
+                    secretKeyRef:
+                      name: production-alert-smtp
+                      key: ALERT_SMTP_RECIPIENT
+                - name: ALERT_SMTP_AUTH_CODE
+                  valueFrom:
+                    secretKeyRef:
+                      name: production-alert-smtp
+                      key: ALERT_SMTP_AUTH_CODE
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
