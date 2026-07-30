@@ -101,7 +101,7 @@ GRANT SELECT ON TABLE public.generation_jobs, public.generation_attempts, public
   TO operational_evaluation_reader;
 "@
 
-$readerBootstrapSql | & kubectl exec --namespace $Namespace statefulset/postgres '--stdin' '--' `
+$null = $readerBootstrapSql | & kubectl exec --namespace $Namespace statefulset/postgres '--stdin' '--' `
     'sh' '-ec' 'PGPASSWORD="$POSTGRES_PASSWORD" exec psql --set=ON_ERROR_STOP=1 --username=edu_grader --dbname=edu_grader'
 if ($LASTEXITCODE -ne 0) {
     throw 'PostgreSQL could not configure the operational evaluation read-only role.'
@@ -143,19 +143,15 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Kubernetes could not apply the operational evaluation runtime Secret.'
 }
 
-$trustSecretArguments = @(
-    'create', 'secret', 'generic', $RuntimeSecretName,
-    '--namespace', $Namespace,
-    "--from-literal=GITHUB_OPERATIONAL_EVALUATION_AUDIENCE=$GitHubOperationalEvaluationAudience",
-    "--from-literal=GITHUB_OPERATIONAL_EVALUATION_REPOSITORY_ID=$GitHubOperationalEvaluationRepositoryId",
-    "--from-literal=GITHUB_OPERATIONAL_EVALUATION_OWNER_ID=$GitHubOperationalEvaluationOwnerId",
-    "--from-literal=GITHUB_OPERATIONAL_EVALUATION_WORKFLOW_REF=$GitHubOperationalEvaluationWorkflowRef"
-)
-$trustManifest = & kubectl @trustSecretArguments '--dry-run=client' '--output=yaml'
-if ($LASTEXITCODE -ne 0) {
-    throw 'Kubernetes could not render GitHub operational evaluation trust configuration.'
-}
-$trustManifest | & kubectl apply --server-side --force-conflicts --filename -
+$trustSecretPatch = @{
+    data = @{
+        GITHUB_OPERATIONAL_EVALUATION_AUDIENCE = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($GitHubOperationalEvaluationAudience))
+        GITHUB_OPERATIONAL_EVALUATION_REPOSITORY_ID = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($GitHubOperationalEvaluationRepositoryId))
+        GITHUB_OPERATIONAL_EVALUATION_OWNER_ID = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($GitHubOperationalEvaluationOwnerId))
+        GITHUB_OPERATIONAL_EVALUATION_WORKFLOW_REF = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($GitHubOperationalEvaluationWorkflowRef))
+    }
+} | ConvertTo-Json -Compress
+& kubectl patch secret $RuntimeSecretName --namespace $Namespace --type merge --patch $trustSecretPatch
 if ($LASTEXITCODE -ne 0) {
     throw 'Kubernetes could not apply GitHub operational evaluation trust configuration.'
 }

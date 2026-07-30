@@ -12,6 +12,7 @@ Describe 'bootstrap-operational-evaluation' {
         $source | Should -Match 'has_table_privilege'
         $source | Should -Match 'NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS'
         $source | Should -Match "'--stdin'"
+        $source | Should -Match '\$null = \$readerBootstrapSql \| & kubectl exec'
         $source | Should -Not -Match 'GRANT (INSERT|UPDATE|DELETE|ALL)'
         $source | Should -Not -Match 'ALTER DEFAULT PRIVILEGES'
     }
@@ -25,6 +26,16 @@ Describe 'bootstrap-operational-evaluation' {
         $source | Should -Match '@sha256:'
         $source | Should -Match 'operational-evaluation-runtime'
         $source | Should -Not -Match 'Write-(Host|Output).*?(PASSWORD|HMAC|DATABASE_URL|TOKEN)'
+    }
+
+    It 'merges GitHub trust keys into the existing runtime secret' {
+        $source = Get-Content -Raw $scriptPath
+
+        $source | Should -Match '\$trustSecretPatch = @\{'
+        $source | Should -Match 'GITHUB_OPERATIONAL_EVALUATION_AUDIENCE'
+        $source | Should -Match 'ConvertTo-Json -Compress'
+        $source | Should -Match 'kubectl patch secret \$RuntimeSecretName'
+        $source | Should -Not -Match '''create'', ''secret'', ''generic'', \$RuntimeSecretName'
     }
 
     It 'bootstraps privileged evaluation infrastructure before release automation manages images' {
