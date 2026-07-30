@@ -24,9 +24,10 @@ class KeycloakAdminClient:
 
     def ensure_student(self, *, school_id: str, display_name: str, activation_code: str) -> str:
         headers = {"Authorization": f"Bearer {self._access_token()}"}
+        username = school_id.lower()
         users = self.client.get(
             f"{self.base_url}/admin/realms/{self.realm}/users",
-            params={"username": school_id, "exact": "true"},
+            params={"username": username, "exact": "true"},
             headers=headers,
         )
         users.raise_for_status()
@@ -36,7 +37,7 @@ class KeycloakAdminClient:
             created = self.client.post(
                 f"{self.base_url}/admin/realms/{self.realm}/users",
                 json={
-                    "username": school_id,
+                    "username": username,
                     "enabled": True,
                     "attributes": {"school_id": [school_id]},
                 },
