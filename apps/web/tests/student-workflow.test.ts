@@ -14,6 +14,8 @@ describe('student question workflow', () => {
     expect(isAssignmentWritable('late_allowed')).toBe(true)
     expect(isAssignmentWritable('overdue')).toBe(false)
     expect(isAssignmentWritable('submitted_pending_review')).toBe(false)
+    expect(isAssignmentWritable('correction_required')).toBe(true)
+    expect(isAssignmentWritable('correction_pending_review')).toBe(false)
   })
 
   it('keeps navigation in range and counts unanswered items', () => {

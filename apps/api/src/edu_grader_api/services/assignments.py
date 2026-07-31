@@ -345,7 +345,8 @@ def list_student_assignments(
         correction_pending = None
         if attempt is not None:
             correction_pending = session.scalar(
-                select(CorrectionAttempt.id)
+                select(StudentAttempt.status)
+                .select_from(CorrectionAttempt)
                 .join(
                     StudentAttempt,
                     CorrectionAttempt.correction_attempt_id == StudentAttempt.id,
@@ -358,7 +359,12 @@ def list_student_assignments(
                 .limit(1)
             )
         if correction_pending is not None:
-            grouped["correction_required"].append((assignment, "correction_required"))
+            status = (
+                "correction_required"
+                if correction_pending is AttemptStatus.DRAFT
+                else "correction_pending_review"
+            )
+            grouped["correction_required"].append((assignment, status))
             continue
         if attempt is not None and attempt.status is AttemptStatus.SUBMITTED:
             published = session.scalar(

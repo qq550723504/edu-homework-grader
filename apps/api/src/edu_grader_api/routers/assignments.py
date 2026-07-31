@@ -20,6 +20,7 @@ from ..models import (
     GradePublication,
     GradingRun,
     Role,
+    AttemptStatus,
     StudentAttempt,
 )
 from ..services.reviews import published_student_grading
@@ -443,12 +444,6 @@ def get_student_assignment_route(
                 student_id=UUID(principal.user_id),
                 assignment_id=assignment_id,
             )
-            answers = {
-                answer.assignment_item_id: answer
-                for answer in session.scalars(
-                    select(AttemptAnswer).where(AttemptAnswer.attempt_id == attempt.id)
-                )
-            }
             items = list(
                 session.scalars(
                     select(AssignmentItem)
@@ -456,6 +451,36 @@ def get_student_assignment_route(
                     .order_by(AssignmentItem.position)
                 )
             )
+            pending_correction = session.scalar(
+                select(CorrectionAttempt)
+                .join(
+                    StudentAttempt,
+                    StudentAttempt.id == CorrectionAttempt.correction_attempt_id,
+                )
+                .outerjoin(
+                    GradePublication,
+                    GradePublication.attempt_id == CorrectionAttempt.correction_attempt_id,
+                )
+                .where(
+                    CorrectionAttempt.original_attempt_id == attempt.id,
+                    GradePublication.id.is_(None),
+                )
+                .order_by(CorrectionAttempt.created_at, CorrectionAttempt.id)
+                .limit(1)
+            )
+            active_attempt = (
+                session.get(StudentAttempt, pending_correction.correction_attempt_id)
+                if pending_correction is not None
+                else attempt
+            )
+            if active_attempt is None:
+                raise AssignmentAccessError()
+            answers = {
+                answer.assignment_item_id: answer
+                for answer in session.scalars(
+                    select(AttemptAnswer).where(AttemptAnswer.attempt_id == active_attempt.id)
+                )
+            }
     except AssignmentAccessError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
@@ -473,7 +498,11 @@ def get_student_assignment_route(
     )
     response: dict[str, object] = {
         **_assignment_summary(assignment, student_status),
-        "attempt": {"id": str(attempt.id), "status": attempt.status.value},
+        "attempt": {
+            "id": str(active_attempt.id),
+            "attempt_number": active_attempt.attempt_number,
+            "status": active_attempt.status.value,
+        },
         "items": [
             {
                 "id": str(item.id),
@@ -488,22 +517,41 @@ def get_student_assignment_route(
             for item in items
         ],
     }
-    if session.scalar(select(GradePublication).where(GradePublication.attempt_id == attempt.id)):
-        response["grading"] = published_student_grading(session, attempt_id=attempt.id)
+    if session.scalar(
+        select(GradePublication).where(GradePublication.attempt_id == active_attempt.id)
+    ):
+        response["grading"] = published_student_grading(
+            session, attempt_id=active_attempt.id
+        )
     corrections = list(
-        session.scalars(
-            select(CorrectionAttempt)
+        session.execute(
+            select(CorrectionAttempt, StudentAttempt, GradePublication.id)
             .join(
+                StudentAttempt,
+                StudentAttempt.id == CorrectionAttempt.correction_attempt_id,
+            )
+            .outerjoin(
                 GradePublication,
                 GradePublication.attempt_id == CorrectionAttempt.correction_attempt_id,
             )
             .where(CorrectionAttempt.original_attempt_id == attempt.id)
             .order_by(CorrectionAttempt.created_at, CorrectionAttempt.id)
-        )
+        ).all()
     )
     response["corrections"] = [
-        {"attempt_id": str(correction.correction_attempt_id), "status": "published"}
-        for correction in corrections
+        {
+            "attempt_id": str(correction.correction_attempt_id),
+            "status": (
+                "published"
+                if publication_id is not None
+                else (
+                    "correction_required"
+                    if correction_attempt.status is AttemptStatus.DRAFT
+                    else "correction_pending_review"
+                )
+            ),
+        }
+        for correction, correction_attempt, publication_id in corrections
     ]
     return response
 
