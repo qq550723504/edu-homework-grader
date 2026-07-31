@@ -520,9 +520,7 @@ def get_student_assignment_route(
     if session.scalar(
         select(GradePublication).where(GradePublication.attempt_id == active_attempt.id)
     ):
-        response["grading"] = published_student_grading(
-            session, attempt_id=active_attempt.id
-        )
+        response["grading"] = published_student_grading(session, attempt_id=active_attempt.id)
     corrections = list(
         session.execute(
             select(CorrectionAttempt, StudentAttempt, GradePublication.id)
