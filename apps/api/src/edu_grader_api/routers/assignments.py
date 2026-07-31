@@ -32,6 +32,7 @@ from ..services.assignments import (
     MathAnswerValidationError,
     add_assignment_item,
     create_assignment,
+    delete_assignment,
     get_teacher_assignment,
     get_student_assignment,
     list_student_assignments,
@@ -41,6 +42,7 @@ from ..services.assignments import (
     submit_attempt,
     is_mathjson_item,
     replace_assignment_items,
+    void_assignment,
 )
 
 
@@ -115,6 +117,38 @@ def list_teacher_assignments_route(
             }
             for assignment in assignments
         ]
+    }
+
+
+@router.get("/{assignment_id}")
+def get_teacher_assignment_route(
+    assignment_id: UUID,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    try:
+        assignment = get_teacher_assignment(
+            session,
+            tenant_id=UUID(principal.tenant_id),
+            teacher_id=UUID(principal.user_id),
+            assignment_id=assignment_id,
+        )
+    except AssignmentAccessError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+        ) from None
+    return {
+        "id": str(assignment.id),
+        "title": assignment.title,
+        "subject": assignment.subject,
+        "class_id": str(assignment.class_id),
+        "due_at": _iso8601_utc(assignment.due_at),
+        "submission_rule": assignment.submission_rule_json,
+        "status": assignment.status.value,
+        "question_version_ids": [
+            str(item.question_version_id)
+            for item in sorted(assignment.items, key=lambda item: item.position)
+        ],
     }
 
 
@@ -262,6 +296,56 @@ def publish_assignment_route(
     except AssignmentStateError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     return {"id": str(published.id), "status": published.status.value}
+
+
+@router.delete("/{assignment_id}")
+def delete_assignment_route(
+    assignment_id: UUID,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, str]:
+    try:
+        session.rollback()
+        with session.begin():
+            assignment = get_teacher_assignment(
+                session,
+                tenant_id=UUID(principal.tenant_id),
+                teacher_id=UUID(principal.user_id),
+                assignment_id=assignment_id,
+            )
+            deleted = delete_assignment(session, assignment, teacher_id=UUID(principal.user_id))
+    except AssignmentAccessError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+        ) from None
+    except AssignmentStateError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    return {"id": str(deleted.id), "status": deleted.status.value}
+
+
+@router.post("/{assignment_id}/void")
+def void_assignment_route(
+    assignment_id: UUID,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, str]:
+    try:
+        session.rollback()
+        with session.begin():
+            assignment = get_teacher_assignment(
+                session,
+                tenant_id=UUID(principal.tenant_id),
+                teacher_id=UUID(principal.user_id),
+                assignment_id=assignment_id,
+            )
+            voided = void_assignment(session, assignment, teacher_id=UUID(principal.user_id))
+    except AssignmentAccessError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+        ) from None
+    except AssignmentStateError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    return {"id": str(voided.id), "status": voided.status.value}
 
 
 @router.get("/{assignment_id}/attempts/{attempt_id}/grading-runs")

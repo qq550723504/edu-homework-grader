@@ -277,6 +277,58 @@ def test_assigned_teacher_can_publish_a_versioned_assignment(
     assert published_response.json()["status"] == AssignmentStatus.PUBLISHED.value
 
 
+def test_teacher_can_reopen_and_delete_a_draft_assignment(
+    client: TestClient, session: Session
+) -> None:
+    teacher, _, _, classroom, published, _ = make_classroom_data(session)
+    created = client.post(
+        "/v1/assignments",
+        headers=authorize(client, teacher),
+        json=assignment_payload(classroom) | {"question_version_ids": [str(published.id)]},
+    )
+    assignment_id = created.json()["id"]
+
+    detail = client.get(f"/v1/assignments/{assignment_id}", headers=authorize(client, teacher))
+    assert detail.status_code == 200
+    assert detail.json()["status"] == AssignmentStatus.DRAFT.value
+    assert detail.json()["question_version_ids"] == [str(published.id)]
+
+    deleted = client.delete(f"/v1/assignments/{assignment_id}", headers=authorize(client, teacher))
+    assert deleted.status_code == 200
+    assert deleted.json()["status"] == AssignmentStatus.DELETED.value
+    assert session.get(Assignment, UUID(assignment_id)).status is AssignmentStatus.DELETED
+
+
+def test_teacher_can_void_a_published_assignment_and_students_no_longer_see_it(
+    client: TestClient, session: Session
+) -> None:
+    teacher, _, student, classroom, published, _ = make_classroom_data(session)
+    created = client.post(
+        "/v1/assignments",
+        headers=authorize(client, teacher),
+        json=assignment_payload(classroom) | {"question_version_ids": [str(published.id)]},
+    )
+    assignment_id = created.json()["id"]
+    assert (
+        client.post(
+            f"/v1/assignments/{assignment_id}/publish", headers=authorize(client, teacher)
+        ).status_code
+        == 200
+    )
+
+    voided = client.post(
+        f"/v1/assignments/{assignment_id}/void", headers=authorize(client, teacher)
+    )
+    assert voided.status_code == 200
+    assert voided.json()["status"] == AssignmentStatus.VOIDED.value
+    listed = client.get("/v1/student/assignments", headers=authorize(client, student))
+    assert listed.json() == {
+        "pending": [],
+        "completed": [],
+        "correction_required": [],
+    }
+
+
 def test_teacher_can_replace_a_draft_composition_but_not_a_published_one(
     client: TestClient, session: Session
 ) -> None:
