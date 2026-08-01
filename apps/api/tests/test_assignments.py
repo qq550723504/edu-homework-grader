@@ -353,6 +353,7 @@ def test_voided_assignment_rejects_answer_saves_from_an_open_student_tab(
 
     assert response.status_code == 404
 
+
 def test_teacher_can_replace_a_draft_composition_but_not_a_published_one(
     client: TestClient, session: Session
 ) -> None:
