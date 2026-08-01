@@ -1,11 +1,11 @@
 <template>
-  <main class="shell narrow"><NuxtLink class="back" to="/student">← 作业列表</NuxtLink><LogoutButton /><p class="eyebrow">作答中</p><h1>{{ detail?.title ?? '加载作业…' }}</h1>
+  <main class="shell narrow"><NuxtLink class="back" to="/student">← 作业列表</NuxtLink><LogoutButton /><p class="eyebrow">{{ isCorrection ? '订正作答' : '作答中' }}</p><h1>{{ detail?.title ?? '加载作业…' }}</h1>
     <section v-if="feedback.length" aria-label="已发布反馈"><p v-for="(entry, index) in feedback" :key="index">{{ entry }}</p></section>
-    <section v-if="feedback.length && !appealSubmitted" class="card wide" aria-labelledby="appeal-heading"><h2 id="appeal-heading">对成绩有疑问？</h2><form class="stack" @submit.prevent="submitAppeal"><label>申诉理由<textarea v-model.trim="appealReason" aria-label="申诉理由" required maxlength="2000" rows="3" /></label><button class="button secondary" type="submit">提交申诉</button></form></section>
+    <section v-if="feedback.length && !appealSubmitted && !isCorrection" class="card wide" aria-labelledby="appeal-heading"><h2 id="appeal-heading">对成绩有疑问？</h2><form class="stack" @submit.prevent="submitAppeal"><label>申诉理由<textarea v-model.trim="appealReason" aria-label="申诉理由" required maxlength="2000" rows="3" /></label><button class="button secondary" type="submit">提交申诉</button></form></section>
     <p v-if="hasPublishedCorrection" role="status">可以查看订正结果</p>
     <p v-if="message" class="notice">{{ message }}</p>
-    <section v-if="currentItem" class="card wide"><span class="tag">第 {{ currentItem.position }} 题</span><div v-if="currentItem.reading_material" class="reading-material" style="white-space: pre-wrap">{{ currentItem.reading_material }}</div><h2>{{ currentItem.prompt }}</h2><MathAnswerField v-if="currentItem.input?.kind === 'mathjson-v1'" v-model="mathAnswer" @update:model-value="saveMathDraft" /><textarea v-else :value="answer" class="answer-input" rows="5" aria-label="答案" :disabled="!writable || writesBlocked || !!conflict" @input="saveDraft" /><p>同步状态：{{ syncStatus }}</p><div v-if="conflict" class="actions"><button class="button secondary" data-testid="use-server-answer" type="button" @click="useServerAnswer">采用服务器答案</button><button class="button secondary" data-testid="keep-local-answer" type="button" @click="keepLocalAnswer">保留我的答案</button></div><button v-if="retryExhausted" class="button secondary" data-testid="retry-sync" type="button" @click="retrySync">重新同步</button></section>
-    <div class="actions"><button class="button secondary" :disabled="current === 0" @click="current = previousQuestionIndex(current)">上一题</button><button class="button secondary" :disabled="!detail || current >= detail.items.length - 1" @click="current = nextQuestionIndex(current, detail?.items.length ?? 0)">下一题</button><button class="button primary" :disabled="!writable || !online || unanswered > 0 || !canSubmit || writesBlocked || !!conflict" @click="submit">提交作业</button></div><p v-if="unanswered > 0" class="notice">还有 {{ unanswered }} 题未作答</p>
+    <section v-if="currentItem" class="card wide"><span class="tag">第 {{ currentItem.position }} 题</span><div v-if="currentItem.reading_material" class="reading-material" style="white-space: pre-wrap">{{ currentItem.reading_material }}</div><h2>{{ currentItem.prompt }}</h2><MathAnswerField v-if="currentItem.input?.kind === 'mathjson-v1'" v-model="mathAnswer" :disabled="!writable || writesBlocked || !!conflict" @update:model-value="saveMathDraft" /><textarea v-else :value="answer" class="answer-input" rows="5" aria-label="答案" :disabled="!writable || writesBlocked || !!conflict" @input="saveDraft" /><p>同步状态：{{ syncStatus }}</p><div v-if="conflict" class="actions"><button class="button secondary" data-testid="use-server-answer" type="button" @click="useServerAnswer">采用服务器答案</button><button class="button secondary" data-testid="keep-local-answer" type="button" @click="keepLocalAnswer">保留我的答案</button></div><button v-if="retryExhausted" class="button secondary" data-testid="retry-sync" type="button" @click="retrySync">重新同步</button></section>
+    <div class="actions"><button class="button secondary" :disabled="current === 0" @click="current = previousQuestionIndex(current)">上一题</button><button class="button secondary" :disabled="!detail || current >= detail.items.length - 1" @click="current = nextQuestionIndex(current, detail?.items.length ?? 0)">下一题</button><button class="button primary" :disabled="!writable || !online || unanswered > 0 || !canSubmit || writesBlocked || !!conflict" @click="submit">{{ isCorrection ? '提交订正' : '提交作业' }}</button></div><p v-if="unanswered > 0" class="notice">还有 {{ unanswered }} 题未作答</p>
   </main>
 </template>
 <script setup lang="ts">
@@ -16,7 +16,7 @@ import { editorStateForItem, getUnansweredCount, isAssignmentWritable, nextQuest
 import type { MathAnswer } from '../../../lib/math-answer'
 
 interface Item { id: string; position: number; prompt: string; reading_material: string | null; input: { kind: string }; answer: Record<string, unknown> | null; version: number }
-interface Detail { id: string; title: string; status?: string; attempt: { id: string }; items: Item[]; grading?: Array<{ feedback?: Array<{ message?: string }> }>; corrections?: Array<{ status?: string }> }
+interface Detail { id: string; title: string; status?: string; attempt: { id: string; attempt_number?: number; status?: string }; items: Item[]; grading?: Array<{ feedback?: Array<{ message?: string }> }>; corrections?: Array<{ attempt_id?: string; status?: string }> }
 
 const route = useRoute()
 const detail = ref<Detail | null>(null)
@@ -36,6 +36,7 @@ const canSubmit = ref(false)
 
 const currentItem = computed(() => detail.value?.items[current.value])
 const writable = computed(() => isAssignmentWritable(detail.value?.status))
+const isCorrection = computed(() => (detail.value?.attempt.attempt_number ?? 1) > 1)
 const unanswered = computed(() => detail.value ? getUnansweredCount(detail.value.items) : 0)
 const feedback = computed(() => detail.value ? publishedFeedback(detail.value) : [])
 const hasPublishedCorrection = computed(() => detail.value ? correctionAvailable(detail.value) : false)
@@ -203,8 +204,14 @@ async function submit() {
   await sync()
   if (!await canSubmitAttempt(detail.value.attempt.id)) return
   const key = await getSubmissionKey(detail.value.attempt.id)
-  await $fetch(`/api/core/v1/student/assignments/${detail.value.id}/submit`, { method: 'POST', headers: { 'Idempotency-Key': key, 'X-CSRF-Token': principal.value.csrf_token } })
-  syncStatus.value = '已提交'
+  const endpoint = isCorrection.value
+    ? `/api/core/v1/student/attempts/${detail.value.attempt.id}/submit`
+    : `/api/core/v1/student/assignments/${detail.value.id}/submit`
+  await $fetch(endpoint, { method: 'POST', headers: { 'Idempotency-Key': key, 'X-CSRF-Token': principal.value.csrf_token } })
+  detail.value.attempt.status = 'submitted'
+  detail.value.status = isCorrection.value ? 'correction_pending_review' : 'submitted_pending_review'
+  canSubmit.value = false
+  syncStatus.value = isCorrection.value ? '订正已提交，等待教师复核' : '已提交'
 }
 
 async function submitAppeal() {

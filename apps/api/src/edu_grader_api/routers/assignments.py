@@ -15,11 +15,11 @@ from ..models import (
     Assignment,
     AssignmentItem,
     AttemptAnswer,
-    CorrectionAttempt,
     Enrollment,
     GradePublication,
     GradingRun,
     Role,
+    AttemptStatus,
     StudentAttempt,
 )
 from ..services.reviews import published_student_grading
@@ -33,6 +33,8 @@ from ..services.assignments import (
     add_assignment_item,
     create_assignment,
     delete_assignment,
+    correction_attempt_chain,
+    find_active_correction_attempt,
     get_teacher_assignment,
     get_student_assignment,
     list_student_assignments,
@@ -443,12 +445,6 @@ def get_student_assignment_route(
                 student_id=UUID(principal.user_id),
                 assignment_id=assignment_id,
             )
-            answers = {
-                answer.assignment_item_id: answer
-                for answer in session.scalars(
-                    select(AttemptAnswer).where(AttemptAnswer.attempt_id == attempt.id)
-                )
-            }
             items = list(
                 session.scalars(
                     select(AssignmentItem)
@@ -456,6 +452,18 @@ def get_student_assignment_route(
                     .order_by(AssignmentItem.position)
                 )
             )
+            correction_chain = correction_attempt_chain(session, original_attempt_id=attempt.id)
+            active_attempt = (
+                find_active_correction_attempt(session, original_attempt_id=attempt.id) or attempt
+            )
+            if active_attempt is None:
+                raise AssignmentAccessError()
+            answers = {
+                answer.assignment_item_id: answer
+                for answer in session.scalars(
+                    select(AttemptAnswer).where(AttemptAnswer.attempt_id == active_attempt.id)
+                )
+            }
     except AssignmentAccessError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
@@ -473,7 +481,11 @@ def get_student_assignment_route(
     )
     response: dict[str, object] = {
         **_assignment_summary(assignment, student_status),
-        "attempt": {"id": str(attempt.id), "status": attempt.status.value},
+        "attempt": {
+            "id": str(active_attempt.id),
+            "attempt_number": active_attempt.attempt_number,
+            "status": active_attempt.status.value,
+        },
         "items": [
             {
                 "id": str(item.id),
@@ -488,22 +500,32 @@ def get_student_assignment_route(
             for item in items
         ],
     }
-    if session.scalar(select(GradePublication).where(GradePublication.attempt_id == attempt.id)):
-        response["grading"] = published_student_grading(session, attempt_id=attempt.id)
-    corrections = list(
-        session.scalars(
-            select(CorrectionAttempt)
-            .join(
-                GradePublication,
-                GradePublication.attempt_id == CorrectionAttempt.correction_attempt_id,
-            )
-            .where(CorrectionAttempt.original_attempt_id == attempt.id)
-            .order_by(CorrectionAttempt.created_at, CorrectionAttempt.id)
+    grading_attempt_id = (
+        active_attempt.id
+        if session.scalar(
+            select(GradePublication.id).where(GradePublication.attempt_id == active_attempt.id)
         )
+        is not None
+        else attempt.id
     )
+    if session.scalar(
+        select(GradePublication.id).where(GradePublication.attempt_id == grading_attempt_id)
+    ):
+        response["grading"] = published_student_grading(session, attempt_id=grading_attempt_id)
     response["corrections"] = [
-        {"attempt_id": str(correction.correction_attempt_id), "status": "published"}
-        for correction in corrections
+        {
+            "attempt_id": str(correction.correction_attempt_id),
+            "status": (
+                "published"
+                if publication_id is not None
+                else (
+                    "correction_required"
+                    if correction_attempt.status is AttemptStatus.DRAFT
+                    else "correction_pending_review"
+                )
+            ),
+        }
+        for correction, correction_attempt, publication_id in correction_chain
     ]
     return response
 

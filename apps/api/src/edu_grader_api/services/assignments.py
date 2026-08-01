@@ -342,23 +342,18 @@ def list_student_assignments(
                 StudentAttempt.attempt_number == 1,
             )
         )
-        correction_pending = None
-        if attempt is not None:
-            correction_pending = session.scalar(
-                select(CorrectionAttempt.id)
-                .join(
-                    StudentAttempt,
-                    CorrectionAttempt.correction_attempt_id == StudentAttempt.id,
-                )
-                .outerjoin(GradePublication, GradePublication.attempt_id == StudentAttempt.id)
-                .where(
-                    CorrectionAttempt.original_attempt_id == attempt.id,
-                    GradePublication.id.is_(None),
-                )
-                .limit(1)
+        active_correction = (
+            find_active_correction_attempt(session, original_attempt_id=attempt.id)
+            if attempt is not None
+            else None
+        )
+        if active_correction is not None:
+            status = (
+                "correction_required"
+                if active_correction.status is AttemptStatus.DRAFT
+                else "correction_pending_review"
             )
-        if correction_pending is not None:
-            grouped["correction_required"].append((assignment, "correction_required"))
+            grouped["correction_required"].append((assignment, status))
             continue
         if attempt is not None and attempt.status is AttemptStatus.SUBMITTED:
             published = session.scalar(
@@ -381,6 +376,49 @@ def list_student_assignments(
             else:
                 grouped["pending"].append((assignment, "pending"))
     return grouped
+
+
+def correction_attempt_chain(
+    session: Session, *, original_attempt_id: UUID
+) -> list[tuple[CorrectionAttempt, StudentAttempt, UUID | None]]:
+    """Return the linear correction chain rooted at an original attempt."""
+    chain: list[tuple[CorrectionAttempt, StudentAttempt, UUID | None]] = []
+    current_attempt_id = original_attempt_id
+    seen_attempt_ids = {current_attempt_id}
+    while True:
+        row = session.execute(
+            select(CorrectionAttempt, StudentAttempt, GradePublication.id)
+            .join(
+                StudentAttempt,
+                StudentAttempt.id == CorrectionAttempt.correction_attempt_id,
+            )
+            .outerjoin(
+                GradePublication,
+                GradePublication.attempt_id == CorrectionAttempt.correction_attempt_id,
+            )
+            .where(CorrectionAttempt.original_attempt_id == current_attempt_id)
+            .order_by(CorrectionAttempt.created_at, CorrectionAttempt.id)
+            .limit(1)
+        ).one_or_none()
+        if row is None:
+            return chain
+        correction, correction_attempt, publication_id = row
+        if correction_attempt.id in seen_attempt_ids:
+            return chain
+        chain.append((correction, correction_attempt, publication_id))
+        seen_attempt_ids.add(correction_attempt.id)
+        current_attempt_id = correction_attempt.id
+
+
+def find_active_correction_attempt(
+    session: Session, *, original_attempt_id: UUID
+) -> StudentAttempt | None:
+    for _, correction_attempt, publication_id in reversed(
+        correction_attempt_chain(session, original_attempt_id=original_attempt_id)
+    ):
+        if publication_id is None:
+            return correction_attempt
+    return None
 
 
 def get_student_assignment(
@@ -449,7 +487,8 @@ def save_answer(
     )
     if attempt is None or item is None:
         raise AssignmentAccessError()
-    _enforce_assignment_deadline(attempt.assignment)
+    if not _is_correction_attempt(session, attempt.id):
+        _enforce_assignment_deadline(attempt.assignment)
     stored_answer = _normalize_answer_if_needed(
         item,
         answer_json,
@@ -540,6 +579,7 @@ def submit_attempt(
         session, tenant_id=tenant_id, student_id=student_id, assignment_id=assignment_id
     )
     attempt = default_attempt
+    is_correction_attempt = False
     if attempt_id is not None:
         attempt = session.scalar(
             select(StudentAttempt)
@@ -553,15 +593,8 @@ def submit_attempt(
                 Enrollment.student_id == student_id,
             )
         )
-        if (
-            attempt is None
-            or session.scalar(
-                select(CorrectionAttempt.id).where(
-                    CorrectionAttempt.correction_attempt_id == attempt.id
-                )
-            )
-            is None
-        ):
+        is_correction_attempt = attempt is not None and _is_correction_attempt(session, attempt.id)
+        if attempt is None or not is_correction_attempt:
             raise AssignmentAccessError()
     fingerprint = f"assignment:{assignment.id}:attempt:{attempt.id}"
     receipt = session.scalar(
@@ -577,7 +610,8 @@ def submit_attempt(
     if attempt.status is not AttemptStatus.DRAFT:
         raise SubmissionConflictError("attempt has already been submitted")
     submitted_late = _is_assignment_late(assignment)
-    _enforce_assignment_deadline(assignment)
+    if not is_correction_attempt:
+        _enforce_assignment_deadline(assignment)
     grading = _grade_attempt(
         session,
         assignment=assignment,
@@ -619,6 +653,17 @@ def _enforce_assignment_deadline(assignment: Assignment) -> None:
         return
     if _is_assignment_late(assignment):
         raise AssignmentDeadlineError("assignment is past its deadline")
+
+
+def _is_correction_attempt(session: Session, attempt_id: UUID) -> bool:
+    return (
+        session.scalar(
+            select(CorrectionAttempt.id).where(
+                CorrectionAttempt.correction_attempt_id == attempt_id
+            )
+        )
+        is not None
+    )
 
 
 def _is_assignment_late(assignment: Assignment) -> bool:
@@ -698,7 +743,7 @@ def _dependency_review_result(rule: dict[str, object], error: Exception) -> Grad
                     "evidence": str(error),
                 }
             ],
-            "feedback": [{"type": "dependency", "message": "批改服务暂不可用，已转人工复核。"}],
+            "feedback": [{"type": "dependency", "message": "????????????????"}],
             "signals": [{"kind": "dependency", "message": str(error)}],
             "requires_review": True,
             "dependency_versions": {"grader": "unavailable"},

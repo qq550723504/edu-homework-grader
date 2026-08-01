@@ -22,7 +22,7 @@ export function getUnansweredCount(items: Array<{ answer: Record<string, unknown
 }
 
 export function isAssignmentWritable(status: string | undefined): boolean {
-  return !['overdue', 'submitted_pending_review', 'completed', 'correction_required'].includes(status ?? '')
+  return !['overdue', 'submitted_pending_review', 'completed', 'correction_pending_review'].includes(status ?? '')
 }
 
 export function editorStateForItem(item: { answer: Record<string, unknown> | null } | undefined): {
