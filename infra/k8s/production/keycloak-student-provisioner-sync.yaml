@@ -18,6 +18,10 @@ data:
     for ROLE in manage-users query-users view-users view-realm; do
       $KCADM add-roles -r edu-grader --uusername service-account-student-provisioner --cclientid realm-management --rolename "$ROLE"
     done
+    # A successful Admin API update does not prove the configured client secret
+    # can obtain a token. Verify the exact runtime credential before reporting
+    # the reconciliation Job as successful.
+    $KCADM config credentials --server http://keycloak:8080 --realm edu-grader --client student-provisioner --secret "$KEYCLOAK_STUDENT_PROVISIONER_CLIENT_SECRET"
   user-profile.json: |
     {
       "unmanagedAttributePolicy": "ADMIN_VIEW",

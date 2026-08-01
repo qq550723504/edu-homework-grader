@@ -85,6 +85,10 @@ def test_production_keycloak_upgrade_job_reconciles_the_complete_student_profile
     assert manifest.count("name: keycloak-student-provisioner-sync-v4") == 3
     assert "image: quay.io/keycloak/keycloak:26.4.7" in manifest
     assert "$KCADM update users/profile -r edu-grader -f /scripts/user-profile.json" in manifest
+    assert (
+        "$KCADM config credentials --server http://keycloak:8080 --realm edu-grader "
+        '--client student-provisioner --secret "$KEYCLOAK_STUDENT_PROVISIONER_CLIENT_SECRET"'
+    ) in manifest
     assert "reconcile-profile.sh" not in manifest
     assert '"unmanagedAttributePolicy": "ADMIN_VIEW"' in manifest
     assert '"name": "school_id"' in manifest
