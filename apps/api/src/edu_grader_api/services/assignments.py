@@ -437,6 +437,7 @@ def save_answer(
             StudentAttempt.tenant_id == tenant_id,
             StudentAttempt.student_id == student_id,
             StudentAttempt.status == AttemptStatus.DRAFT,
+            Assignment.status == AssignmentStatus.PUBLISHED,
             Enrollment.student_id == student_id,
         )
     )

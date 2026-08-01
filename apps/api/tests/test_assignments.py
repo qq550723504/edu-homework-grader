@@ -329,6 +329,30 @@ def test_teacher_can_void_a_published_assignment_and_students_no_longer_see_it(
     }
 
 
+def test_voided_assignment_rejects_answer_saves_from_an_open_student_tab(
+    client: TestClient, session: Session
+) -> None:
+    student, _, assignment, item, _ = published_assignment_for_student(session)
+    teacher = session.get(User, assignment.created_by_user_id)
+    assert teacher is not None
+    detail = client.get(
+        f"/v1/student/assignments/{assignment.id}", headers=authorize(client, student)
+    )
+    assert detail.status_code == 200
+
+    voided = client.post(
+        f"/v1/assignments/{assignment.id}/void", headers=authorize(client, teacher)
+    )
+    assert voided.status_code == 200
+
+    response = client.put(
+        f"/v1/student/attempts/{detail.json()['attempt']['id']}/answers/{item.id}",
+        headers=authorize(client, student),
+        json={"answer": {"format": "text-v1", "text": "5"}, "version": 0},
+    )
+
+    assert response.status_code == 404
+
 def test_teacher_can_replace_a_draft_composition_but_not_a_published_one(
     client: TestClient, session: Session
 ) -> None:
