@@ -12,23 +12,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Provision one customer tenant and roster")
     parser.add_argument("--tenant-slug", required=True)
     parser.add_argument("--tenant-name", required=True)
+    parser.add_argument("--operator-subject", required=True)
     parser.add_argument("--teacher-subject", required=True)
     parser.add_argument("--teacher-name", required=True)
     parser.add_argument("--teacher-email", required=True)
     parser.add_argument("--roster-csv", type=Path, required=True)
-    parser.add_argument("--oidc-issuer", default=settings.oidc_issuer)
     return parser
 
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    if args.tenant_slug != settings.oidc_tenant_slug:
+        raise SystemExit("--tenant-slug must match the configured OIDC_TENANT_SLUG")
     rows = parse_roster(args.roster_csv.read_bytes())
     with SessionLocal() as session:
         result = provision_customer(
             session,
             tenant_slug=args.tenant_slug,
             tenant_name=args.tenant_name,
-            oidc_issuer=args.oidc_issuer,
+            oidc_issuer=settings.oidc_issuer,
+            operator_subject=args.operator_subject,
             teacher_subject=args.teacher_subject,
             teacher_display_name=args.teacher_name,
             teacher_email=args.teacher_email,

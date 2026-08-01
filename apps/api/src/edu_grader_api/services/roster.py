@@ -20,7 +20,6 @@ from ..models import (
     utc_now,
 )
 
-
 EXPECTED_HEADERS = {
     "class_code",
     "class_name",
@@ -165,60 +164,70 @@ def parse_roster(data: bytes) -> list[RosterRow]:
     return rows
 
 
-def import_roster(
+def _import_roster_rows(
     session: Session,
     actor: CurrentPrincipal,
     rows: list[RosterRow],
     existing_student_guard: Callable[[Session, User, RosterRow], None] | None = None,
 ) -> int:
-    """Atomically create tenant-local roster records and their audit events."""
-    session.rollback()
-    with session.begin():
-        for row in rows:
-            classroom = session.scalar(
-                select(Classroom).where(
-                    Classroom.tenant_id == UUID(actor.tenant_id), Classroom.code == row.class_code
-                )
+    """Create roster records inside the caller's transaction."""
+    for row in rows:
+        classroom = session.scalar(
+            select(Classroom).where(
+                Classroom.tenant_id == UUID(actor.tenant_id), Classroom.code == row.class_code
             )
-            if classroom is None:
-                classroom = Classroom(
-                    tenant_id=UUID(actor.tenant_id), code=row.class_code, name=row.class_name
-                )
-                session.add(classroom)
-                session.flush()
-
-            student = session.scalar(
-                select(User).where(
-                    User.tenant_id == UUID(actor.tenant_id), User.school_id == row.student_school_id
-                )
+        )
+        if classroom is None:
+            classroom = Classroom(
+                tenant_id=UUID(actor.tenant_id), code=row.class_code, name=row.class_name
             )
-            if student is None:
-                student = User(
-                    tenant_id=UUID(actor.tenant_id),
-                    role=Role.STUDENT,
-                    school_id=row.student_school_id,
-                    display_name=row.student_display_name,
-                )
-                session.add(student)
-                session.flush()
-            else:
-                if existing_student_guard is not None:
-                    existing_student_guard(session, student, row)
-                student.display_name = row.student_display_name
+            session.add(classroom)
+            session.flush()
 
-            consent = session.get(StudentGuardianConsent, student.id)
-            previous_status = consent.status if consent is not None else None
-            if consent is None:
-                consent = StudentGuardianConsent(
-                    student_id=student.id,
-                    requires_guardian_consent=row.requires_guardian_consent,
-                    status=row.guardian_consent_status,
-                )
-                session.add(consent)
-            else:
-                consent.requires_guardian_consent = row.requires_guardian_consent
-                consent.status = row.guardian_consent_status
-                consent.version += 1
+        student = session.scalar(
+            select(User).where(
+                User.tenant_id == UUID(actor.tenant_id), User.school_id == row.student_school_id
+            )
+        )
+        student_created = student is None
+        student_name_changed = False
+        if student is None:
+            student = User(
+                tenant_id=UUID(actor.tenant_id),
+                role=Role.STUDENT,
+                school_id=row.student_school_id,
+                display_name=row.student_display_name,
+            )
+            session.add(student)
+            session.flush()
+        else:
+            if existing_student_guard is not None:
+                existing_student_guard(session, student, row)
+            student_name_changed = student.display_name != row.student_display_name
+            student.display_name = row.student_display_name
+
+        consent = session.get(StudentGuardianConsent, student.id)
+        previous_status = consent.status if consent is not None else None
+        consent_changed = consent is None or any(
+            (
+                consent.requires_guardian_consent != row.requires_guardian_consent,
+                consent.status != row.guardian_consent_status,
+                consent.notice_version != row.guardian_consent_notice_version,
+                consent.evidence_reference != row.guardian_consent_evidence_reference,
+            )
+        )
+        if consent is None:
+            consent = StudentGuardianConsent(
+                student_id=student.id,
+                requires_guardian_consent=row.requires_guardian_consent,
+                status=row.guardian_consent_status,
+            )
+            session.add(consent)
+        elif consent_changed:
+            consent.requires_guardian_consent = row.requires_guardian_consent
+            consent.status = row.guardian_consent_status
+            consent.version += 1
+        if consent_changed:
             consent.notice_version = row.guardian_consent_notice_version
             consent.evidence_reference = row.guardian_consent_evidence_reference
             consent.verified_by_user_id = UUID(actor.user_id)
@@ -235,9 +244,11 @@ def import_roster(
                 consent.withdrawn_at = None
                 consent.withdrawal_reason = None
 
-            enrollment = session.get(Enrollment, (classroom.id, student.id))
-            if enrollment is None:
-                session.add(Enrollment(class_id=classroom.id, student_id=student.id))
+        enrollment = session.get(Enrollment, (classroom.id, student.id))
+        enrollment_created = enrollment is None
+        if enrollment is None:
+            session.add(Enrollment(class_id=classroom.id, student_id=student.id))
+        if student_created or student_name_changed or enrollment_created or consent_changed:
             append_audit_event(
                 session,
                 tenant_id=UUID(actor.tenant_id),
@@ -250,6 +261,7 @@ def import_roster(
                     "guardian_consent_status": row.guardian_consent_status.value,
                 },
             )
+        if consent_changed:
             append_audit_event(
                 session,
                 tenant_id=UUID(actor.tenant_id),
@@ -265,6 +277,18 @@ def import_roster(
                 },
             )
     return len(rows)
+
+
+def import_roster(
+    session: Session,
+    actor: CurrentPrincipal,
+    rows: list[RosterRow],
+    existing_student_guard: Callable[[Session, User, RosterRow], None] | None = None,
+) -> int:
+    """Atomically create tenant-local roster records and their audit events."""
+    session.rollback()
+    with session.begin():
+        return _import_roster_rows(session, actor, rows, existing_student_guard)
 
 
 def import_teacher_roster(

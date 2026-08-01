@@ -4,21 +4,25 @@
 
 ## 开通顺序
 
-1. 在学校 OIDC 中创建教师账号，并取得该账号的 `sub`。不要把密码或客户端 Secret 写入 CSV、工单或仓库。
+1. 在学校 OIDC 中准备教师账号和负责开通的管理员账号，并取得两个账号的 `sub`。不要把密码或客户端 Secret 写入 CSV、工单或仓库。
 2. 准备 UTF-8 花名册。必须包含以下列：
 
    `class_code,class_name,student_school_id,student_display_name,student_under_14,guardian_consent_status,guardian_consent_notice_version,guardian_consent_evidence_reference`
 
-3. 在 API 容器中执行：
+3. 将花名册作为一次性文件复制到 API 容器的临时目录，然后执行开通命令。`OIDC_TENANT_SLUG` 必须与目标租户一致；操作人 subject 必须对应该租户的管理员身份。
 
    ```bash
-   docker compose exec api python -m edu_grader_api.cli.provision_customer \
-     --tenant-slug acme-school \
+   export ROSTER_FILE=/secure/path/acme-roster.csv
+   docker compose cp "$ROSTER_FILE" api:/tmp/customer-roster.csv
+   docker compose exec -T api python -m edu_grader_api.cli.provision_customer \
+     --tenant-slug "${OIDC_TENANT_SLUG:-pilot}" \
      --tenant-name "Acme School" \
+     --operator-subject "<oidc-operator-sub>" \
      --teacher-subject "<oidc-teacher-sub>" \
      --teacher-name "Teacher Name" \
      --teacher-email teacher@example.edu \
-     --roster-csv /run/secrets/acme-roster.csv
+     --roster-csv /tmp/customer-roster.csv
+   docker compose exec -T api rm -f /tmp/customer-roster.csv
    ```
 
    输出只包含租户、教师、班级 ID 和导入人数。命令不会输出密码、OIDC Secret 或学生激活码。
@@ -28,7 +32,7 @@
 
 ## 安全与回滚
 
-- `--teacher-subject` 必须来自已验证的 OIDC 发行方；跨租户身份冲突会拒绝执行。
+- `--operator-subject` 和 `--teacher-subject` 必须来自配置的 OIDC 发行方；操作人必须是目标租户管理员，跨租户身份冲突会拒绝执行。CLI 不接受自定义 issuer 或不受信任的 tenant slug。
 - 花名册解析失败不会写入数据；已存在记录只更新显示名称、班级名称和同意状态。
 - 激活码不进入日志、数据库明文、浏览器存储、Linear 或 GitHub。
-- 客户开通失败时，保留审计事件和安全错误类型；修正 OIDC 身份或花名册后可安全重跑。
+- 客户开通失败时，租户、用户、班级、花名册和审计写入会整体回滚；修正 OIDC 身份或花名册后可安全重跑。命令完成后立即删除容器内的临时 CSV；Kubernetes 场景应使用短生命周期 Job/Secret 挂载，不要给 API Pod 增加持久化花名册卷。
