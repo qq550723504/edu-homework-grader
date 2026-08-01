@@ -15,7 +15,6 @@ from ..models import (
     Assignment,
     AssignmentItem,
     AttemptAnswer,
-    CorrectionAttempt,
     Enrollment,
     GradePublication,
     GradingRun,
@@ -34,6 +33,8 @@ from ..services.assignments import (
     add_assignment_item,
     create_assignment,
     delete_assignment,
+    correction_attempt_chain,
+    find_active_correction_attempt,
     get_teacher_assignment,
     get_student_assignment,
     list_student_assignments,
@@ -451,27 +452,9 @@ def get_student_assignment_route(
                     .order_by(AssignmentItem.position)
                 )
             )
-            pending_correction = session.scalar(
-                select(CorrectionAttempt)
-                .join(
-                    StudentAttempt,
-                    StudentAttempt.id == CorrectionAttempt.correction_attempt_id,
-                )
-                .outerjoin(
-                    GradePublication,
-                    GradePublication.attempt_id == CorrectionAttempt.correction_attempt_id,
-                )
-                .where(
-                    CorrectionAttempt.original_attempt_id == attempt.id,
-                    GradePublication.id.is_(None),
-                )
-                .order_by(CorrectionAttempt.created_at, CorrectionAttempt.id)
-                .limit(1)
-            )
+            correction_chain = correction_attempt_chain(session, original_attempt_id=attempt.id)
             active_attempt = (
-                session.get(StudentAttempt, pending_correction.correction_attempt_id)
-                if pending_correction is not None
-                else attempt
+                find_active_correction_attempt(session, original_attempt_id=attempt.id) or attempt
             )
             if active_attempt is None:
                 raise AssignmentAccessError()
@@ -517,25 +500,18 @@ def get_student_assignment_route(
             for item in items
         ],
     }
-    if session.scalar(
-        select(GradePublication).where(GradePublication.attempt_id == active_attempt.id)
-    ):
-        response["grading"] = published_student_grading(session, attempt_id=active_attempt.id)
-    corrections = list(
-        session.execute(
-            select(CorrectionAttempt, StudentAttempt, GradePublication.id)
-            .join(
-                StudentAttempt,
-                StudentAttempt.id == CorrectionAttempt.correction_attempt_id,
-            )
-            .outerjoin(
-                GradePublication,
-                GradePublication.attempt_id == CorrectionAttempt.correction_attempt_id,
-            )
-            .where(CorrectionAttempt.original_attempt_id == attempt.id)
-            .order_by(CorrectionAttempt.created_at, CorrectionAttempt.id)
-        ).all()
+    grading_attempt_id = (
+        active_attempt.id
+        if session.scalar(
+            select(GradePublication.id).where(GradePublication.attempt_id == active_attempt.id)
+        )
+        is not None
+        else attempt.id
     )
+    if session.scalar(
+        select(GradePublication.id).where(GradePublication.attempt_id == grading_attempt_id)
+    ):
+        response["grading"] = published_student_grading(session, attempt_id=grading_attempt_id)
     response["corrections"] = [
         {
             "attempt_id": str(correction.correction_attempt_id),
@@ -549,7 +525,7 @@ def get_student_assignment_route(
                 )
             ),
         }
-        for correction, correction_attempt, publication_id in corrections
+        for correction, correction_attempt, publication_id in correction_chain
     ]
     return response
 
