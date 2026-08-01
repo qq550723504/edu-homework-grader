@@ -377,6 +377,7 @@ def list_student_assignments(
                 grouped["pending"].append((assignment, "pending"))
     return grouped
 
+
 def correction_attempt_chain(
     session: Session, *, original_attempt_id: UUID
 ) -> list[tuple[CorrectionAttempt, StudentAttempt, UUID | None]]:
@@ -418,6 +419,7 @@ def find_active_correction_attempt(
         if publication_id is None:
             return correction_attempt
     return None
+
 
 def get_student_assignment(
     session: Session, *, tenant_id: UUID, student_id: UUID, assignment_id: UUID
@@ -663,6 +665,7 @@ def _is_correction_attempt(session: Session, attempt_id: UUID) -> bool:
         is not None
     )
 
+
 def _is_assignment_late(assignment: Assignment) -> bool:
     due_at = assignment.due_at
     if due_at.tzinfo is None:
@@ -740,7 +743,7 @@ def _dependency_review_result(rule: dict[str, object], error: Exception) -> Grad
                     "evidence": str(error),
                 }
             ],
-            "feedback": [{"type": "dependency", "message": "批改服务暂不可用，已转人工复核。"}],
+            "feedback": [{"type": "dependency", "message": "????????????????"}],
             "signals": [{"kind": "dependency", "message": str(error)}],
             "requires_review": True,
             "dependency_versions": {"grader": "unavailable"},

@@ -429,6 +429,7 @@ def test_nested_correction_uses_latest_unpublished_attempt_and_keeps_original_fe
     ]
     assert listed.json()["correction_required"][0]["status"] == "correction_required"
 
+
 def test_approved_unfinished_correction_moves_original_assignment_to_correction_required(
     api_client, database_session: Session
 ) -> None:
