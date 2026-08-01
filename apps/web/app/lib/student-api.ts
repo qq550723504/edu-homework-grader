@@ -19,6 +19,7 @@ export function studentAssignmentStatusLabel(status: string): string {
     late_allowed: '允许迟交',
     submitted_pending_review: '待复核',
     correction_required: '待订正',
+    correction_pending_review: '订正待复核',
     completed: '已完成'
   }[status] ?? status
 }

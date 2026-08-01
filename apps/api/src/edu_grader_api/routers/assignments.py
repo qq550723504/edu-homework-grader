@@ -15,11 +15,11 @@ from ..models import (
     Assignment,
     AssignmentItem,
     AttemptAnswer,
-    CorrectionAttempt,
     Enrollment,
     GradePublication,
     GradingRun,
     Role,
+    AttemptStatus,
     StudentAttempt,
 )
 from ..services.reviews import published_student_grading
@@ -32,6 +32,9 @@ from ..services.assignments import (
     MathAnswerValidationError,
     add_assignment_item,
     create_assignment,
+    delete_assignment,
+    correction_attempt_chain,
+    find_active_correction_attempt,
     get_teacher_assignment,
     get_student_assignment,
     list_student_assignments,
@@ -41,6 +44,7 @@ from ..services.assignments import (
     submit_attempt,
     is_mathjson_item,
     replace_assignment_items,
+    void_assignment,
 )
 
 
@@ -115,6 +119,38 @@ def list_teacher_assignments_route(
             }
             for assignment in assignments
         ]
+    }
+
+
+@router.get("/{assignment_id}")
+def get_teacher_assignment_route(
+    assignment_id: UUID,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    try:
+        assignment = get_teacher_assignment(
+            session,
+            tenant_id=UUID(principal.tenant_id),
+            teacher_id=UUID(principal.user_id),
+            assignment_id=assignment_id,
+        )
+    except AssignmentAccessError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+        ) from None
+    return {
+        "id": str(assignment.id),
+        "title": assignment.title,
+        "subject": assignment.subject,
+        "class_id": str(assignment.class_id),
+        "due_at": _iso8601_utc(assignment.due_at),
+        "submission_rule": assignment.submission_rule_json,
+        "status": assignment.status.value,
+        "question_version_ids": [
+            str(item.question_version_id)
+            for item in sorted(assignment.items, key=lambda item: item.position)
+        ],
     }
 
 
@@ -264,6 +300,56 @@ def publish_assignment_route(
     return {"id": str(published.id), "status": published.status.value}
 
 
+@router.delete("/{assignment_id}")
+def delete_assignment_route(
+    assignment_id: UUID,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, str]:
+    try:
+        session.rollback()
+        with session.begin():
+            assignment = get_teacher_assignment(
+                session,
+                tenant_id=UUID(principal.tenant_id),
+                teacher_id=UUID(principal.user_id),
+                assignment_id=assignment_id,
+            )
+            deleted = delete_assignment(session, assignment, teacher_id=UUID(principal.user_id))
+    except AssignmentAccessError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+        ) from None
+    except AssignmentStateError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    return {"id": str(deleted.id), "status": deleted.status.value}
+
+
+@router.post("/{assignment_id}/void")
+def void_assignment_route(
+    assignment_id: UUID,
+    principal: Annotated[CurrentPrincipal, Depends(require_role(Role.TEACHER))],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, str]:
+    try:
+        session.rollback()
+        with session.begin():
+            assignment = get_teacher_assignment(
+                session,
+                tenant_id=UUID(principal.tenant_id),
+                teacher_id=UUID(principal.user_id),
+                assignment_id=assignment_id,
+            )
+            voided = void_assignment(session, assignment, teacher_id=UUID(principal.user_id))
+    except AssignmentAccessError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+        ) from None
+    except AssignmentStateError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    return {"id": str(voided.id), "status": voided.status.value}
+
+
 @router.get("/{assignment_id}/attempts/{attempt_id}/grading-runs")
 def list_teacher_grading_runs_route(
     assignment_id: UUID,
@@ -359,12 +445,6 @@ def get_student_assignment_route(
                 student_id=UUID(principal.user_id),
                 assignment_id=assignment_id,
             )
-            answers = {
-                answer.assignment_item_id: answer
-                for answer in session.scalars(
-                    select(AttemptAnswer).where(AttemptAnswer.attempt_id == attempt.id)
-                )
-            }
             items = list(
                 session.scalars(
                     select(AssignmentItem)
@@ -372,6 +452,18 @@ def get_student_assignment_route(
                     .order_by(AssignmentItem.position)
                 )
             )
+            correction_chain = correction_attempt_chain(session, original_attempt_id=attempt.id)
+            active_attempt = (
+                find_active_correction_attempt(session, original_attempt_id=attempt.id) or attempt
+            )
+            if active_attempt is None:
+                raise AssignmentAccessError()
+            answers = {
+                answer.assignment_item_id: answer
+                for answer in session.scalars(
+                    select(AttemptAnswer).where(AttemptAnswer.attempt_id == active_attempt.id)
+                )
+            }
     except AssignmentAccessError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
@@ -389,7 +481,11 @@ def get_student_assignment_route(
     )
     response: dict[str, object] = {
         **_assignment_summary(assignment, student_status),
-        "attempt": {"id": str(attempt.id), "status": attempt.status.value},
+        "attempt": {
+            "id": str(active_attempt.id),
+            "attempt_number": active_attempt.attempt_number,
+            "status": active_attempt.status.value,
+        },
         "items": [
             {
                 "id": str(item.id),
@@ -404,22 +500,32 @@ def get_student_assignment_route(
             for item in items
         ],
     }
-    if session.scalar(select(GradePublication).where(GradePublication.attempt_id == attempt.id)):
-        response["grading"] = published_student_grading(session, attempt_id=attempt.id)
-    corrections = list(
-        session.scalars(
-            select(CorrectionAttempt)
-            .join(
-                GradePublication,
-                GradePublication.attempt_id == CorrectionAttempt.correction_attempt_id,
-            )
-            .where(CorrectionAttempt.original_attempt_id == attempt.id)
-            .order_by(CorrectionAttempt.created_at, CorrectionAttempt.id)
+    grading_attempt_id = (
+        active_attempt.id
+        if session.scalar(
+            select(GradePublication.id).where(GradePublication.attempt_id == active_attempt.id)
         )
+        is not None
+        else attempt.id
     )
+    if session.scalar(
+        select(GradePublication.id).where(GradePublication.attempt_id == grading_attempt_id)
+    ):
+        response["grading"] = published_student_grading(session, attempt_id=grading_attempt_id)
     response["corrections"] = [
-        {"attempt_id": str(correction.correction_attempt_id), "status": "published"}
-        for correction in corrections
+        {
+            "attempt_id": str(correction.correction_attempt_id),
+            "status": (
+                "published"
+                if publication_id is not None
+                else (
+                    "correction_required"
+                    if correction_attempt.status is AttemptStatus.DRAFT
+                    else "correction_pending_review"
+                )
+            ),
+        }
+        for correction, correction_attempt, publication_id in correction_chain
     ]
     return response
 

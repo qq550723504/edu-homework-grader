@@ -8,7 +8,7 @@
 <script setup lang="ts">
 import { toMathAnswer, type MathAnswer } from '../lib/math-answer'
 
-const props = defineProps<{ modelValue: MathAnswer | null }>()
+const props = defineProps<{ modelValue: MathAnswer | null; disabled?: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [value: MathAnswer | null] }>()
 const host = ref<HTMLElement | null>(null)
 let field: { value: string; getValue(format: 'math-json'): string; addEventListener(type: string, listener: () => void): void } | null = null
@@ -24,6 +24,7 @@ onMounted(async () => {
   field = element
   field.value = props.modelValue?.latex ?? ''
   ;(element as unknown as { mathVirtualKeyboardPolicy: string }).mathVirtualKeyboardPolicy = 'auto'
+  ;(element as unknown as Element).toggleAttribute('read-only', props.disabled === true)
   ;(element as unknown as Element).setAttribute('aria-label', '数学答案')
   element.addEventListener('input', () => {
     queueMicrotask(() => emit('update:modelValue', toMathAnswer(element)))
@@ -33,6 +34,10 @@ onMounted(async () => {
 
 watch(() => props.modelValue?.latex, (latex) => {
   if (field && field.value !== (latex ?? '')) field.value = latex ?? ''
+})
+
+watch(() => props.disabled, (disabled) => {
+  field && (field as unknown as Element).toggleAttribute('read-only', disabled === true)
 })
 </script>
 

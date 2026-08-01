@@ -109,7 +109,7 @@
     <TeacherAssignmentWorkspace v-if="activeModule === 'assignments'">
     <section class="card wide" aria-labelledby="create-assignment-heading">
       <span class="tag">作业</span>
-      <h2 id="create-assignment-heading">创建作业草稿</h2>
+      <h2 id="create-assignment-heading">{{ pendingAssignmentId ? '编辑作业草稿' : '创建作业草稿' }}</h2>
       <form class="stack" @submit.prevent="submitAssignment">
         <label>作业标题<input v-model.trim="assignmentForm.title" aria-label="作业标题" required maxlength="200"></label>
         <label>班级<select v-model="assignmentForm.classId" aria-label="班级" :disabled="saving || Boolean(pendingAssignmentId)" required><option disabled value="">选择班级</option><option v-for="classroom in workspace.classes" :key="classroom.id" :value="classroom.id">{{ classroom.code }} · {{ classroom.name }}</option></select></label>
@@ -139,13 +139,14 @@
         </section>
         <button class="button primary" :disabled="saving" type="submit">{{ pendingAssignmentId ? '保存编排' : '创建作业草稿' }}</button>
       </form>
-      <div v-if="pendingAssignmentId" class="actions"><button class="button secondary" :disabled="saving" type="button" @click="publishPendingAssignment">发布作业</button></div>
+      <div v-if="pendingAssignmentId" class="actions"><button class="button secondary" :disabled="saving" type="button" @click="publishPendingAssignment">发布作业</button><button class="button secondary" :disabled="saving" type="button" @click="resetAssignmentDraft">取消编辑</button></div>
     </section>
 
     <section class="stack" aria-labelledby="assignment-list-heading">
       <h2 id="assignment-list-heading">作业</h2>
       <article v-for="assignment in workspace.assignments" :key="assignment.id" class="assignment">
         <div><span class="subject">{{ assignment.subject }}</span><h3>{{ assignment.title }}</h3><p>{{ assignment.class_name }} · 已交 {{ assignment.submitted_count }}/{{ assignment.student_count }} · {{ assignment.status }}</p></div>
+        <div class="actions"><button v-if="assignment.status === 'draft'" class="button secondary" :disabled="saving" type="button" @click="editAssignmentDraft(assignment.id)">继续编辑</button><button v-if="assignment.status === 'draft'" class="button secondary" :disabled="saving" type="button" @click="removeAssignment(assignment.id)">删除草稿</button><button v-if="assignment.status === 'published'" class="button secondary" :disabled="saving" type="button" @click="stopAssignment(assignment.id)">作废作业</button></div>
       </article>
       <p v-if="workspace.assignments.length === 0" class="notice">暂无作业。</p>
     </section>
@@ -205,7 +206,7 @@
 
 <script setup lang="ts">
 import { fetchCurrentPrincipal } from '../../lib/student-api'
-import { createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, downloadTeacherActivationCodes, fetchQuestionPolicyCatalog, fetchQuestionTestCaseTemplates, fetchTeacherRosterClasses, fetchTeacherRosterStudents, fetchTeacherWorkspace, importTeacherRoster, previewQuestionTestCase, publishAssignment, publishQuestionVersion, removeTeacherRosterStudent, runQuestionTests, updateAssignment, updateTeacherRosterStudent, type CreateQuestionInput, type QuestionPolicyCatalogEntry, type QuestionTestCaseTemplate, type QuestionTestRun, type TeacherAssignment, type TeacherQuestionVersion, type TeacherRosterClass, type TeacherRosterStudent } from '../../lib/teacher-api'
+import { createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, deleteAssignment, downloadTeacherActivationCodes, fetchQuestionPolicyCatalog, fetchQuestionTestCaseTemplates, fetchTeacherAssignment, fetchTeacherRosterClasses, fetchTeacherRosterStudents, fetchTeacherWorkspace, importTeacherRoster, previewQuestionTestCase, publishAssignment, publishQuestionVersion, removeTeacherRosterStudent, runQuestionTests, updateAssignment, updateTeacherRosterStudent, voidAssignment, type CreateQuestionInput, type QuestionPolicyCatalogEntry, type QuestionTestCaseTemplate, type QuestionTestRun, type TeacherAssignment, type TeacherQuestionVersion, type TeacherRosterClass, type TeacherRosterStudent } from '../../lib/teacher-api'
 import { addQuestionToComposition, availableQuestionsForSubject, compositionSummary, moveQuestion, removeQuestion, type AssignmentSubject } from '../../lib/assignment-composition'
 import { buildEnglishQuestionRule, defaultEnglishDraft, fieldForPolicyError, type EnglishQuestionType } from '../../lib/english-question-authoring'
 import { teacherModules, type TeacherModule } from '../../lib/teacher-workbench'
@@ -576,6 +577,68 @@ async function submitAssignment() {
     }
     await loadWorkspace()
   } catch (error: unknown) { message.value = error instanceof Error ? error.message : '创建作业失败。' }
+  finally { saving.value = false }
+}
+
+function resetAssignmentDraft() {
+  pendingAssignmentId.value = null
+  assignmentForm.title = ''
+  assignmentForm.classId = ''
+  assignmentForm.subject = 'mathematics'
+  assignmentForm.dueAt = ''
+  assignmentForm.allowLate = false
+  selectedAssignmentQuestions.value = []
+}
+
+function toDatetimeLocal(value: string) {
+  const date = new Date(value)
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+async function editAssignmentDraft(assignmentId: string) {
+  saving.value = true
+  try {
+    const assignment = await fetchTeacherAssignment($fetch, assignmentId)
+    if (assignment.status !== 'draft') {
+      message.value = '只有作业草稿可以继续编辑。'
+      return
+    }
+    assignmentForm.title = assignment.title
+    assignmentForm.classId = assignment.class_id
+    assignmentForm.subject = assignment.subject as AssignmentSubject
+    assignmentForm.dueAt = toDatetimeLocal(assignment.due_at)
+    assignmentForm.allowLate = assignment.submission_rule.allow_late === true
+    selectedAssignmentQuestions.value = assignment.question_version_ids
+      .map((id) => workspace.value.questionVersions.find((version) => version.id === id))
+      .filter((version): version is TeacherQuestionVersion => Boolean(version))
+    pendingAssignmentId.value = assignment.id
+    activeModule.value = 'assignments'
+    message.value = '已恢复作业草稿，可继续编辑。'
+  } catch (error: unknown) { message.value = error instanceof Error ? error.message : '恢复作业草稿失败。' }
+  finally { saving.value = false }
+}
+
+async function removeAssignment(assignmentId: string) {
+  if (!window.confirm('确定删除这个作业草稿吗？')) return
+  saving.value = true
+  try {
+    await deleteAssignment($fetch, await csrfToken(), assignmentId)
+    if (pendingAssignmentId.value === assignmentId) resetAssignmentDraft()
+    message.value = '作业草稿已删除。'
+    await loadWorkspace()
+  } catch (error: unknown) { message.value = error instanceof Error ? error.message : '删除作业草稿失败。' }
+  finally { saving.value = false }
+}
+
+async function stopAssignment(assignmentId: string) {
+  if (!window.confirm('作废后学生将无法继续访问此作业，确定继续吗？')) return
+  saving.value = true
+  try {
+    await voidAssignment($fetch, await csrfToken(), assignmentId)
+    message.value = '作业已作废。'
+    await loadWorkspace()
+  } catch (error: unknown) { message.value = error instanceof Error ? error.message : '作废作业失败。' }
   finally { saving.value = false }
 }
 

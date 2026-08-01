@@ -23,6 +23,7 @@ describe('student assignment API', () => {
   it('labels student-visible assignment states explicitly', () => {
     expect(studentAssignmentStatusLabel('submitted_pending_review')).toBe('待复核')
     expect(studentAssignmentStatusLabel('correction_required')).toBe('待订正')
+    expect(studentAssignmentStatusLabel('correction_pending_review')).toBe('订正待复核')
     expect(studentAssignmentStatusLabel('overdue')).toBe('已逾期')
     expect(studentAssignmentStatusLabel('late_allowed')).toBe('允许迟交')
   })

@@ -134,7 +134,7 @@ export interface UpdateAssignmentInput {
 }
 
 type Request = <T>(url: string, options?: {
-  method?: 'POST' | 'PUT'
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE'
   headers?: Record<string, string>
   body?: unknown
 }) => Promise<T>
@@ -290,6 +290,21 @@ export function updateAssignment(
   })
 }
 
+export function fetchTeacherAssignment(
+  request: Request, assignmentId: string,
+): Promise<{
+  id: string
+  title: string
+  subject: string
+  class_id: string
+  due_at: string
+  submission_rule: Record<string, unknown>
+  status: string
+  question_version_ids: string[]
+}> {
+  return request(`/api/core/v1/assignments/${assignmentId}`)
+}
+
 export function addAssignmentItem(
   request: Request, csrfToken: string, assignmentId: string,
   input: { question_version_id: string; position: number },
@@ -303,6 +318,22 @@ export function publishAssignment(
   request: Request, csrfToken: string, assignmentId: string,
 ): Promise<{ id: string; status: string }> {
   return request(`/api/core/v1/assignments/${assignmentId}/publish`, {
+    method: 'POST', headers: { 'X-CSRF-Token': csrfToken },
+  })
+}
+
+export function deleteAssignment(
+  request: Request, csrfToken: string, assignmentId: string,
+): Promise<{ id: string; status: string }> {
+  return request(`/api/core/v1/assignments/${assignmentId}`, {
+    method: 'DELETE', headers: { 'X-CSRF-Token': csrfToken },
+  })
+}
+
+export function voidAssignment(
+  request: Request, csrfToken: string, assignmentId: string,
+): Promise<{ id: string; status: string }> {
+  return request(`/api/core/v1/assignments/${assignmentId}/void`, {
     method: 'POST', headers: { 'X-CSRF-Token': csrfToken },
   })
 }
