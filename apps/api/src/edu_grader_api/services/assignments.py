@@ -262,6 +262,46 @@ def publish_assignment(session: Session, assignment: Assignment, *, teacher_id: 
     return assignment
 
 
+def delete_assignment(session: Session, assignment: Assignment, *, teacher_id: UUID) -> Assignment:
+    """Soft-delete a draft while retaining its audit and composition history."""
+
+    _require_assignment_teacher(session, assignment, teacher_id)
+    if assignment.status is not AssignmentStatus.DRAFT:
+        raise AssignmentStateError("only draft assignments can be deleted")
+    assignment.status = AssignmentStatus.DELETED
+    session.add(assignment)
+    _audit(
+        session,
+        tenant_id=assignment.tenant_id,
+        actor_user_id=teacher_id,
+        event_type="assignment.deleted",
+        target_type="assignment",
+        target_id=assignment.id,
+        metadata={},
+    )
+    return assignment
+
+
+def void_assignment(session: Session, assignment: Assignment, *, teacher_id: UUID) -> Assignment:
+    """Stop a published assignment from being visible to students without deleting history."""
+
+    _require_assignment_teacher(session, assignment, teacher_id)
+    if assignment.status is not AssignmentStatus.PUBLISHED:
+        raise AssignmentStateError("only published assignments can be voided")
+    assignment.status = AssignmentStatus.VOIDED
+    session.add(assignment)
+    _audit(
+        session,
+        tenant_id=assignment.tenant_id,
+        actor_user_id=teacher_id,
+        event_type="assignment.voided",
+        target_type="assignment",
+        target_id=assignment.id,
+        metadata={},
+    )
+    return assignment
+
+
 def get_teacher_assignment(
     session: Session, *, tenant_id: UUID, teacher_id: UUID, assignment_id: UUID
 ) -> Assignment:
@@ -397,6 +437,7 @@ def save_answer(
             StudentAttempt.tenant_id == tenant_id,
             StudentAttempt.student_id == student_id,
             StudentAttempt.status == AttemptStatus.DRAFT,
+            Assignment.status == AssignmentStatus.PUBLISHED,
             Enrollment.student_id == student_id,
         )
     )

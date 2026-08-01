@@ -50,6 +50,8 @@ class TestRunStatus(StrEnum):
 class AssignmentStatus(StrEnum):
     DRAFT = "draft"
     PUBLISHED = "published"
+    VOIDED = "voided"
+    DELETED = "deleted"
 
 
 class AttemptStatus(StrEnum):
