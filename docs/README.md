@@ -31,6 +31,7 @@
 ## 架构与运营
 
 - [架构](architecture.md)、[数据清单](data-inventory.md)。
+- [首批客户开通运行手册](operations/customer-provisioning.md)：租户、教师 OIDC 身份、花名册与学生激活码的可重复开通流程。
 - [ADR-0001：单体仓库](adr/0001-monorepo.md)。
 - [机器可读状态证据](status-evidence.json) 与 `scripts/check_docs_status.py` 共同防止 CI Job、策略版本、模型锁定值和状态声明漂移。
 
