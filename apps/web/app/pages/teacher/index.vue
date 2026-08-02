@@ -90,6 +90,8 @@
        <div v-if="['E1', 'E2', 'E3', 'E4'].includes(selectedVersion.question_type)" class="actions">
          <button class="button secondary" :disabled="saving" type="button" @click="loadSuggestedTestCases">加载建议测试</button>
          <button v-for="template in suggestedTestCases" :key="template.category" class="button secondary" :disabled="saving" type="button" @click="applySuggestedTestCase(template)">使用 {{ template.category }} 模板</button>
+       </div>
+       <div class="actions">
          <button class="button secondary" :disabled="saving" type="button" @click="refreshTestCasePreview()">刷新测试预览</button>
        </div>
       <form class="stack" @submit.prevent="submitTestCase">
