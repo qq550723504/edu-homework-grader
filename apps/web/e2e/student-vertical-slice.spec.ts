@@ -226,15 +226,14 @@ test('teacher creates, tests, and publishes guided E1 through E4 questions with 
       await page.getByRole('button', { name: '加载建议测试' }).click()
       await expect(page.getByRole('button', { name: '使用 correct 模板' })).toBeVisible()
       await page.getByRole('button', { name: '使用 correct 模板' }).click()
-      await expect(page.getByLabel('学生答案 JSON')).toHaveValue('{"format":"text-v1","text":"cat"}')
-      await expect(page.getByLabel('预期判定')).toHaveValue('auto_accepted')
+      await expect(page.getByLabel('学生答案')).toHaveValue('cat')
+      await expect(page.getByRole('heading', { name: '预览结果：auto_accepted · 1 分' })).toBeVisible()
     }
-    for (const [category, answer, decision, score, evidence] of scenario.cases) {
-      await page.getByLabel('用例类别').fill(category)
-      await page.getByLabel('学生答案 JSON').fill(JSON.stringify({ format: 'text-v1', text: answer }))
-      await page.getByLabel('预期判定').fill(decision)
-      await page.getByLabel('预期分数').fill(String(score))
-      await page.getByLabel('预期证据 JSON').fill(JSON.stringify(evidence))
+    for (const [category, answer, decision, score] of scenario.cases) {
+      await page.getByLabel('用例类别').selectOption(category)
+      await page.getByLabel('学生答案').fill(answer)
+      await page.getByRole('button', { name: '刷新测试预览' }).click()
+      await expect(page.getByRole('heading', { name: `预览结果：${decision} · ${score} 分` })).toBeVisible()
       await page.getByRole('button', { name: '添加测试用例' }).click()
       await expect(page.getByText('测试用例已添加')).toBeVisible()
     }
@@ -257,28 +256,17 @@ test('teacher tests and publishes an M1 question through the browser', async ({ 
   await page.getByRole('button', { name: '创建草稿题目' }).click()
   await expect(page.getByText('草稿题目已创建')).toBeVisible()
 
-  const acceptedEvidence = JSON.stringify({
-    max_score: 1, confidence: 1, requires_review: false,
-    criteria: [{ code: 'numeric_value', passed: true, score: 1, max_score: 1 }],
-    feedback: [], dependency_versions: { grader: 'e2e-m1@1' },
-  })
-  const rejectedEvidence = JSON.stringify({
-    max_score: 1, confidence: 1, requires_review: false,
-    criteria: [{ code: 'numeric_value', passed: false, score: 0, max_score: 1 }],
-    feedback: [], dependency_versions: { grader: 'e2e-m1@1' },
-  })
   const categories = [
-    ['correct', '5', 'auto_accepted', '1', acceptedEvidence],
-    ['incorrect', '4', 'auto_rejected', '0', rejectedEvidence],
-    ['empty', '', 'auto_rejected', '0', rejectedEvidence],
-    ['boundary', '5.0', 'auto_accepted', '1', acceptedEvidence],
+    ['correct', '5', 'auto_accepted', '1'],
+    ['incorrect', '4', 'auto_rejected', '0'],
+    ['empty', '', 'auto_rejected', '0'],
+    ['boundary', '5.0', 'auto_accepted', '1'],
   ]
-  for (const [category, answer, decision, score, evidence] of categories) {
-    await page.getByLabel('用例类别').fill(category)
-    await page.getByLabel('学生答案 JSON').fill(JSON.stringify({ format: 'text-v1', text: answer }))
-    await page.getByLabel('预期判定').fill(decision)
-    await page.getByLabel('预期分数').fill(score)
-    await page.getByLabel('预期证据 JSON').fill(evidence)
+  for (const [category, answer, decision, score] of categories) {
+    await page.getByLabel('用例类别').selectOption(category)
+    await page.getByLabel('学生答案').fill(answer)
+    await page.getByRole('button', { name: '刷新测试预览' }).click()
+    await expect(page.getByRole('heading', { name: `预览结果：${decision} · ${score} 分` })).toBeVisible()
     await page.getByRole('button', { name: '添加测试用例' }).click()
     await expect(page.getByText('测试用例已添加')).toBeVisible()
   }
