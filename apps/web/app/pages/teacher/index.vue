@@ -101,6 +101,8 @@
             <option value="incorrect">错误答案</option>
             <option value="empty">空答案</option>
             <option value="boundary">边界答案</option>
+            <option v-if="selectedVersion.question_type === 'E3'" value="grammar_feedback">语法反馈</option>
+            <option v-if="selectedVersion.question_type === 'E4'" value="needs_review">人工复核</option>
           </select>
         </label>
         <label v-if="!advancedTestAnswerMode">学生答案<textarea v-model="testCase.answerText" aria-label="学生答案" rows="3" @input="clearTestCasePreview" /></label>

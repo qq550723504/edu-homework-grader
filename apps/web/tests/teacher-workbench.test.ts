@@ -133,6 +133,8 @@ describe('teacher workbench UI contract', () => {
     expect(teacherPage).toContain('学生答案协议（JSON）')
     expect(teacherPage).toContain('系统生成的判定证据')
     expect(teacherPage).toContain('answerText')
+    expect(teacherPage).toContain("question_type === 'E3'")
+    expect(teacherPage).toContain("question_type === 'E4'")
     expect(teacherPage).not.toContain('aria-label="学生答案 JSON"')
     expect(teacherPage).not.toContain('aria-label="预期证据 JSON"')
     expect(teacherPage).toContain('<div class="actions">\n         <button class="button secondary" :disabled="saving" type="button" @click="refreshTestCasePreview()">')
