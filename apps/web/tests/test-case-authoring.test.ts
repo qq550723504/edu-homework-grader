@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { testAnswerDraftFromAnswer, testAnswerFingerprint, testAnswerFromDraft } from '../app/lib/test-case-authoring'
+import { isCurrentTestCasePreview, isTestCasePreviewSnapshotCurrent, normalizeTestCaseCategory, testAnswerDraftFromAnswer, testAnswerFingerprint, testAnswerFromDraft } from '../app/lib/test-case-authoring'
 
 describe('test case authoring', () => {
   it('builds the text-v1 answer envelope from the teacher-facing answer field', () => {
@@ -37,5 +37,28 @@ describe('test case authoring', () => {
     expect(() => testAnswerFromDraft({ advanced: true, text: '', json: '{bad json' })).toThrow(
       '高级答案 JSON 格式无效。',
     )
+  })
+
+  it('requires a preview to match both the current version and answer', () => {
+    expect(isCurrentTestCasePreview('version-a', 'version-a', 'answer-a', 'answer-a')).toBe(true)
+    expect(isCurrentTestCasePreview('version-a', 'version-b', 'answer-a', 'answer-a')).toBe(false)
+    expect(isCurrentTestCasePreview('version-a', 'version-a', 'answer-a', 'answer-b')).toBe(false)
+  })
+
+  it('invalidates a captured preview when the author changes versions while submitting', () => {
+    expect(isTestCasePreviewSnapshotCurrent(
+      { versionId: 'version-a', answerFingerprint: 'answer-a', generation: 1 },
+      { versionId: 'version-a', answerFingerprint: 'answer-a', generation: 1 },
+    )).toBe(true)
+    expect(isTestCasePreviewSnapshotCurrent(
+      { versionId: 'version-a', answerFingerprint: 'answer-a', generation: 1 },
+      { versionId: 'version-b', answerFingerprint: '', generation: 2 },
+    )).toBe(false)
+  })
+
+  it('resets categories that the selected question policy does not support', () => {
+    expect(normalizeTestCaseCategory('invalid_mathjson', 'M2', '2')).toBe('invalid_mathjson')
+    expect(normalizeTestCaseCategory('invalid_mathjson', 'M2', '1')).toBe('correct')
+    expect(normalizeTestCaseCategory('invalid_ast', 'E1', '1')).toBe('correct')
   })
 })

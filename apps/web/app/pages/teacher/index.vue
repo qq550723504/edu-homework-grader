@@ -79,7 +79,7 @@
       <div class="actions"><label>搜索题目<input v-model.trim="questionFilter.query" aria-label="搜索题目"></label><label>题型<select v-model="questionFilter.type" aria-label="筛选题型"><option value="">全部题型</option><option v-for="type in questionTypes" :key="type.value" :value="type.value">{{ type.label }}</option></select></label></div>
       <article v-for="version in filteredQuestionVersions" :key="version.id" class="assignment">
         <div><span class="subject">{{ version.question_type }} · {{ version.policy_version }}</span><h3>{{ version.title }}</h3><p>{{ version.status }} · {{ version.prompt }}</p></div>
-        <button class="button secondary" type="button" @click="selectedVersionId = version.id">配置测试</button>
+        <button class="button secondary" :disabled="saving" type="button" @click="selectedVersionId = version.id">配置测试</button>
       </article>
       <p v-if="filteredQuestionVersions.length === 0" class="notice">当前筛选条件下暂无题目。</p>
     </section>
@@ -101,6 +101,9 @@
             <option value="incorrect">错误答案</option>
             <option value="empty">空答案</option>
             <option value="boundary">边界答案</option>
+            <option v-if="selectedVersion.question_type === 'M2'" value="invalid_ast">无效 AST</option>
+            <option v-if="selectedVersion.question_type === 'M2' && selectedVersion.policy_version === '2'" value="invalid_mathjson">无效 MathJSON</option>
+            <option v-if="selectedVersion.question_type === 'M2' && selectedVersion.policy_version === '2'" value="resource_limit">资源限制</option>
             <option v-if="selectedVersion.question_type === 'E3'" value="grammar_feedback">语法反馈</option>
             <option v-if="selectedVersion.question_type === 'E4'" value="needs_review">人工复核</option>
           </select>
@@ -231,7 +234,7 @@ import { fetchCurrentPrincipal } from '../../lib/student-api'
 import { createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, deleteAssignment, downloadTeacherActivationCodes, fetchQuestionPolicyCatalog, fetchQuestionTestCaseTemplates, fetchTeacherAssignment, fetchTeacherRosterClasses, fetchTeacherRosterStudents, fetchTeacherWorkspace, importTeacherRoster, previewQuestionTestCase, publishAssignment, publishQuestionVersion, removeTeacherRosterStudent, runQuestionTests, updateAssignment, updateTeacherRosterStudent, voidAssignment, type CreateQuestionInput, type QuestionPolicyCatalogEntry, type QuestionTestCaseTemplate, type QuestionTestRun, type TeacherAssignment, type TeacherQuestionVersion, type TeacherRosterClass, type TeacherRosterStudent } from '../../lib/teacher-api'
 import { addQuestionToComposition, availableQuestionsForSubject, compositionSummary, moveQuestion, removeQuestion, type AssignmentSubject } from '../../lib/assignment-composition'
 import { buildEnglishQuestionRule, defaultEnglishDraft, fieldForPolicyError, type EnglishQuestionType } from '../../lib/english-question-authoring'
-import { testAnswerDraftFromAnswer, testAnswerFingerprint, testAnswerFromDraft } from '../../lib/test-case-authoring'
+import { isCurrentTestCasePreview, isTestCasePreviewSnapshotCurrent, normalizeTestCaseCategory, testAnswerDraftFromAnswer, testAnswerFingerprint, testAnswerFromDraft } from '../../lib/test-case-authoring'
 import { teacherModules, type TeacherModule } from '../../lib/teacher-workbench'
 import { clearGuardianConsentEvidence, guardianConsentFieldsRequired, teacherErrorMessage } from '../../lib/teacher-workflow'
 
@@ -256,6 +259,7 @@ const advancedJsonMode = ref(false)
 const questionErrors = ref<Record<string, string>>({})
 const suggestedTestCases = ref<QuestionTestCaseTemplate[]>([])
 const advancedTestAnswerMode = ref(false)
+const testCasePreviewGeneration = ref(0)
 const activeModule = ref<TeacherModule>('overview')
 const route = useRoute()
 
@@ -286,6 +290,7 @@ const testCase = reactive({
   expectedDecision: '',
   expectedScore: 0,
   expectedEvidence: {} as Record<string, unknown>,
+  previewedVersionId: '',
   previewedAnswerFingerprint: '',
 })
 const assignmentForm = reactive({ title: '', classId: '', subject: 'mathematics' as AssignmentSubject, dueAt: '', allowLate: false })
@@ -300,8 +305,12 @@ const assignmentComposition = computed(() => compositionSummary(selectedAssignme
 const isEnglishQuestion = computed(() => ['E1', 'E2', 'E3', 'E4'].includes(question.question_type))
 const hasCurrentTestCasePreview = computed(() => {
   try {
-    return Boolean(testCase.previewedAnswerFingerprint)
-      && testCase.previewedAnswerFingerprint === testAnswerFingerprint(testCaseAnswer())
+    return isCurrentTestCasePreview(
+      testCase.previewedVersionId,
+      selectedVersionId.value,
+      testCase.previewedAnswerFingerprint,
+      testAnswerFingerprint(testCaseAnswer()),
+    )
   } catch {
     return false
   }
@@ -437,6 +446,12 @@ watch(() => rosterStudentDraft.guardian_consent_status, (status) => {
 watch(() => selectedVersionId.value, () => {
   suggestedTestCases.value = []
   latestTestRun.value = null
+  testCase.category = normalizeTestCaseCategory(
+    testCase.category,
+    selectedVersion.value?.question_type,
+    selectedVersion.value?.policy_version,
+  )
+  clearTestCasePreview()
 })
 
 watch(() => assignmentForm.subject, () => {
@@ -551,19 +566,32 @@ async function submitRosterImport() {
 }
 
 async function submitTestCase() {
-  if (!selectedVersionId.value) return
+  const versionId = selectedVersionId.value
+  if (!versionId) return
   saving.value = true
   message.value = ''
   try {
     const answer = testCaseAnswer()
     if (!hasCurrentTestCasePreview.value) throw new Error('请先刷新测试预览，再添加用例。')
-    await createTestCase($fetch, await csrfToken(), selectedVersionId.value, {
+    const previewSnapshot = {
+      versionId,
+      answerFingerprint: testCase.previewedAnswerFingerprint,
+      generation: testCasePreviewGeneration.value,
+    }
+    const testCaseInput = {
       category: testCase.category,
       answer,
       expected_decision: testCase.expectedDecision,
       expected_score: Number(testCase.expectedScore),
       expected_evidence: testCase.expectedEvidence,
-    })
+    }
+    const csrf = await csrfToken()
+    if (!isTestCasePreviewSnapshotCurrent(previewSnapshot, {
+      versionId: selectedVersionId.value,
+      answerFingerprint: testCase.previewedAnswerFingerprint,
+      generation: testCasePreviewGeneration.value,
+    })) throw new Error('题目版本或预览已变化，请重新刷新测试预览。')
+    await createTestCase($fetch, csrf, versionId, testCaseInput)
     message.value = '测试用例已添加'
   } catch (error: unknown) { message.value = error instanceof Error ? error.message : '添加测试用例失败。' }
   finally { saving.value = false }
@@ -718,9 +746,11 @@ function testCaseAnswer(): Record<string, unknown> {
 }
 
 function clearTestCasePreview() {
+  testCasePreviewGeneration.value += 1
   testCase.expectedDecision = ''
   testCase.expectedScore = 0
   testCase.expectedEvidence = {}
+  testCase.previewedVersionId = ''
   testCase.previewedAnswerFingerprint = ''
 }
 
@@ -764,7 +794,9 @@ async function refreshTestCasePreview(versionId = selectedVersionId.value) {
     testCase.expectedDecision = preview.decision
     testCase.expectedScore = preview.score
     testCase.expectedEvidence = preview.evidence
+    testCase.previewedVersionId = versionId
     testCase.previewedAnswerFingerprint = testAnswerFingerprint(answer)
+    testCasePreviewGeneration.value += 1
     message.value = '已刷新测试预览，可继续编辑后添加。'
   } catch (error: unknown) { message.value = error instanceof Error ? error.message : '刷新测试预览失败。' }
   finally { saving.value = false }
