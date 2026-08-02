@@ -95,12 +95,30 @@
          <button class="button secondary" :disabled="saving" type="button" @click="refreshTestCasePreview()">刷新测试预览</button>
        </div>
       <form class="stack" @submit.prevent="submitTestCase">
-        <label>用例类别<input v-model.trim="testCase.category" aria-label="用例类别" required placeholder="correct / incorrect / empty / boundary"></label>
-        <label>学生答案（JSON）<textarea v-model.trim="testCase.answerJson" aria-label="学生答案 JSON" required rows="3" /></label>
-        <label>预期判定<input v-model.trim="testCase.expectedDecision" aria-label="预期判定" required></label>
-        <label>预期分数<input v-model.number="testCase.expectedScore" aria-label="预期分数" required type="number" min="0" step="any"></label>
-        <label>预期证据（JSON）<textarea v-model.trim="testCase.expectedEvidenceJson" aria-label="预期证据 JSON" required rows="4" /></label>
-        <button class="button secondary" :disabled="saving" type="submit">添加测试用例</button>
+        <label>用例类别
+          <select v-model="testCase.category" aria-label="用例类别" @change="clearTestCasePreview">
+            <option value="correct">正确答案</option>
+            <option value="incorrect">错误答案</option>
+            <option value="empty">空答案</option>
+            <option value="boundary">边界答案</option>
+          </select>
+        </label>
+        <label v-if="!advancedTestAnswerMode">学生答案<textarea v-model="testCase.answerText" aria-label="学生答案" rows="3" @input="clearTestCasePreview" /></label>
+        <label><input v-model="advancedTestAnswerMode" type="checkbox" @change="changeTestAnswerMode"> 使用高级 JSON 输入</label>
+        <template v-if="advancedTestAnswerMode">
+          <label>学生答案协议（JSON）<textarea v-model="testCase.answerJson" aria-label="高级学生答案 JSON" required rows="3" @input="clearTestCasePreview" /></label>
+          <p class="notice">仅在需要 MathJSON 等非文本答案协议时使用。</p>
+        </template>
+        <p v-else-if="selectedVersion.question_type === 'M2'" class="notice">M2 表达式题需要 MathJSON，请启用高级 JSON 输入。</p>
+        <section v-if="hasCurrentTestCasePreview" class="assignment" aria-label="测试预览结果">
+          <div>
+            <span class="subject">系统生成</span>
+            <h3>预览结果：{{ testCase.expectedDecision }} · {{ testCase.expectedScore }} 分</h3>
+            <p>判定、分数与证据将原样保存为发布门禁期望值。</p>
+            <details><summary>查看系统生成的判定证据</summary><pre>{{ JSON.stringify(testCase.expectedEvidence, null, 2) }}</pre></details>
+          </div>
+        </section>
+        <button class="button secondary" :disabled="saving || !hasCurrentTestCasePreview" type="submit">添加测试用例</button>
       </form>
       <div class="actions"><button class="button primary" :disabled="saving" type="button" @click="runTests">运行测试</button><button class="button secondary" :disabled="saving || latestTestRun?.status !== 'passed'" type="button" @click="publishSelectedVersion">发布题目版本</button></div>
       <p v-if="latestTestRun" class="notice">最近测试：{{ latestTestRun.status }}{{ latestTestRun.failure_summary ? ` · ${latestTestRun.failure_summary}` : '' }}</p>
@@ -211,6 +229,7 @@ import { fetchCurrentPrincipal } from '../../lib/student-api'
 import { createAssignment, createQuestion, createTeacherRosterClass, createTeacherRosterStudent, createTestCase, deleteAssignment, downloadTeacherActivationCodes, fetchQuestionPolicyCatalog, fetchQuestionTestCaseTemplates, fetchTeacherAssignment, fetchTeacherRosterClasses, fetchTeacherRosterStudents, fetchTeacherWorkspace, importTeacherRoster, previewQuestionTestCase, publishAssignment, publishQuestionVersion, removeTeacherRosterStudent, runQuestionTests, updateAssignment, updateTeacherRosterStudent, voidAssignment, type CreateQuestionInput, type QuestionPolicyCatalogEntry, type QuestionTestCaseTemplate, type QuestionTestRun, type TeacherAssignment, type TeacherQuestionVersion, type TeacherRosterClass, type TeacherRosterStudent } from '../../lib/teacher-api'
 import { addQuestionToComposition, availableQuestionsForSubject, compositionSummary, moveQuestion, removeQuestion, type AssignmentSubject } from '../../lib/assignment-composition'
 import { buildEnglishQuestionRule, defaultEnglishDraft, fieldForPolicyError, type EnglishQuestionType } from '../../lib/english-question-authoring'
+import { testAnswerDraftFromAnswer, testAnswerFingerprint, testAnswerFromDraft } from '../../lib/test-case-authoring'
 import { teacherModules, type TeacherModule } from '../../lib/teacher-workbench'
 import { clearGuardianConsentEvidence, guardianConsentFieldsRequired, teacherErrorMessage } from '../../lib/teacher-workflow'
 
@@ -234,6 +253,7 @@ const englishDraft = reactive(defaultEnglishDraft('E1'))
 const advancedJsonMode = ref(false)
 const questionErrors = ref<Record<string, string>>({})
 const suggestedTestCases = ref<QuestionTestCaseTemplate[]>([])
+const advancedTestAnswerMode = ref(false)
 const activeModule = ref<TeacherModule>('overview')
 const route = useRoute()
 
@@ -257,7 +277,15 @@ const questionTypes = [
 ]
 const question = reactive({ title: '', prompt: '', question_type: 'M1', expected: '', ruleJson: questionTypes[0].rule })
 const questionFilter = reactive({ query: '', type: '' })
-const testCase = reactive({ category: 'correct', answerJson: '{"format":"text-v1","text":"5"}', expectedDecision: 'auto_accepted', expectedScore: 1, expectedEvidenceJson: '{}' })
+const testCase = reactive({
+  category: 'correct',
+  answerText: '5',
+  answerJson: '{"format":"text-v1","text":"5"}',
+  expectedDecision: '',
+  expectedScore: 0,
+  expectedEvidence: {} as Record<string, unknown>,
+  previewedAnswerFingerprint: '',
+})
 const assignmentForm = reactive({ title: '', classId: '', subject: 'mathematics' as AssignmentSubject, dueAt: '', allowLate: false })
 const selectedAssignmentQuestions = ref<TeacherQuestionVersion[]>([])
 const selectedVersion = computed(() => workspace.value.questionVersions.find((version) => version.id === selectedVersionId.value))
@@ -268,6 +296,14 @@ const filteredQuestionVersions = computed(() => workspace.value.questionVersions
 const availableAssignmentQuestions = computed(() => availableQuestionsForSubject(workspace.value.questionVersions, assignmentForm.subject))
 const assignmentComposition = computed(() => compositionSummary(selectedAssignmentQuestions.value))
 const isEnglishQuestion = computed(() => ['E1', 'E2', 'E3', 'E4'].includes(question.question_type))
+const hasCurrentTestCasePreview = computed(() => {
+  try {
+    return Boolean(testCase.previewedAnswerFingerprint)
+      && testCase.previewedAnswerFingerprint === testAnswerFingerprint(testCaseAnswer())
+  } catch {
+    return false
+  }
+})
 const reviewCount = computed(() => workspace.value.reviewTasks.length)
 const publishedAssignments = computed(() => workspace.value.assignments.filter((assignment) => assignment.status === 'published').length)
 const completionRate = computed(() => {
@@ -517,12 +553,14 @@ async function submitTestCase() {
   saving.value = true
   message.value = ''
   try {
+    const answer = testCaseAnswer()
+    if (!hasCurrentTestCasePreview.value) throw new Error('请先刷新测试预览，再添加用例。')
     await createTestCase($fetch, await csrfToken(), selectedVersionId.value, {
       category: testCase.category,
-      answer: JSON.parse(testCase.answerJson) as Record<string, unknown>,
+      answer,
       expected_decision: testCase.expectedDecision,
       expected_score: Number(testCase.expectedScore),
-      expected_evidence: JSON.parse(testCase.expectedEvidenceJson) as Record<string, unknown>,
+      expected_evidence: testCase.expectedEvidence,
     })
     message.value = '测试用例已添加'
   } catch (error: unknown) { message.value = error instanceof Error ? error.message : '添加测试用例失败。' }
@@ -661,26 +699,70 @@ async function loadSuggestedTestCases() {
 async function applySuggestedTestCase(template: QuestionTestCaseTemplate, versionId = selectedVersionId.value) {
   if (!versionId || selectedVersionId.value !== versionId) return
   testCase.category = template.category
-  testCase.answerJson = JSON.stringify(template.answer)
+  const draft = testAnswerDraftFromAnswer(template.answer)
+  advancedTestAnswerMode.value = draft.advanced
+  testCase.answerText = draft.text
+  testCase.answerJson = draft.json
+  clearTestCasePreview()
   await refreshTestCasePreview(versionId)
+}
+
+function testCaseAnswer(): Record<string, unknown> {
+  return testAnswerFromDraft({
+    advanced: advancedTestAnswerMode.value,
+    text: testCase.answerText,
+    json: testCase.answerJson,
+  })
+}
+
+function clearTestCasePreview() {
+  testCase.expectedDecision = ''
+  testCase.expectedScore = 0
+  testCase.expectedEvidence = {}
+  testCase.previewedAnswerFingerprint = ''
+}
+
+function changeTestAnswerMode() {
+  if (advancedTestAnswerMode.value) {
+    testCase.answerJson = JSON.stringify({ format: 'text-v1', text: testCase.answerText })
+    clearTestCasePreview()
+    return
+  }
+  try {
+    const draft = testAnswerDraftFromAnswer(testAnswerFromDraft({
+      advanced: true, text: testCase.answerText, json: testCase.answerJson,
+    }))
+    if (draft.advanced) {
+      advancedTestAnswerMode.value = true
+      message.value = '当前答案协议不能转换为文本，请继续使用高级 JSON 输入。'
+      return
+    }
+    testCase.answerText = draft.text
+    clearTestCasePreview()
+  } catch (error: unknown) {
+    advancedTestAnswerMode.value = true
+    message.value = error instanceof Error ? error.message : '高级答案格式无效。'
+  }
 }
 
 async function refreshTestCasePreview(versionId = selectedVersionId.value) {
   if (!versionId || selectedVersionId.value !== versionId) return
   saving.value = true
   try {
+    const answer = testCaseAnswer()
     const csrf = await csrfToken()
     if (selectedVersionId.value !== versionId) return
     const preview = await previewQuestionTestCase(
       $fetch,
       csrf,
       versionId,
-      JSON.parse(testCase.answerJson) as Record<string, unknown>,
+      answer,
     )
     if (selectedVersionId.value !== versionId) return
     testCase.expectedDecision = preview.decision
     testCase.expectedScore = preview.score
-    testCase.expectedEvidenceJson = JSON.stringify(preview.evidence)
+    testCase.expectedEvidence = preview.evidence
+    testCase.previewedAnswerFingerprint = testAnswerFingerprint(answer)
     message.value = '已刷新测试预览，可继续编辑后添加。'
   } catch (error: unknown) { message.value = error instanceof Error ? error.message : '刷新测试预览失败。' }
   finally { saving.value = false }
