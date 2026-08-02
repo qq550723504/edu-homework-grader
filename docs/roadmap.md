@@ -1,13 +1,13 @@
 # 产品路线图
 
-本路线图区分四个层次：已经建设的作业批改 MVP、当前试点准备任务、K–13 课程约束型 AI 出题，以及后续的学生知识画像与低风险自适应练习。
+本路线图区分四个层次：已经建设的作业批改 MVP、当前试点准备任务、K–12 课程约束型 AI 出题，以及后续的学生知识画像与低风险自适应练习。
 
 当前能力和可验证证据见：
 
 - [项目状态](project-status.md)
 - [机器可读状态证据](status-evidence.json)
 - [试点上线检查表](pilot-checklist.md)
-- [K–13 AI 出题实施计划](ai-question-generation-plan.md)
+- [K–12 AI 出题实施计划](ai-question-generation-plan.md)
 - [学生知识画像与自适应练习实施计划](adaptive-learning-plan.md)
 - [Learning Event v1 数据契约](contracts/learning-events-v1.md)
 - [Student Model v1 模型卡](model-cards/student-model-v1.md)
@@ -41,7 +41,7 @@
 
 这些门槛用于把“代码已实现、仓库 CI 已验证”提升为“发布环境已验收”和“学校生产已上线”；四种状态不能混用。
 
-## 第二阶段：K–13 课程约束型 AI 出题
+## 第二阶段：K–12 课程约束型 AI 出题
 
 Epic：[#36](https://github.com/qq550723504/edu-homework-grader/issues/36)
 
@@ -80,7 +80,7 @@ Epic：[#36](https://github.com/qq550723504/edu-homework-grader/issues/36)
 
 | 周期 | 目标 | 主要交付 | Issues |
 | --- | --- | --- | --- |
-| 1–2 | 课程基础 | K–13 层级、Profile、年级映射、目标 Revision | #37 |
+| 1–2 | 课程基础 | K–12 层级、Profile、年级映射、目标 Revision | #37 |
 | 2–3 | 课程运营 | CSV/JSON 导入、审核、激活、来源与许可 | #38 |
 | 3–5 | 生成服务 | Generator、Provider 抽象、结构化 JSON、任务状态机 | #39 |
 | 4–7 | 验证门禁 | 数学/英语答案、年级、难度、重复、安全、载荷和故障门禁 | #40、#83、#108 |
