@@ -129,6 +129,7 @@ describe('teacher workbench UI contract', () => {
     expect(teacherPage).toContain('buildEnglishQuestionRule')
     expect(teacherPage).toContain('加载建议测试')
     expect(teacherPage).toContain('刷新测试预览')
+    expect(teacherPage).toContain('<div class="actions">\n         <button class="button secondary" :disabled="saving" type="button" @click="refreshTestCasePreview()">')
     expect(teacherPage).toContain('watch(() => selectedVersionId.value')
     expect(teacherPage).toContain('suggestedTestCases.value = []')
     expect(teacherPage).toContain('const versionId = selectedVersionId.value')
