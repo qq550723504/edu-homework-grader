@@ -121,14 +121,26 @@ def health() -> dict[str, str]:
 
 
 @app.get("/ready", tags=["system"], response_model=None)
-def ready() -> dict[str, str] | JSONResponse:
+def ready() -> dict[str, Any] | JSONResponse:
     similarity = app.state.semantic_similarity
+    dependency_versions = {
+        "embedding": app.state.embedding_dependency_version,
+        "runtime": app.state.runtime_dependency_versions,
+    }
     if isinstance(similarity, UnavailableSimilarity):
         return JSONResponse(
             status_code=503,
-            content={"status": "degraded", "english_embedding_model": "unavailable"},
+            content={
+                "status": "degraded",
+                "english_embedding_model": "unavailable",
+                "dependency_versions": dependency_versions,
+            },
         )
-    return {"status": "ready", "english_embedding_model": "ready"}
+    return {
+        "status": "ready",
+        "english_embedding_model": "ready",
+        "dependency_versions": dependency_versions,
+    }
 
 
 @app.post("/v1/grade/english/exact", response_model=GradingResult, tags=["english"])

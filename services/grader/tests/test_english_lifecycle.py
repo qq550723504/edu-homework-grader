@@ -96,6 +96,14 @@ def test_english_similarity_is_loaded_once_and_reported_ready(monkeypatch) -> No
         assert client.get("/ready").json() == {
             "status": "ready",
             "english_embedding_model": "ready",
+            "dependency_versions": {
+                "embedding": {
+                    "id": "test-model",
+                    "revision": "test-revision",
+                    "digest": "sha256:test-digest",
+                },
+                "runtime": {"sentence-transformers": "test-version"},
+            },
         }
 
     assert FakeSimilarity.instances == 1
@@ -103,6 +111,15 @@ def test_english_similarity_is_loaded_once_and_reported_ready(monkeypatch) -> No
 
 def test_missing_embedding_model_is_degraded_and_e4_stays_review_safe(monkeypatch) -> None:
     monkeypatch.setattr(main, "SentenceTransformerSimilarity", FailingSimilarity)
+    monkeypatch.setattr(
+        main,
+        "_runtime_dependency_versions",
+        lambda: {"sentence-transformers": "test-version"},
+        raising=False,
+    )
+    monkeypatch.setenv("ENGLISH_EMBEDDING_MODEL_ID", "test-model")
+    monkeypatch.setenv("ENGLISH_EMBEDDING_MODEL_REVISION", "test-revision")
+    monkeypatch.setenv("ENGLISH_EMBEDDING_MODEL_DIGEST", "sha256:test-digest")
 
     payload = {
         "question_type": "E4",
@@ -118,6 +135,14 @@ def test_missing_embedding_model_is_degraded_and_e4_stays_review_safe(monkeypatc
         assert client.get("/ready").json() == {
             "status": "degraded",
             "english_embedding_model": "unavailable",
+            "dependency_versions": {
+                "embedding": {
+                    "id": "test-model",
+                    "revision": "test-revision",
+                    "digest": "sha256:test-digest",
+                },
+                "runtime": {"sentence-transformers": "test-version"},
+            },
         }
 
         response = client.post("/v1/grade/english", json=payload)
