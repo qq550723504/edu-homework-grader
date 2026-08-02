@@ -34,3 +34,15 @@ export function testAnswerDraftFromAnswer(answer: Record<string, unknown>): Test
 export function testAnswerFingerprint(answer: Record<string, unknown>): string {
   return JSON.stringify(answer)
 }
+
+export function isCurrentTestCasePreview(
+  previewedVersionId: string,
+  selectedVersionId: string | null,
+  previewedAnswerFingerprint: string,
+  currentAnswerFingerprint: string,
+): boolean {
+  return Boolean(previewedVersionId)
+    && previewedVersionId === selectedVersionId
+    && Boolean(previewedAnswerFingerprint)
+    && previewedAnswerFingerprint === currentAnswerFingerprint
+}
