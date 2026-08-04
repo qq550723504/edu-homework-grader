@@ -165,7 +165,7 @@ DATABASE_URL=postgresql+psycopg://edu_grader:change-me@localhost:5432/edu_grader
 
 ## 课程目录
 
-K–13 是平台的内部层级，不是对学生地区、学校课程或能力的推断。课程目录只保存经审核的短目标摘要、稳定代码和权威来源元数据；不复制教材、试卷或课标长文本。首批有效 Profile 为中国学前发展（2012）、中国义务教育（2022）、中国普通高中（2017/2020）与 CEFR（2020），来源和治理规则见 [AI 出题计划](docs/ai-question-generation-plan.md)。
+K–12 是平台的内部层级，不是对学生地区、学校课程或能力的推断。课程目录只保存经审核的短目标摘要、稳定代码和权威来源元数据；不复制教材、试卷或课标长文本。首批有效 Profile 为中国学前发展（2012）、中国义务教育（2022）、中国普通高中（2017/2020）与 CEFR（2020），来源和治理规则见 [AI 出题计划](docs/ai-question-generation-plan.md)。
 
 AI 生成必须同时保存所选 `curriculum_profile_id` 与精确的 `curriculum_objective_revision_id`。`K3_4`、`K4_5`、`K5_6` 仅能选用 `learning_activity-v1`；评分题型按现行题型策略目录验证。课程目标修订是追加式的，管理员须经草稿、审核中、启用或退役的状态机维护；启用与依赖变更均写入审计账本。
 

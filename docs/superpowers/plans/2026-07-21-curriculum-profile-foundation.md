@@ -297,7 +297,7 @@ Expected: pass after Task 4; if it fails, correct the route registration before 
 
 - [ ] **Step 3: Add concise user-facing documentation**
 
-Add the two read route families to `README.md`, state that K–13 is internal, that only short licensed-safe summaries are stored, and that later AI generation must retain profile and revision IDs. Keep the authoritative-source links in `docs/ai-question-generation-plan.md` unchanged.
+Add the two read route families to `README.md`, state that K–12 is internal, that only short licensed-safe summaries are stored, and that later AI generation must retain profile and revision IDs. Keep the authoritative-source links in `docs/ai-question-generation-plan.md` unchanged.
 
 - [ ] **Step 4: Run the complete validation suite**
 
