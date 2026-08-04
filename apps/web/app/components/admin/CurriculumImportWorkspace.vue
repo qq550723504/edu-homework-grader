@@ -85,7 +85,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 
 import { fetchCurrentPrincipal } from '../../lib/student-api'
 import {
@@ -106,6 +106,12 @@ const analysis = ref<CurriculumImportAnalysis | null>(null)
 const loading = ref(false)
 const creating = ref(false)
 const message = ref('')
+const createRequestKey = ref(crypto.randomUUID())
+
+watch([format, documentText, profileText, sourceText, gradeMappingsText], () => {
+  analysis.value = null
+  createRequestKey.value = crypto.randomUUID()
+})
 
 onMounted(async () => {
   try {
@@ -153,7 +159,8 @@ async function runDryRun(): Promise<void> {
   loading.value = true
   message.value = ''
   try {
-    analysis.value = await dryRunCurriculumImport($fetch, await csrfToken(), crypto.randomUUID(), body)
+    analysis.value = await dryRunCurriculumImport($fetch, await csrfToken(), body)
+    createRequestKey.value = crypto.randomUUID()
   } catch {
     message.value = 'dry-run 执行失败，请检查导入内容后重试。'
   } finally {
@@ -168,9 +175,10 @@ async function createDraft(): Promise<void> {
   creating.value = true
   message.value = ''
   try {
-    const created = await createCurriculumImport($fetch, await csrfToken(), crypto.randomUUID(), {
+    const created = await createCurriculumImport($fetch, await csrfToken(), createRequestKey.value, {
       ...body,
       catalogue_fingerprint: analysis.value.catalogue_fingerprint,
+      normalized_digest: analysis.value.normalized_digest,
     })
     await navigateTo(`/platform/curriculum/imports/${encodeURIComponent(created.id)}`)
   } catch (error) {

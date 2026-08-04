@@ -394,7 +394,10 @@ class CurriculumSourceRecord(Base):
 
 class CurriculumProfile(Base):
     __tablename__ = "curriculum_profiles"
-    __table_args__ = (UniqueConstraint("code", name="uq_curriculum_profiles_code"),)
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_curriculum_profiles_code"),
+        UniqueConstraint("retire_idempotency_key", name="uq_curriculum_profiles_retire_key"),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     code: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -414,6 +417,8 @@ class CurriculumProfile(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
+    retire_idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    retire_request_digest: Mapped[str | None] = mapped_column(String(64))
 
     source_record: Mapped[CurriculumSourceRecord] = relationship(back_populates="profiles")
     grade_mappings: Mapped[list[CurriculumGradeMapping]] = relationship(back_populates="profile")
@@ -553,6 +558,12 @@ class CurriculumImportBatch(Base):
     __table_args__ = (
         Index("ix_curriculum_import_batches_profile_status", "profile_id", "status"),
         Index("ix_curriculum_import_batches_digest_status", "content_digest", "status"),
+        UniqueConstraint("create_idempotency_key", name="uq_curriculum_import_batches_create_key"),
+        UniqueConstraint("submit_idempotency_key", name="uq_curriculum_import_batches_submit_key"),
+        UniqueConstraint("review_idempotency_key", name="uq_curriculum_import_batches_review_key"),
+        UniqueConstraint(
+            "activate_idempotency_key", name="uq_curriculum_import_batches_activate_key"
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -569,6 +580,14 @@ class CurriculumImportBatch(Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     activated_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    create_idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    create_request_digest: Mapped[str | None] = mapped_column(String(64))
+    submit_idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    submit_request_digest: Mapped[str | None] = mapped_column(String(64))
+    review_idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    review_request_digest: Mapped[str | None] = mapped_column(String(64))
+    activate_idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    activate_request_digest: Mapped[str | None] = mapped_column(String(64))
     change_summary: Mapped[str] = mapped_column(String(1_000), nullable=False)
     summary_json: Mapped[dict[str, object]] = mapped_column(
         JSONB().with_variant(JSON(), "sqlite"), nullable=False

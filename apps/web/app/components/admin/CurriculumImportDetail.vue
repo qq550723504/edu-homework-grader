@@ -14,20 +14,36 @@
         <pre>{{ JSON.stringify(batch.summary, null, 2) }}</pre>
       </section>
 
+      <section v-if="batch.proposed_objectives.length" class="notice" aria-labelledby="curriculum-proposed-objectives-heading">
+        <h2 id="curriculum-proposed-objectives-heading">拟议课程目标</h2>
+        <ul>
+          <li v-for="objective in batch.proposed_objectives" :key="String(objective.code)">
+            {{ objective.code }} · {{ objective.subject }} · {{ objective.domain }} · {{ objective.text }}
+          </li>
+        </ul>
+      </section>
+
       <section v-if="batch.issues.length" class="notice" role="alert" aria-labelledby="curriculum-import-issues-heading">
         <h2 id="curriculum-import-issues-heading">导入问题</h2>
         <ul>
-          <li v-for="issue in batch.issues" :key="`${issue.code}-${issue.source_path ?? ''}-${issue.source_row ?? ''}`">{{ issue.message }}</li>
+          <li v-for="issue in batch.issues" :key="`${issue.code}-${issue.source_path ?? ''}-${issue.source_row ?? ''}`">
+            <code>{{ issue.code }}</code>：{{ issue.message }}
+            <span v-if="issue.source_path || issue.source_row || issue.source_column">
+              （位置：{{ issue.source_path ?? '文档' }}<template v-if="issue.source_row">，第 {{ issue.source_row }} 行</template><template v-if="issue.source_column">，{{ issue.source_column }} 列</template>）
+            </span>
+          </li>
         </ul>
       </section>
 
       <div class="actions">
-        <button v-if="batch.status === 'draft'" class="button primary" data-testid="submit-curriculum-review" type="button" :disabled="busy" @click="submitReview">
+        <button v-if="canSubmit" class="button primary" data-testid="submit-curriculum-review" type="button" :disabled="busy" @click="submitReview">
           提交审核
         </button>
-        <template v-if="batch.status === 'in_review'">
+        <template v-if="canReview">
           <button class="button primary" data-testid="approve-curriculum-import" type="button" :disabled="busy" @click="review(true)">审核通过</button>
           <button class="button secondary" data-testid="reject-curriculum-import" type="button" :disabled="busy" @click="review(false)">驳回并退休</button>
+        </template>
+        <template v-if="canActivate">
           <button class="button primary" data-testid="activate-curriculum-import" type="button" :disabled="busy" @click="activate">激活目录</button>
         </template>
       </div>
@@ -36,9 +52,9 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
-import { fetchCurrentPrincipal } from '../../lib/student-api'
+import { fetchCurrentPrincipal, type CurrentPrincipal } from '../../lib/student-api'
 import {
   activateCurriculumImport,
   fetchCurriculumImport,
@@ -49,13 +65,26 @@ import {
 
 const props = defineProps<{ batchId: string }>()
 const batch = ref<CurriculumImportDetail | null>(null)
+const principal = ref<CurrentPrincipal | null>(null)
 const loading = ref(true)
 const busy = ref(false)
 const message = ref('')
+const submitRequestKey = crypto.randomUUID()
+const reviewRequestKey = crypto.randomUUID()
+const activateRequestKey = crypto.randomUUID()
+
+const canSubmit = computed(() => batch.value?.status === 'draft')
+const canReview = computed(() => batch.value?.status === 'in_review' && !batch.value.reviewed_by_user_id && principal.value?.id !== batch.value.submitted_by_user_id)
+const canActivate = computed(() => batch.value?.status === 'in_review' && principal.value?.id === batch.value.reviewed_by_user_id)
 
 onMounted(async () => {
   try {
-    batch.value = await fetchCurriculumImport($fetch, props.batchId)
+    const [nextBatch, nextPrincipal] = await Promise.all([
+      fetchCurriculumImport($fetch, props.batchId),
+      fetchCurrentPrincipal($fetch),
+    ])
+    batch.value = nextBatch
+    principal.value = nextPrincipal
   } catch {
     message.value = '无法加载导入批次，请稍后重试。'
   } finally {
@@ -64,24 +93,25 @@ onMounted(async () => {
 })
 
 async function actionToken(): Promise<string> {
-  const principal = await fetchCurrentPrincipal($fetch)
-  if (!principal.csrf_token) throw new Error('当前会话缺少 CSRF token')
-  return principal.csrf_token
+  const current = principal.value ?? await fetchCurrentPrincipal($fetch)
+  principal.value = current
+  if (!current.csrf_token) throw new Error('当前会话缺少 CSRF token')
+  return current.csrf_token
 }
 
 async function submitReview(): Promise<void> {
-  if (!batch.value) return
-  await runAction(async () => submitCurriculumImportReview($fetch, await actionToken(), crypto.randomUUID(), props.batchId))
+  if (!canSubmit.value) return
+  await runAction(async () => submitCurriculumImportReview($fetch, await actionToken(), submitRequestKey, props.batchId))
 }
 
 async function review(approve: boolean): Promise<void> {
-  if (!batch.value) return
-  await runAction(async () => reviewCurriculumImport($fetch, await actionToken(), crypto.randomUUID(), props.batchId, approve))
+  if (!canReview.value) return
+  await runAction(async () => reviewCurriculumImport($fetch, await actionToken(), reviewRequestKey, props.batchId, approve))
 }
 
 async function activate(): Promise<void> {
-  if (!batch.value) return
-  await runAction(async () => activateCurriculumImport($fetch, await actionToken(), crypto.randomUUID(), props.batchId))
+  if (!canActivate.value || !globalThis.confirm('确认激活此课程目录？')) return
+  await runAction(async () => activateCurriculumImport($fetch, await actionToken(), activateRequestKey, props.batchId))
 }
 
 async function runAction(action: () => Promise<Partial<CurriculumImportDetail>>): Promise<void> {

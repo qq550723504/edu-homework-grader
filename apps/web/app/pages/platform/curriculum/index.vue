@@ -14,7 +14,7 @@
     <template v-else>
       <div class="actions">
         <NuxtLink class="button primary" to="/platform/curriculum/import">导入课程目录</NuxtLink>
-        <label>批次状态
+        <label>导入批次状态
           <select v-model="statusFilter" aria-label="批次状态">
             <option value="">全部状态</option>
             <option value="draft">草稿</option>
@@ -36,6 +36,10 @@
             <span> · {{ profile.status }} · {{ profile.objective_count ?? 0 }} 个课程目标</span>
           </li>
         </ul>
+        <div class="actions" aria-label="课程方案分页">
+          <button class="button secondary" data-testid="previous-curriculum-profile-page" type="button" :disabled="profileOffset === 0" @click="previousProfiles">上一页</button>
+          <button class="button secondary" data-testid="next-curriculum-profile-page" type="button" :disabled="profileOffset + profiles.limit >= profiles.total" @click="nextProfiles">下一页</button>
+        </div>
       </section>
 
       <section class="stack" aria-labelledby="curriculum-imports-heading">
@@ -49,6 +53,10 @@
             <span> · {{ batch.change_summary }}</span>
           </li>
         </ul>
+        <div class="actions" aria-label="导入批次分页">
+          <button class="button secondary" data-testid="previous-curriculum-import-page" type="button" :disabled="importOffset === 0" @click="previousImports">上一页</button>
+          <button class="button secondary" data-testid="next-curriculum-import-page" type="button" :disabled="importOffset + imports.limit >= imports.total" @click="nextImports">下一页</button>
+        </div>
       </section>
     </template>
   </main>
@@ -72,6 +80,8 @@ const message = ref('')
 const statusFilter = ref<CurriculumStatus | ''>('')
 const profiles = ref<CurriculumPage<CurriculumAdminProfile>>({ items: [], total: 0, limit: 50, offset: 0 })
 const imports = ref<CurriculumPage<CurriculumImportSummary>>({ items: [], total: 0, limit: 50, offset: 0 })
+const profileOffset = ref(0)
+const importOffset = ref(0)
 
 function isAuthorizationFailure(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false
@@ -83,11 +93,14 @@ async function load(): Promise<void> {
   loading.value = true
   accessDenied.value = false
   message.value = ''
-  const query = statusFilter.value ? { status: statusFilter.value, limit: 50, offset: 0 } : { limit: 50, offset: 0 }
+  const profileQuery = { limit: 50, offset: profileOffset.value }
+  const importQuery = statusFilter.value
+    ? { status: statusFilter.value, limit: 50, offset: importOffset.value }
+    : { limit: 50, offset: importOffset.value }
   try {
     const [nextProfiles, nextImports] = await Promise.all([
-      fetchAdminCurriculumProfiles($fetch, query),
-      fetchCurriculumImports($fetch, query),
+      fetchAdminCurriculumProfiles($fetch, profileQuery),
+      fetchCurriculumImports($fetch, importQuery),
     ])
     profiles.value = nextProfiles
     imports.value = nextImports
@@ -99,6 +112,31 @@ async function load(): Promise<void> {
   }
 }
 
-watch(statusFilter, () => { void load() })
+function previousProfiles(): void {
+  profileOffset.value = Math.max(0, profileOffset.value - profiles.value.limit)
+  void load()
+}
+
+function nextProfiles(): void {
+  if (profileOffset.value + profiles.value.limit >= profiles.value.total) return
+  profileOffset.value += profiles.value.limit
+  void load()
+}
+
+function previousImports(): void {
+  importOffset.value = Math.max(0, importOffset.value - imports.value.limit)
+  void load()
+}
+
+function nextImports(): void {
+  if (importOffset.value + imports.value.limit >= imports.value.total) return
+  importOffset.value += imports.value.limit
+  void load()
+}
+
+watch(statusFilter, () => {
+  importOffset.value = 0
+  void load()
+})
 await load()
 </script>

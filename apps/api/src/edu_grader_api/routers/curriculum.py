@@ -1,7 +1,7 @@
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import String, cast, func, select
 from sqlalchemy.exc import IntegrityError
@@ -44,6 +44,7 @@ from ..services.curriculum_imports import (
     activate_import,
     analyse_import,
     apply_import,
+    curriculum_request_digest,
     export_active_profile,
     parse_csv_document,
     retire_profile,
@@ -125,6 +126,7 @@ class CurriculumImportRequest(BaseModel):
     source: dict[str, object] | None = None
     grade_mappings: list[dict[str, object]] | None = None
     catalogue_fingerprint: str | None = Field(default=None, min_length=64, max_length=64)
+    normalized_digest: str | None = Field(default=None, min_length=64, max_length=64)
 
 
 class ReviewImportRequest(BaseModel):
@@ -713,33 +715,56 @@ def dry_run_curriculum_import_route(
 @admin_router.post("/imports", status_code=status.HTTP_201_CREATED)
 def create_curriculum_import_route(
     body: CurriculumImportRequest,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
     principal: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, object]:
+    if body.catalogue_fingerprint is None or body.normalized_digest is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="catalogue fingerprint and normalized digest are required",
+        )
     document = _import_document(body)
+    request_digest = curriculum_request_digest(
+        "curriculum.import.create",
+        target_id=None,
+        payload={
+            "format": body.format,
+            "document": document.model_dump(mode="json"),
+            "catalogue_fingerprint": body.catalogue_fingerprint,
+            "normalized_digest": body.normalized_digest,
+        },
+    )
     try:
         session.rollback()
         with session.begin():
             analysis = analyse_import(session, document)
-            if body.catalogue_fingerprint != analysis.catalogue_fingerprint:
-                raise StaleImportBaselineError("catalogue changed after dry-run")
+            existing = session.scalar(
+                select(CurriculumImportBatch).where(
+                    CurriculumImportBatch.create_idempotency_key == idempotency_key
+                )
+            )
             batch = apply_import(
                 session,
                 document=document,
                 analysis=analysis,
                 actor=_current_user(session, principal),
                 input_format=body.format,
+                idempotency_key=idempotency_key,
+                request_digest=request_digest,
+                expected_normalized_digest=body.normalized_digest,
             )
-            append_audit_event(
-                session,
-                tenant_id=UUID(principal.tenant_id),
-                actor_user_id=UUID(principal.user_id),
-                event_type="curriculum.import_created",
-                target_type="curriculum_import_batch",
-                target_id=batch.id,
-                metadata={"status": batch.status.value, "digest": batch.content_digest[:12]},
-            )
-    except (ImportValidationError, StaleImportBaselineError) as error:
+            if existing is None:
+                append_audit_event(
+                    session,
+                    tenant_id=UUID(principal.tenant_id),
+                    actor_user_id=UUID(principal.user_id),
+                    event_type="curriculum.import_created",
+                    target_type="curriculum_import_batch",
+                    target_id=batch.id,
+                    metadata={"status": batch.status.value, "digest": batch.content_digest[:12]},
+                )
+    except (ImportLifecycleError, ImportValidationError, StaleImportBaselineError) as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     return _import_batch_payload(batch)
 
@@ -747,6 +772,7 @@ def create_curriculum_import_route(
 @admin_router.post("/imports/{batch_id}/submit-review")
 def submit_curriculum_import_review_route(
     batch_id: UUID,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
     principal: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, object]:
@@ -758,16 +784,29 @@ def submit_curriculum_import_review_route(
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
                 )
-            submit_import_for_review(session, batch=batch)
-            append_audit_event(
-                session,
-                tenant_id=UUID(principal.tenant_id),
-                actor_user_id=UUID(principal.user_id),
-                event_type="curriculum.import_submitted_for_review",
-                target_type="curriculum_import_batch",
-                target_id=batch.id,
-                metadata={"status": batch.status.value},
+            request_digest = curriculum_request_digest(
+                "curriculum.import.submit_review", target_id=batch_id, payload={}
             )
+            replay = (
+                batch.submit_idempotency_key == idempotency_key
+                and batch.submit_request_digest == request_digest
+            )
+            submit_import_for_review(
+                session,
+                batch=batch,
+                idempotency_key=idempotency_key,
+                request_digest=request_digest,
+            )
+            if not replay:
+                append_audit_event(
+                    session,
+                    tenant_id=UUID(principal.tenant_id),
+                    actor_user_id=UUID(principal.user_id),
+                    event_type="curriculum.import_submitted_for_review",
+                    target_type="curriculum_import_batch",
+                    target_id=batch.id,
+                    metadata={"status": batch.status.value},
+                )
     except ImportLifecycleError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     return _import_batch_payload(batch)
@@ -777,6 +816,7 @@ def submit_curriculum_import_review_route(
 def review_curriculum_import_route(
     batch_id: UUID,
     body: ReviewImportRequest,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
     principal: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, object]:
@@ -788,21 +828,31 @@ def review_curriculum_import_route(
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
                 )
+            request_digest = curriculum_request_digest(
+                "curriculum.import.review", target_id=batch_id, payload={"approve": body.approve}
+            )
+            replay = (
+                batch.review_idempotency_key == idempotency_key
+                and batch.review_request_digest == request_digest
+            )
             review_import(
                 session,
                 batch=batch,
                 reviewer=_current_user(session, principal),
                 approve=body.approve,
+                idempotency_key=idempotency_key,
+                request_digest=request_digest,
             )
-            append_audit_event(
-                session,
-                tenant_id=UUID(principal.tenant_id),
-                actor_user_id=UUID(principal.user_id),
-                event_type="curriculum.import_reviewed",
-                target_type="curriculum_import_batch",
-                target_id=batch.id,
-                metadata={"approved": body.approve, "status": batch.status.value},
-            )
+            if not replay:
+                append_audit_event(
+                    session,
+                    tenant_id=UUID(principal.tenant_id),
+                    actor_user_id=UUID(principal.user_id),
+                    event_type="curriculum.import_reviewed",
+                    target_type="curriculum_import_batch",
+                    target_id=batch.id,
+                    metadata={"approved": body.approve, "status": batch.status.value},
+                )
     except ImportLifecycleError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     return _import_batch_payload(batch)
@@ -811,6 +861,7 @@ def review_curriculum_import_route(
 @admin_router.post("/imports/{batch_id}/activate")
 def activate_curriculum_import_route(
     batch_id: UUID,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
     principal: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, object]:
@@ -822,16 +873,30 @@ def activate_curriculum_import_route(
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
                 )
-            activate_import(session, batch=batch, actor=_current_user(session, principal))
-            append_audit_event(
-                session,
-                tenant_id=UUID(principal.tenant_id),
-                actor_user_id=UUID(principal.user_id),
-                event_type="curriculum.import_activated",
-                target_type="curriculum_import_batch",
-                target_id=batch.id,
-                metadata={"status": batch.status.value},
+            request_digest = curriculum_request_digest(
+                "curriculum.import.activate", target_id=batch_id, payload={}
             )
+            replay = (
+                batch.activate_idempotency_key == idempotency_key
+                and batch.activate_request_digest == request_digest
+            )
+            activate_import(
+                session,
+                batch=batch,
+                actor=_current_user(session, principal),
+                idempotency_key=idempotency_key,
+                request_digest=request_digest,
+            )
+            if not replay:
+                append_audit_event(
+                    session,
+                    tenant_id=UUID(principal.tenant_id),
+                    actor_user_id=UUID(principal.user_id),
+                    event_type="curriculum.import_activated",
+                    target_type="curriculum_import_batch",
+                    target_id=batch.id,
+                    metadata={"status": batch.status.value},
+                )
     except ImportLifecycleError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     return _import_batch_payload(batch)
@@ -886,6 +951,7 @@ def curriculum_retirement_impact_route(
 @admin_router.post("/profiles/{profile_id}/retire")
 def retire_curriculum_profile_route(
     profile_id: UUID,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
     principal: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, object]:
@@ -899,16 +965,29 @@ def retire_curriculum_profile_route(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT, detail="profile has references"
             )
-        retire_profile(session, profile=profile)
-        append_audit_event(
-            session,
-            tenant_id=UUID(principal.tenant_id),
-            actor_user_id=UUID(principal.user_id),
-            event_type="curriculum.profile_retired",
-            target_type="curriculum_profile",
-            target_id=profile.id,
-            metadata={"coverage": impact["coverage"]},
+        request_digest = curriculum_request_digest(
+            "curriculum.profile.retire", target_id=profile_id, payload={}
         )
+        replay = (
+            profile.retire_idempotency_key == idempotency_key
+            and profile.retire_request_digest == request_digest
+        )
+        retire_profile(
+            session,
+            profile=profile,
+            idempotency_key=idempotency_key,
+            request_digest=request_digest,
+        )
+        if not replay:
+            append_audit_event(
+                session,
+                tenant_id=UUID(principal.tenant_id),
+                actor_user_id=UUID(principal.user_id),
+                event_type="curriculum.profile_retired",
+                target_type="curriculum_profile",
+                target_id=profile.id,
+                metadata={"coverage": impact["coverage"]},
+            )
     return _profile_payload(profile)
 
 
@@ -964,6 +1043,7 @@ def _import_batch_payload(batch: CurriculumImportBatch) -> dict[str, object]:
         "baseline_fingerprint": batch.baseline_fingerprint,
         "change_summary": batch.change_summary,
         "summary": batch.summary_json,
+        "proposed_objectives": batch.summary_json.get("proposed_objectives", []),
         "submitted_by_user_id": str(batch.submitted_by_user_id),
         "created_at": batch.created_at.isoformat(),
         "reviewed_at": batch.reviewed_at.isoformat() if batch.reviewed_at else None,

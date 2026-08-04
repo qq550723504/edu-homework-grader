@@ -158,12 +158,46 @@ def parse_csv_document(
 
 def analyse_import(session: Session, document: ImportDocument) -> ImportAnalysis:
     problems = _validate_document(document)
+    additions: list[str] = []
+    updates: list[str] = []
+    unchanged: list[str] = []
+    profile = session.scalar(
+        select(CurriculumProfile).where(CurriculumProfile.code == document.profile.code)
+    )
+    if profile is None:
+        additions = [objective.code for objective in document.objectives]
+    else:
+        objectives = {
+            objective.code: objective
+            for objective in session.scalars(
+                select(CurriculumObjective).where(CurriculumObjective.profile_id == profile.id)
+            )
+        }
+        for imported_objective in document.objectives:
+            existing_objective = objectives.get(imported_objective.code)
+            if existing_objective is None:
+                additions.append(imported_objective.code)
+                continue
+            active_revision = session.scalar(
+                select(CurriculumObjectiveRevision)
+                .where(
+                    CurriculumObjectiveRevision.objective_id == existing_objective.id,
+                    CurriculumObjectiveRevision.status == CurriculumRevisionStatus.ACTIVE,
+                )
+                .order_by(CurriculumObjectiveRevision.revision_number.desc())
+            )
+            if active_revision is not None and _revision_matches(
+                active_revision, imported_objective
+            ):
+                unchanged.append(imported_objective.code)
+            else:
+                updates.append(imported_objective.code)
     return ImportAnalysis(
         normalized_digest=_document_digest(document),
         catalogue_fingerprint=catalogue_fingerprint(session, document.profile.code),
-        additions=[objective.code for objective in document.objectives],
-        updates=[],
-        unchanged=[],
+        additions=additions,
+        updates=updates,
+        unchanged=unchanged,
         conflicts=[],
         problems=problems,
     )
@@ -222,11 +256,37 @@ def apply_import(
     analysis: ImportAnalysis,
     actor: User,
     input_format: str = "json",
+    idempotency_key: str | None = None,
+    request_digest: str | None = None,
+    expected_normalized_digest: str | None = None,
 ) -> CurriculumImportBatch:
+    if idempotency_key is not None and request_digest is None:
+        raise ImportValidationError("idempotency request digest is required")
+
+    if idempotency_key is not None:
+        existing_key_batch = session.scalar(
+            select(CurriculumImportBatch).where(
+                CurriculumImportBatch.create_idempotency_key == idempotency_key
+            )
+        )
+        if existing_key_batch is not None:
+            _ensure_idempotency_replay(
+                existing_key_batch.create_idempotency_key,
+                existing_key_batch.create_request_digest,
+                idempotency_key,
+                request_digest,
+            )
+            return existing_key_batch
+
     if not analysis.can_apply:
         raise ImportValidationError("cannot apply an import with validation problems")
     if analysis.normalized_digest != _document_digest(document):
         raise ImportValidationError("import document does not match its analysis")
+    if (
+        expected_normalized_digest is not None
+        and expected_normalized_digest != analysis.normalized_digest
+    ):
+        raise StaleImportBaselineError("import document changed after dry-run")
 
     profile = session.scalar(
         select(CurriculumProfile)
@@ -251,6 +311,8 @@ def apply_import(
             analysis=analysis,
             actor=actor,
             input_format=input_format,
+            idempotency_key=idempotency_key,
+            request_digest=request_digest,
         )
 
     source = CurriculumSourceRecord(
@@ -293,8 +355,15 @@ def apply_import(
         baseline_fingerprint=analysis.catalogue_fingerprint,
         status=CurriculumImportStatus.DRAFT,
         submitted_by_user_id=actor.id,
+        create_idempotency_key=idempotency_key,
+        create_request_digest=request_digest,
         change_summary=_batch_change_summary(document),
-        summary_json={"additions": len(document.objectives), "updates": 0, "unchanged": 0},
+        summary_json={
+            "additions": len(analysis.additions),
+            "updates": len(analysis.updates),
+            "unchanged": len(analysis.unchanged),
+            "proposed_objectives": _proposed_objective_snapshot(document),
+        },
     )
     session.add(batch)
     session.flush()
@@ -346,6 +415,8 @@ def _apply_profile_update(
     analysis: ImportAnalysis,
     actor: User,
     input_format: str,
+    idempotency_key: str | None = None,
+    request_digest: str | None = None,
 ) -> CurriculumImportBatch:
     mappings = {
         mapping.internal_level: mapping
@@ -384,6 +455,8 @@ def _apply_profile_update(
         baseline_fingerprint=analysis.catalogue_fingerprint,
         status=CurriculumImportStatus.DRAFT,
         submitted_by_user_id=actor.id,
+        create_idempotency_key=idempotency_key,
+        create_request_digest=request_digest,
         change_summary=_batch_change_summary(document),
         summary_json={},
     )
@@ -455,6 +528,7 @@ def _apply_profile_update(
         "additions": additions,
         "updates": updates,
         "unchanged": len(document.objectives) - additions - updates,
+        "proposed_objectives": _proposed_objective_snapshot(document),
         "proposed_grade_complexity_rules": {
             mapping.internal_level: mapping.complexity_rules for mapping in document.grade_mappings
         },
@@ -464,12 +538,25 @@ def _apply_profile_update(
 
 
 def submit_import_for_review(
-    session: Session, *, batch: CurriculumImportBatch
+    session: Session,
+    *,
+    batch: CurriculumImportBatch,
+    idempotency_key: str | None = None,
+    request_digest: str | None = None,
 ) -> CurriculumImportBatch:
+    if _ensure_idempotency_replay(
+        batch.submit_idempotency_key,
+        batch.submit_request_digest,
+        idempotency_key,
+        request_digest,
+    ):
+        return batch
     if batch.status is not CurriculumImportStatus.DRAFT:
         raise ImportLifecycleError("only draft imports can be submitted for review")
     if batch.issues:
         raise ImportLifecycleError("imports with validation issues cannot be submitted for review")
+    batch.submit_idempotency_key = idempotency_key
+    batch.submit_request_digest = request_digest
     batch.status = CurriculumImportStatus.IN_REVIEW
     if batch.profile.status is CurriculumProfileStatus.DRAFT:
         batch.profile.status = CurriculumProfileStatus.IN_REVIEW
@@ -488,11 +575,24 @@ def review_import(
     batch: CurriculumImportBatch,
     reviewer: User,
     approve: bool,
+    idempotency_key: str | None = None,
+    request_digest: str | None = None,
 ) -> CurriculumImportBatch:
+    if _ensure_idempotency_replay(
+        batch.review_idempotency_key,
+        batch.review_request_digest,
+        idempotency_key,
+        request_digest,
+    ):
+        return batch
     if batch.status is not CurriculumImportStatus.IN_REVIEW:
+        raise ImportLifecycleError("only in-review imports can be reviewed")
+    if batch.reviewed_by_user_id is not None:
         raise ImportLifecycleError("only in-review imports can be reviewed")
     if reviewer.id == batch.submitted_by_user_id:
         raise ImportLifecycleError("importer cannot review their own import")
+    batch.review_idempotency_key = idempotency_key
+    batch.review_request_digest = request_digest
     batch.reviewed_by_user_id = reviewer.id
     batch.reviewed_at = utc_now()
     if not approve:
@@ -512,11 +612,22 @@ def activate_import(
     *,
     batch: CurriculumImportBatch,
     actor: User,
+    idempotency_key: str | None = None,
+    request_digest: str | None = None,
 ) -> CurriculumImportBatch:
+    if _ensure_idempotency_replay(
+        batch.activate_idempotency_key,
+        batch.activate_request_digest,
+        idempotency_key,
+        request_digest,
+    ):
+        return batch
     if batch.status is not CurriculumImportStatus.IN_REVIEW:
         raise ImportLifecycleError("only in-review imports can be activated")
     if batch.reviewed_by_user_id != actor.id or actor.id == batch.submitted_by_user_id:
         raise ImportLifecycleError("a different approving reviewer must activate the import")
+    batch.activate_idempotency_key = idempotency_key
+    batch.activate_request_digest = request_digest
     if batch.profile.status is CurriculumProfileStatus.IN_REVIEW:
         batch.profile.status = CurriculumProfileStatus.ACTIVE
     proposed_rules = batch.summary_json.get("proposed_grade_complexity_rules", {})
@@ -644,7 +755,24 @@ def retirement_impact(profile: CurriculumProfile) -> dict[str, object]:
     return {"profile_id": str(profile.id), "coverage": "curriculum_only", "references": []}
 
 
-def retire_profile(session: Session, *, profile: CurriculumProfile) -> CurriculumProfile:
+def retire_profile(
+    session: Session,
+    *,
+    profile: CurriculumProfile,
+    idempotency_key: str | None = None,
+    request_digest: str | None = None,
+) -> CurriculumProfile:
+    if _ensure_idempotency_replay(
+        profile.retire_idempotency_key,
+        profile.retire_request_digest,
+        idempotency_key,
+        request_digest,
+    ):
+        return profile
+    if profile.status is not CurriculumProfileStatus.ACTIVE:
+        raise ImportLifecycleError("only active profiles can be retired")
+    profile.retire_idempotency_key = idempotency_key
+    profile.retire_request_digest = request_digest
     profile.status = CurriculumProfileStatus.RETIRED
     for objective in profile.objectives:
         objective.status = CurriculumProfileStatus.RETIRED
@@ -670,9 +798,36 @@ def _hash_payload(payload: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def curriculum_request_digest(operation: str, *, target_id: object | None, payload: object) -> str:
+    return _hash_payload(
+        {
+            "operation": operation,
+            "target_id": None if target_id is None else str(target_id),
+            "payload": payload,
+        }
+    )
+
+
+def _ensure_idempotency_replay(
+    stored_key: str | None,
+    stored_digest: str | None,
+    requested_key: str | None,
+    requested_digest: str | None,
+) -> bool:
+    if stored_key is None or requested_key is None or stored_key != requested_key:
+        return False
+    if stored_digest != requested_digest:
+        raise ImportLifecycleError("idempotency key conflict")
+    return True
+
+
 def _batch_change_summary(document: ImportDocument) -> str:
     summaries = sorted({objective.change_summary for objective in document.objectives})
     return "; ".join(summaries)
+
+
+def _proposed_objective_snapshot(document: ImportDocument) -> list[dict[str, object]]:
+    return [objective.model_dump(mode="json") for objective in document.objectives]
 
 
 def _revision_matches(revision: CurriculumObjectiveRevision, objective: ImportObjective) -> bool:

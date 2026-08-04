@@ -160,7 +160,7 @@ def test_latest_alembic_revision_is_the_head() -> None:
     config = Config("apps/api/alembic.ini")
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "0031_operational_evaluation_runs"
+    assert script.get_current_head() == "0032_curriculum_import_review_hardening"
 
 
 def test_import_batch_keeps_row_location_and_lifecycle(session: Session) -> None:
@@ -171,8 +171,24 @@ def test_import_batch_keeps_row_location_and_lifecycle(session: Session) -> None
         baseline_fingerprint="b" * 64,
         status=CurriculumImportStatus.DRAFT,
         submitted_by_user_id=uuid4(),
+        create_idempotency_key="create-curriculum-import",
+        create_request_digest="c" * 64,
+        submit_idempotency_key="submit-curriculum-import",
+        submit_request_digest="d" * 64,
+        review_idempotency_key="review-curriculum-import",
+        review_request_digest="e" * 64,
+        activate_idempotency_key="activate-curriculum-import",
+        activate_request_digest="f" * 64,
         change_summary="Initial curated import",
-        summary_json={"additions": 1},
+        summary_json={
+            "additions": 1,
+            "proposed_objectives": [
+                {
+                    "code": "MATH-G1-NUM-001",
+                    "text": "Use whole numbers in simple situations.",
+                }
+            ],
+        },
     )
     issue = CurriculumImportIssue(
         batch=batch,
@@ -189,7 +205,22 @@ def test_import_batch_keeps_row_location_and_lifecycle(session: Session) -> None
     stored = session.get(CurriculumImportBatch, batch.id)
     assert stored is not None
     assert stored.status is CurriculumImportStatus.DRAFT
+    assert stored.create_idempotency_key == "create-curriculum-import"
+    assert stored.review_request_digest == "e" * 64
+    assert stored.summary_json["proposed_objectives"][0]["code"] == "MATH-G1-NUM-001"
     assert stored.issues[0].code == "unknown_grade"
+
+
+def test_curriculum_profile_keeps_retirement_idempotency_metadata(session: Session) -> None:
+    profile = active_profile(session)
+    profile.retire_idempotency_key = "retire-curriculum-profile"
+    profile.retire_request_digest = "r" * 64
+    session.commit()
+
+    stored = session.get(CurriculumProfile, profile.id)
+    assert stored is not None
+    assert stored.retire_idempotency_key == "retire-curriculum-profile"
+    assert stored.retire_request_digest == "r" * 64
 
 
 def test_k_grade_rejects_scored_question_types(session: Session) -> None:

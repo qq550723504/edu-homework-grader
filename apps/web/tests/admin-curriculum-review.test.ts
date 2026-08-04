@@ -37,13 +37,16 @@ describe('curriculum import review and profile lifecycle', () => {
     vi.stubGlobal('navigateTo', vi.fn())
     vi.stubGlobal('crypto', { randomUUID: vi.fn(() => 'request-key') })
     vi.stubGlobal('confirm', vi.fn(() => true))
-    mocks.fetchCurrentPrincipal.mockResolvedValue({ csrf_token: 'csrf-token' })
+    mocks.fetchCurrentPrincipal.mockResolvedValue({ id: 'reviewer-1', tenant_id: 'tenant-1', csrf_token: 'csrf-token' })
     mocks.fetchCurriculumImport.mockResolvedValue({
       id: 'batch-1',
       status: 'draft',
       profile: { name: '数学', version_label: '2026' },
       issues: [],
       summary: { additions: ['M-1'] },
+      proposed_objectives: [{ code: 'M-1', subject: '数学', domain: '数与代数', text: '理解数的组成' }],
+      submitted_by_user_id: 'submitter-1',
+      reviewed_by_user_id: null,
     })
   })
 
@@ -54,7 +57,7 @@ describe('curriculum import review and profile lifecycle', () => {
 
   it('exposes submit, approve, and activate actions according to the import state', async () => {
     mocks.submitCurriculumImportReview.mockResolvedValue({ status: 'in_review' })
-    mocks.reviewCurriculumImport.mockResolvedValue({ status: 'in_review' })
+    mocks.reviewCurriculumImport.mockResolvedValue({ status: 'in_review', reviewed_by_user_id: 'reviewer-1' })
     mocks.activateCurriculumImport.mockResolvedValue({ status: 'active' })
     const wrapper = mount(CurriculumImportDetail, { props: { batchId: 'batch-1' } })
 
@@ -70,6 +73,52 @@ describe('curriculum import review and profile lifecycle', () => {
     await wrapper.get('[data-testid="activate-curriculum-import"]').trigger('click')
     await flushPromises()
     expect(mocks.activateCurriculumImport).toHaveBeenCalledWith(expect.anything(), 'csrf-token', 'request-key', 'batch-1')
+    expect(wrapper.text()).toContain('理解数的组成')
+    wrapper.unmount()
+  })
+
+  it('hides actions for a non-owner and requires confirmation before activation', async () => {
+    mocks.fetchCurrentPrincipal.mockResolvedValue({ id: 'submitter-1', tenant_id: 'tenant-1', csrf_token: 'csrf-token' })
+    mocks.fetchCurriculumImport.mockResolvedValue({
+      id: 'batch-1',
+      status: 'in_review',
+      profile: { name: '数学', version_label: '2026' },
+      issues: [{ code: 'invalid_text', message: '无效文本', source_path: '$.objectives[0].text', source_row: 4, source_column: 'text' }],
+      summary: {},
+      proposed_objectives: [],
+      submitted_by_user_id: 'submitter-1',
+      reviewed_by_user_id: 'reviewer-1',
+    })
+    const wrapper = mount(CurriculumImportDetail, { props: { batchId: 'batch-1' } })
+
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="approve-curriculum-import"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="activate-curriculum-import"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('invalid_text')
+    expect(wrapper.text()).toContain('第 4 行')
+    wrapper.unmount()
+  })
+
+  it('does not activate when confirmation is dismissed', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => false))
+    mocks.fetchCurriculumImport.mockResolvedValue({
+      id: 'batch-1',
+      status: 'in_review',
+      profile: { name: '数学', version_label: '2026' },
+      issues: [],
+      summary: {},
+      proposed_objectives: [],
+      submitted_by_user_id: 'submitter-1',
+      reviewed_by_user_id: 'reviewer-1',
+    })
+    const wrapper = mount(CurriculumImportDetail, { props: { batchId: 'batch-1' } })
+
+    await flushPromises()
+    await wrapper.get('[data-testid="activate-curriculum-import"]').trigger('click')
+
+    expect(confirm).toHaveBeenCalled()
+    expect(mocks.activateCurriculumImport).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 

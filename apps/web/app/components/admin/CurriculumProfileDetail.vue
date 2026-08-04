@@ -11,7 +11,7 @@
       <p>课程目标：{{ profile.objective_count ?? profile.objectives.length }} 项；年级映射：{{ profile.grade_mappings.length }} 项</p>
 
       <div class="actions">
-        <button class="button secondary" type="button" @click="exportProfile">导出当前目录</button>
+        <button v-if="profile.status === 'active'" class="button secondary" type="button" @click="exportProfile">导出当前目录</button>
         <button v-if="profile.status === 'active'" class="button secondary" data-testid="load-retirement-impact" type="button" @click="loadImpact">评估退休影响</button>
         <button v-if="profile.status === 'active'" class="button secondary" data-testid="retire-curriculum-profile" type="button" :disabled="retiring || !canRetire" @click="retire">退休此目录</button>
       </div>
@@ -54,6 +54,7 @@ const loading = ref(true)
 const retiring = ref(false)
 const canRetire = ref(false)
 const message = ref('')
+const retireRequestKey = crypto.randomUUID()
 
 onMounted(async () => {
   try {
@@ -90,7 +91,7 @@ async function retire(): Promise<void> {
   try {
     const principal = await fetchCurrentPrincipal($fetch)
     if (!principal.csrf_token) throw new Error('当前会话缺少 CSRF token')
-    profile.value = { ...profile.value, ...await retireCurriculumProfile($fetch, principal.csrf_token, crypto.randomUUID(), profile.value.id) }
+    profile.value = { ...profile.value, ...await retireCurriculumProfile($fetch, principal.csrf_token, retireRequestKey, profile.value.id) }
   } catch (error) {
     message.value = typeof error === 'object' && error !== null && (error as { statusCode?: unknown }).statusCode === 409
       ? '目录仍有引用，不能退休。'

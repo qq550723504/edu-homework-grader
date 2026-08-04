@@ -70,8 +70,17 @@ test('two platform administrators import, review, activate, export, and retire a
     await expect(reviewer.page.getByText(objectiveCode)).toBeVisible()
     await reviewer.page.goBack()
     await reviewer.page.getByRole('link', { name: new RegExp(`${profileName} / json / in_review`) }).click()
+    await expect(
+      reviewer.page.getByRole('heading', { name: '拟议课程目标' }).locator('..').getByRole('listitem').filter({
+        hasText: 'Represent small whole numbers with drawings and objects.',
+      }),
+    ).toBeVisible()
     await reviewer.page.getByTestId('approve-curriculum-import').click()
     await expect(reviewer.page.getByText('in_review')).toBeVisible()
+    reviewer.page.once('dialog', dialog => dialog.dismiss())
+    await reviewer.page.getByTestId('activate-curriculum-import').click()
+    await expect(reviewer.page.getByText('in_review')).toBeVisible()
+    reviewer.page.once('dialog', dialog => dialog.accept())
     await reviewer.page.getByTestId('activate-curriculum-import').click()
     await expect(reviewer.page.getByText('active')).toBeVisible()
 
@@ -84,6 +93,7 @@ test('two platform administrators import, review, activate, export, and retire a
     reviewer.page.once('dialog', dialog => dialog.accept())
     await reviewer.page.getByTestId('retire-curriculum-profile').click()
     await expect(reviewer.page.getByText('retired')).toBeVisible()
+    await expect(reviewer.page.getByRole('button', { name: '导出当前目录' })).not.toBeVisible()
   } finally {
     await Promise.all([submitter.context.close(), reviewer.context.close()])
   }

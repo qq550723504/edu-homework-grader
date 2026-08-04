@@ -1,3 +1,4 @@
+from copy import deepcopy
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -595,36 +596,68 @@ def test_import_lifecycle_requires_a_different_admin_to_review_and_activate(
             "format": "json",
             "document": import_document(),
             "catalogue_fingerprint": dry_run.json()["catalogue_fingerprint"],
+            "normalized_digest": dry_run.json()["normalized_digest"],
         },
-        headers=headers("admin-token"),
+        headers=headers("admin-token") | {"Idempotency-Key": "list-detail-create"},
     )
 
     assert created.status_code == 201
     batch_id = created.json()["id"]
     submitted = curriculum_context.client.post(
         f"/v1/admin/curriculum/imports/{batch_id}/submit-review",
-        headers=headers("admin-token"),
+        headers=headers("admin-token") | {"Idempotency-Key": "submit-lifecycle"},
     )
     assert submitted.status_code == 200
     own_review = curriculum_context.client.post(
         f"/v1/admin/curriculum/imports/{batch_id}/review",
         json={"approve": True},
-        headers=headers("admin-token"),
+        headers=headers("admin-token") | {"Idempotency-Key": "own-review-lifecycle"},
     )
     assert own_review.status_code == 409
     reviewed = curriculum_context.client.post(
         f"/v1/admin/curriculum/imports/{batch_id}/review",
         json={"approve": True},
-        headers=headers("reviewer-token"),
+        headers=headers("reviewer-token") | {"Idempotency-Key": "review-lifecycle"},
     )
     assert reviewed.status_code == 200
+    review_audit_count = len(
+        curriculum_context.session.scalars(
+            select(AuditLog).where(AuditLog.event_type == "curriculum.import_reviewed")
+        ).all()
+    )
+    replayed_review = curriculum_context.client.post(
+        f"/v1/admin/curriculum/imports/{batch_id}/review",
+        json={"approve": True},
+        headers=headers("reviewer-token") | {"Idempotency-Key": "review-lifecycle"},
+    )
+    assert replayed_review.status_code == 200
+    assert (
+        len(
+            curriculum_context.session.scalars(
+                select(AuditLog).where(AuditLog.event_type == "curriculum.import_reviewed")
+            ).all()
+        )
+        == review_audit_count
+    )
+    conflicting_review = curriculum_context.client.post(
+        f"/v1/admin/curriculum/imports/{batch_id}/review",
+        json={"approve": False},
+        headers=headers("reviewer-token") | {"Idempotency-Key": "review-lifecycle"},
+    )
+    assert conflicting_review.status_code == 409
     activated = curriculum_context.client.post(
         f"/v1/admin/curriculum/imports/{batch_id}/activate",
-        headers=headers("reviewer-token"),
+        headers=headers("reviewer-token") | {"Idempotency-Key": "activate-lifecycle"},
     )
 
     assert activated.status_code == 200
     assert activated.json()["status"] == "active"
+    replayed_activation = curriculum_context.client.post(
+        f"/v1/admin/curriculum/imports/{batch_id}/activate",
+        headers=headers("reviewer-token") | {"Idempotency-Key": "activate-lifecycle"},
+    )
+    assert replayed_activation.status_code == 200
+    assert replayed_activation.json()["id"] == batch_id
 
 
 def test_curriculum_admin_can_list_profiles_and_import_batch_details(
@@ -641,8 +674,9 @@ def test_curriculum_admin_can_list_profiles_and_import_batch_details(
             "format": "json",
             "document": import_document(),
             "catalogue_fingerprint": dry_run.json()["catalogue_fingerprint"],
+            "normalized_digest": dry_run.json()["normalized_digest"],
         },
-        headers=headers("admin-token"),
+        headers=headers("admin-token") | {"Idempotency-Key": "detail-list-create"},
     )
     assert created.status_code == 201
     batch_id = UUID(created.json()["id"])
@@ -688,6 +722,9 @@ def test_curriculum_admin_can_list_profiles_and_import_batch_details(
     assert batches.json()["items"][0]["id"] == str(batch_id)
     assert detail.status_code == 200
     assert detail.json()["profile"]["code"] == "example-math-2026"
+    assert detail.json()["proposed_objectives"][0]["text"] == (
+        "Represent small whole numbers with drawings and objects."
+    )
     assert detail.json()["issues"] == [
         {
             "source_path": "/objectives/0/text",
@@ -702,6 +739,65 @@ def test_curriculum_admin_can_list_profiles_and_import_batch_details(
     assert profile_detail.json()["code"] == "example-math-2026"
     assert profile_detail.json()["objectives"][0]["code"] == "EX-MATH-G1-NUM-001"
     assert teacher_profiles.status_code == 404
+
+
+def test_create_import_rejects_document_changed_since_dry_run(
+    curriculum_context: CurriculumContext,
+) -> None:
+    dry_run = curriculum_context.client.post(
+        "/v1/admin/curriculum/imports/dry-run",
+        json={"format": "json", "document": import_document()},
+        headers=headers("admin-token"),
+    )
+    request = {
+        "format": "json",
+        "document": import_document(),
+        "catalogue_fingerprint": dry_run.json()["catalogue_fingerprint"],
+        "normalized_digest": dry_run.json()["normalized_digest"],
+    }
+    created = curriculum_context.client.post(
+        "/v1/admin/curriculum/imports",
+        json=request,
+        headers=headers("admin-token") | {"Idempotency-Key": "changed-after-dry-run"},
+    )
+    assert created.status_code == 201
+
+    changed_document = deepcopy(import_document())
+    changed_document["objectives"][0]["text"] = "Changed after dry-run."
+    changed_request = {**request, "document": changed_document}
+    conflicting_retry = curriculum_context.client.post(
+        "/v1/admin/curriculum/imports",
+        json=changed_request,
+        headers=headers("admin-token") | {"Idempotency-Key": "changed-after-dry-run"},
+    )
+
+    assert conflicting_retry.status_code == 409
+    assert conflicting_retry.json()["detail"] == "idempotency key conflict"
+
+
+def test_create_import_rejects_changed_document_with_original_dry_run_digest(
+    curriculum_context: CurriculumContext,
+) -> None:
+    dry_run = curriculum_context.client.post(
+        "/v1/admin/curriculum/imports/dry-run",
+        json={"format": "json", "document": import_document()},
+        headers=headers("admin-token"),
+    )
+    changed_document = deepcopy(import_document())
+    changed_document["objectives"][0]["text"] = "Changed after dry-run."
+    response = curriculum_context.client.post(
+        "/v1/admin/curriculum/imports",
+        json={
+            "format": "json",
+            "document": changed_document,
+            "catalogue_fingerprint": dry_run.json()["catalogue_fingerprint"],
+            "normalized_digest": dry_run.json()["normalized_digest"],
+        },
+        headers=headers("admin-token") | {"Idempotency-Key": "changed-document-new-key"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "import document changed after dry-run"
 
 
 def test_admin_can_read_import_schema_and_export_an_active_profile(
@@ -831,7 +927,7 @@ def test_retirement_impact_is_explicit_before_retiring_a_profile(
     )
     retired = curriculum_context.client.post(
         f"/v1/admin/curriculum/profiles/{profile_id}/retire",
-        headers=headers("admin-token"),
+        headers={**headers("admin-token"), "Idempotency-Key": "retire-profile"},
     )
 
     assert impact.status_code == 200

@@ -37,14 +37,15 @@ describe('curriculum administration API', () => {
     expect(request).toHaveBeenNthCalledWith(4, '/api/core/v1/admin/curriculum/import-schema')
   })
 
-  it('sends the dry-run fingerprint with CSRF and idempotency protection when creating a draft', async () => {
+  it('keeps dry-run stateless and protects draft creation with a stable key and digest', async () => {
     const request = vi.fn().mockResolvedValue({ id: 'batch-1' })
     const body = { format: 'json', document: { profile: {}, objectives: [] } }
 
-    await dryRunCurriculumImport(request, 'csrf-token', 'dry-run-key', body)
+    await dryRunCurriculumImport(request, 'csrf-token', body)
     await createCurriculumImport(request, 'csrf-token', 'create-key', {
       ...body,
       catalogue_fingerprint: 'a'.repeat(64),
+      normalized_digest: 'b'.repeat(64),
     })
 
     expect(request).toHaveBeenNthCalledWith(
@@ -52,7 +53,7 @@ describe('curriculum administration API', () => {
       '/api/core/v1/admin/curriculum/imports/dry-run',
       {
         method: 'POST',
-        headers: { 'X-CSRF-Token': 'csrf-token', 'Idempotency-Key': 'dry-run-key' },
+        headers: { 'X-CSRF-Token': 'csrf-token' },
         body,
       },
     )
@@ -62,7 +63,7 @@ describe('curriculum administration API', () => {
       {
         method: 'POST',
         headers: { 'X-CSRF-Token': 'csrf-token', 'Idempotency-Key': 'create-key' },
-        body: { ...body, catalogue_fingerprint: 'a'.repeat(64) },
+        body: { ...body, catalogue_fingerprint: 'a'.repeat(64), normalized_digest: 'b'.repeat(64) },
       },
     )
   })

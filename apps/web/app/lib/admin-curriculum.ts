@@ -50,6 +50,7 @@ export interface CurriculumImportIssue {
 
 export interface CurriculumImportDetail extends CurriculumImportSummary {
   issues: CurriculumImportIssue[]
+  proposed_objectives: Array<Record<string, unknown>>
 }
 
 export interface CurriculumPageQuery {
@@ -190,12 +191,11 @@ export function retireCurriculumProfile(
 export function dryRunCurriculumImport(
   request: Request,
   csrfToken: string,
-  idempotencyKey: string,
   body: Record<string, unknown>,
 ): Promise<CurriculumImportAnalysis> {
   return request('/api/core/v1/admin/curriculum/imports/dry-run', {
     method: 'POST',
-    headers: { 'X-CSRF-Token': csrfToken, 'Idempotency-Key': idempotencyKey },
+    headers: { 'X-CSRF-Token': csrfToken },
     body,
   })
 }
