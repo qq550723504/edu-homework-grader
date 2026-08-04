@@ -15,6 +15,7 @@ from edu_grader_api.models import (
     CurriculumActivityType,
     CurriculumGradeMapping,
     CurriculumImportBatch,
+    CurriculumImportIssue,
     CurriculumObjective,
     CurriculumObjectiveRevision,
     CurriculumProfile,
@@ -624,6 +625,83 @@ def test_import_lifecycle_requires_a_different_admin_to_review_and_activate(
 
     assert activated.status_code == 200
     assert activated.json()["status"] == "active"
+
+
+def test_curriculum_admin_can_list_profiles_and_import_batch_details(
+    curriculum_context: CurriculumContext,
+) -> None:
+    dry_run = curriculum_context.client.post(
+        "/v1/admin/curriculum/imports/dry-run",
+        json={"format": "json", "document": import_document()},
+        headers=headers("admin-token"),
+    )
+    created = curriculum_context.client.post(
+        "/v1/admin/curriculum/imports",
+        json={
+            "format": "json",
+            "document": import_document(),
+            "catalogue_fingerprint": dry_run.json()["catalogue_fingerprint"],
+        },
+        headers=headers("admin-token"),
+    )
+    assert created.status_code == 201
+    batch_id = UUID(created.json()["id"])
+    batch = curriculum_context.session.get(CurriculumImportBatch, batch_id)
+    assert batch is not None
+    curriculum_context.session.add(
+        CurriculumImportIssue(
+            batch=batch,
+            source_path="/objectives/0/text",
+            code="objective_text_invalid",
+            category="objective",
+            message="objective text is invalid",
+        )
+    )
+    curriculum_context.session.commit()
+
+    profiles = curriculum_context.client.get(
+        "/v1/admin/curriculum/profiles?status=active&limit=10&offset=0",
+        headers=headers("admin-token"),
+    )
+    batches = curriculum_context.client.get(
+        "/v1/admin/curriculum/imports?status=draft&limit=10&offset=0",
+        headers=headers("admin-token"),
+    )
+    detail = curriculum_context.client.get(
+        f"/v1/admin/curriculum/imports/{batch_id}",
+        headers=headers("admin-token"),
+    )
+    profile_detail = curriculum_context.client.get(
+        "/v1/admin/curriculum/profiles/example-math-2026",
+        headers=headers("admin-token"),
+    )
+    teacher_profiles = curriculum_context.client.get(
+        "/v1/admin/curriculum/profiles",
+        headers=headers("teacher-token"),
+    )
+
+    assert profiles.status_code == 200
+    assert profiles.json()["total"] == 1
+    assert profiles.json()["items"][0]["code"] == "cn-compulsory-2022"
+    assert batches.status_code == 200
+    assert batches.json()["total"] == 1
+    assert batches.json()["items"][0]["id"] == str(batch_id)
+    assert detail.status_code == 200
+    assert detail.json()["profile"]["code"] == "example-math-2026"
+    assert detail.json()["issues"] == [
+        {
+            "source_path": "/objectives/0/text",
+            "source_row": None,
+            "source_column": None,
+            "code": "objective_text_invalid",
+            "category": "objective",
+            "message": "objective text is invalid",
+        }
+    ]
+    assert profile_detail.status_code == 200
+    assert profile_detail.json()["code"] == "example-math-2026"
+    assert profile_detail.json()["objectives"][0]["code"] == "EX-MATH-G1-NUM-001"
+    assert teacher_profiles.status_code == 404
 
 
 def test_admin_can_read_import_schema_and_export_an_active_profile(

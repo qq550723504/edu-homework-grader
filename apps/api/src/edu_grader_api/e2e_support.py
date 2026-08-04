@@ -10,6 +10,7 @@ from uuid import UUID
 from edu_generator.contracts import GenerationPlanItem
 from edu_generator.prompt_templates import resolve_prompt_template
 from edu_generator.providers import FakeGenerationProvider
+from edu_grader.mathjson import normalize_mathjson
 from jwt.exceptions import InvalidTokenError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -139,7 +140,12 @@ class DeterministicE2EGraderClient:
         pass
 
     def normalize_math_answer(self, answer_json: dict[str, object]) -> dict[str, object]:
-        return {"kind": "symbol", "value": "x_plus_1"}
+        variables = answer_json.get("variables", [])
+        if not isinstance(variables, list) or not all(
+            isinstance(variable, str) for variable in variables
+        ):
+            raise ValueError("E2E MathJSON variables must be a list of strings")
+        return normalize_mathjson(answer_json.get("mathjson"), variables)
 
     def semantic_similarity(self, query: str, comparisons: list[str]) -> SemanticSimilarityResult:
         return SemanticSimilarityResult(

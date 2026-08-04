@@ -3,7 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import String, cast, select
+from sqlalchemy import String, cast, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -15,6 +15,8 @@ from ..models import (
     CurriculumActivityType,
     CurriculumGradeMapping,
     CurriculumImportBatch,
+    CurriculumImportIssue,
+    CurriculumImportStatus,
     CurriculumObjective,
     CurriculumObjectiveRevision,
     CurriculumProfile,
@@ -255,6 +257,83 @@ def list_objectives_route(
             }
             for objective, mapping, revision in rows
         ]
+    }
+
+
+@admin_router.get("/profiles")
+def list_admin_profiles_route(
+    _: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
+    session: Annotated[Session, Depends(get_session)],
+    profile_status: CurriculumProfileStatus | None = Query(default=None, alias="status"),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, object]:
+    filters = []
+    if profile_status is not None:
+        filters.append(CurriculumProfile.status == profile_status)
+    total = session.scalar(select(func.count(CurriculumProfile.id)).where(*filters)) or 0
+    objective_count = (
+        select(func.count(CurriculumObjective.id))
+        .where(CurriculumObjective.profile_id == CurriculumProfile.id)
+        .correlate(CurriculumProfile)
+        .scalar_subquery()
+    )
+    rows = session.execute(
+        select(CurriculumProfile, objective_count.label("objective_count"))
+        .where(*filters)
+        .order_by(CurriculumProfile.code, CurriculumProfile.id)
+        .offset(offset)
+        .limit(limit)
+    )
+    return {
+        "items": [
+            _admin_profile_payload(profile, objective_count_value)
+            for profile, objective_count_value in rows
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@admin_router.get("/profiles/{profile_code}")
+def get_admin_profile_route(
+    profile_code: str,
+    _: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    profile = session.scalar(
+        select(CurriculumProfile).where(CurriculumProfile.code == profile_code)
+    )
+    if profile is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
+    return _admin_profile_payload(profile, len(profile.objectives)) | {
+        "grade_mappings": [
+            {
+                "id": str(mapping.id),
+                "internal_level": mapping.internal_level,
+                "external_label": mapping.external_label,
+                "position": mapping.position,
+                "note": mapping.note,
+                "complexity_rules": mapping.complexity_rules_json,
+            }
+            for mapping in sorted(
+                profile.grade_mappings, key=lambda item: (item.position, str(item.id))
+            )
+        ],
+        "objectives": [
+            {
+                "id": str(objective.id),
+                "code": objective.code,
+                "subject": objective.subject,
+                "domain": objective.domain,
+                "unit": objective.unit,
+                "knowledge_point": objective.knowledge_point,
+                "status": objective.status.value,
+                "grade_mapping_id": str(objective.grade_mapping_id),
+            }
+            for objective in sorted(profile.objectives, key=lambda item: item.code)
+        ],
     }
 
 
@@ -580,6 +659,47 @@ def create_prerequisite_route(
     return {"id": str(prerequisite.id), "relation_type": prerequisite.relation_type}
 
 
+@admin_router.get("/imports")
+def list_curriculum_imports_route(
+    _: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
+    session: Annotated[Session, Depends(get_session)],
+    import_status: CurriculumImportStatus | None = Query(default=None, alias="status"),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, object]:
+    filters = []
+    if import_status is not None:
+        filters.append(CurriculumImportBatch.status == import_status)
+    total = session.scalar(select(func.count(CurriculumImportBatch.id)).where(*filters)) or 0
+    batches = session.scalars(
+        select(CurriculumImportBatch)
+        .where(*filters)
+        .order_by(CurriculumImportBatch.created_at.desc(), CurriculumImportBatch.id)
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    return {
+        "items": [_import_batch_payload(batch) for batch in batches],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@admin_router.get("/imports/{batch_id}")
+def get_curriculum_import_route(
+    batch_id: UUID,
+    _: Annotated[CurrentPrincipal, Depends(require_curriculum_admin())],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, object]:
+    batch = session.get(CurriculumImportBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
+    return _import_batch_payload(batch) | {
+        "issues": [_import_issue_payload(issue) for issue in batch.issues]
+    }
+
+
 @admin_router.post("/imports/dry-run")
 def dry_run_curriculum_import_route(
     body: CurriculumImportRequest,
@@ -838,9 +958,37 @@ def _import_batch_payload(batch: CurriculumImportBatch) -> dict[str, object]:
         "id": str(batch.id),
         "status": batch.status.value,
         "profile_id": str(batch.profile_id),
+        "profile": _profile_payload(batch.profile),
+        "input_format": batch.input_format,
+        "content_digest": batch.content_digest,
+        "baseline_fingerprint": batch.baseline_fingerprint,
+        "change_summary": batch.change_summary,
         "summary": batch.summary_json,
+        "submitted_by_user_id": str(batch.submitted_by_user_id),
+        "created_at": batch.created_at.isoformat(),
         "reviewed_at": batch.reviewed_at.isoformat() if batch.reviewed_at else None,
+        "reviewed_by_user_id": str(batch.reviewed_by_user_id)
+        if batch.reviewed_by_user_id
+        else None,
         "activated_at": batch.activated_at.isoformat() if batch.activated_at else None,
+        "activated_by_user_id": str(batch.activated_by_user_id)
+        if batch.activated_by_user_id
+        else None,
+    }
+
+
+def _admin_profile_payload(profile: CurriculumProfile, objective_count: int) -> dict[str, object]:
+    return _profile_payload(profile) | {"objective_count": objective_count}
+
+
+def _import_issue_payload(issue: CurriculumImportIssue) -> dict[str, object]:
+    return {
+        "source_path": issue.source_path,
+        "source_row": issue.source_row,
+        "source_column": issue.source_column,
+        "code": issue.code,
+        "category": issue.category,
+        "message": issue.message,
     }
 
 

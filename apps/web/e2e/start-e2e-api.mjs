@@ -36,6 +36,7 @@ const supervisorEnvironment = {
   OIDC_SCHOOL_ID_CLAIM: 'school_id',
   OIDC_TENANT_SLUG: 'pilot',
   GENERATION_GOVERNANCE_ADMIN_SUBJECTS: 'e2e-platform-admin-a,e2e-platform-admin-b',
+  CURRICULUM_ADMIN_SUBJECTS: 'e2e-platform-admin-a,e2e-platform-admin-b',
   EVALUATION_EVIDENCE_HMAC_KEY: E2E_EVALUATION_EVIDENCE_HMAC_KEY,
   OPENAI_API_KEY: 'e2e-not-a-real-key',
   PYTHONPATH: pythonPath,
