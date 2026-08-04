@@ -720,6 +720,8 @@ def test_curriculum_admin_can_list_profiles_and_import_batch_details(
     assert batches.status_code == 200
     assert batches.json()["total"] == 1
     assert batches.json()["items"][0]["id"] == str(batch_id)
+    assert "proposed_objectives" not in batches.json()["items"][0]
+    assert "proposed_objectives" not in batches.json()["items"][0]["summary"]
     assert detail.status_code == 200
     assert detail.json()["profile"]["code"] == "example-math-2026"
     assert detail.json()["proposed_objectives"][0]["text"] == (
@@ -798,6 +800,99 @@ def test_create_import_rejects_changed_document_with_original_dry_run_digest(
 
     assert response.status_code == 409
     assert response.json()["detail"] == "import document changed after dry-run"
+
+
+def test_create_import_rejects_a_changed_catalogue_fingerprint(
+    curriculum_context: CurriculumContext,
+) -> None:
+    document = import_document()
+    document["profile"]["code"] = "cn-compulsory-2022"
+    dry_run = curriculum_context.client.post(
+        "/v1/admin/curriculum/imports/dry-run",
+        json={"format": "json", "document": document},
+        headers=headers("admin-token"),
+    )
+    profile = curriculum_context.session.scalar(
+        select(CurriculumProfile).where(CurriculumProfile.code == "cn-compulsory-2022")
+    )
+    assert profile is not None
+    profile.version_label = "changed-after-dry-run"
+    curriculum_context.session.commit()
+
+    response = curriculum_context.client.post(
+        "/v1/admin/curriculum/imports",
+        json={
+            "format": "json",
+            "document": document,
+            "catalogue_fingerprint": dry_run.json()["catalogue_fingerprint"],
+            "normalized_digest": dry_run.json()["normalized_digest"],
+        },
+        headers=headers("admin-token") | {"Idempotency-Key": "changed-catalogue-key"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "catalogue changed after dry-run"
+
+
+def test_duplicate_content_does_not_append_a_second_create_audit_event(
+    curriculum_context: CurriculumContext,
+) -> None:
+    dry_run = curriculum_context.client.post(
+        "/v1/admin/curriculum/imports/dry-run",
+        json={"format": "json", "document": import_document()},
+        headers=headers("admin-token"),
+    )
+    request = {
+        "format": "json",
+        "document": import_document(),
+        "catalogue_fingerprint": dry_run.json()["catalogue_fingerprint"],
+        "normalized_digest": dry_run.json()["normalized_digest"],
+    }
+    first = curriculum_context.client.post(
+        "/v1/admin/curriculum/imports",
+        json=request,
+        headers=headers("admin-token") | {"Idempotency-Key": "duplicate-create-a"},
+    )
+    first_count = len(
+        curriculum_context.session.scalars(
+            select(AuditLog).where(AuditLog.event_type == "curriculum.import_created")
+        ).all()
+    )
+    second = curriculum_context.client.post(
+        "/v1/admin/curriculum/imports",
+        json=request,
+        headers=headers("admin-token") | {"Idempotency-Key": "duplicate-create-b"},
+    )
+    second_count = len(
+        curriculum_context.session.scalars(
+            select(AuditLog).where(AuditLog.event_type == "curriculum.import_created")
+        ).all()
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert second.json()["id"] == first.json()["id"]
+    assert second_count == first_count
+
+
+def test_retiring_a_non_active_profile_returns_a_conflict(
+    curriculum_context: CurriculumContext,
+) -> None:
+    profile_id = curriculum_context.client.get(
+        "/v1/curriculum-profiles", headers=headers("admin-token")
+    ).json()["items"][0]["id"]
+    retired = curriculum_context.client.post(
+        f"/v1/admin/curriculum/profiles/{profile_id}/retire",
+        headers=headers("admin-token") | {"Idempotency-Key": "retire-non-active-a"},
+    )
+    conflicting_retry = curriculum_context.client.post(
+        f"/v1/admin/curriculum/profiles/{profile_id}/retire",
+        headers=headers("admin-token") | {"Idempotency-Key": "retire-non-active-b"},
+    )
+
+    assert retired.status_code == 200
+    assert conflicting_retry.status_code == 409
+    assert conflicting_retry.json()["detail"] == "only active profiles can be retired"
 
 
 def test_admin_can_read_import_schema_and_export_an_active_profile(

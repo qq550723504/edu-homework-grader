@@ -20,6 +20,7 @@ from edu_grader_api.models import (
 )
 from edu_grader_api.services.curriculum_imports import (
     ImportDocument,
+    ImportLifecycleError,
     StaleImportBaselineError,
     activate_import,
     analyse_import,
@@ -316,6 +317,33 @@ def test_analysis_classifies_additions_updates_and_unchanged_objectives(
     assert changed.unchanged == []
 
 
+def test_analysis_classifies_objective_metadata_changes_as_updates(session: Session) -> None:
+    actor = admin_user(session)
+    initial_document = ImportDocument.model_validate(MINIMAL_DOCUMENT)
+    apply_import(
+        session,
+        document=initial_document,
+        analysis=analyse_import(session, initial_document),
+        actor=actor,
+    )
+    profile = session.scalar(select(CurriculumProfile))
+    objective = session.scalar(select(CurriculumObjective))
+    active_revision = session.scalar(select(CurriculumObjectiveRevision))
+    assert profile is not None and objective is not None and active_revision is not None
+    profile.status = CurriculumProfileStatus.ACTIVE
+    objective.status = CurriculumProfileStatus.ACTIVE
+    active_revision.status = CurriculumRevisionStatus.ACTIVE
+    session.flush()
+
+    changed_data = deepcopy(MINIMAL_DOCUMENT)
+    changed_data["objectives"][0]["subject"] = "arithmetic"
+    changed = analyse_import(session, ImportDocument.model_validate(changed_data))
+
+    assert changed.additions == []
+    assert changed.updates == ["EX-MATH-G1-NUM-001"]
+    assert changed.unchanged == []
+
+
 def test_apply_import_is_idempotent_for_the_same_normalized_document(session: Session) -> None:
     document = ImportDocument.model_validate(MINIMAL_DOCUMENT)
     actor = admin_user(session)
@@ -439,6 +467,7 @@ def test_retire_profile_replays_matching_key(session: Session) -> None:
     )
     profile = batch.profile
     profile.status = CurriculumProfileStatus.ACTIVE
+    batch.status = CurriculumImportStatus.ACTIVE
     session.flush()
 
     retired = retire_profile(
@@ -456,6 +485,36 @@ def test_retire_profile_replays_matching_key(session: Session) -> None:
         ).id
         == retired.id
     )
+
+
+def test_retire_profile_rejects_profiles_with_pending_imports(session: Session) -> None:
+    actor = admin_user(session)
+    initial_document = ImportDocument.model_validate(MINIMAL_DOCUMENT)
+    apply_import(
+        session,
+        document=initial_document,
+        analysis=analyse_import(session, initial_document),
+        actor=actor,
+    )
+    profile = session.scalar(select(CurriculumProfile))
+    assert profile is not None
+    profile.status = CurriculumProfileStatus.ACTIVE
+    session.flush()
+
+    changed_data = deepcopy(MINIMAL_DOCUMENT)
+    changed_data["objectives"][0]["text"] = "A pending update."
+    changed_document = ImportDocument.model_validate(changed_data)
+    apply_import(
+        session,
+        document=changed_document,
+        analysis=analyse_import(session, changed_document),
+        actor=actor,
+    )
+
+    with pytest.raises(ImportLifecycleError, match="profile has pending imports"):
+        retire_profile(
+            session, profile=profile, idempotency_key="pending-retire", request_digest="p" * 64
+        )
 
 
 def test_changed_active_objective_creates_a_new_draft_revision(session: Session) -> None:

@@ -186,8 +186,13 @@ def analyse_import(session: Session, document: ImportDocument) -> ImportAnalysis
                 )
                 .order_by(CurriculumObjectiveRevision.revision_number.desc())
             )
-            if active_revision is not None and _revision_matches(
-                active_revision, imported_objective
+            if (
+                active_revision is not None
+                and _revision_matches(active_revision, imported_objective)
+                and existing_objective.grade_mapping.internal_level
+                == imported_objective.grade_level
+                and existing_objective.subject == imported_objective.subject
+                and existing_objective.domain == imported_objective.domain
             ):
                 unchanged.append(imported_objective.code)
             else:
@@ -259,6 +264,7 @@ def apply_import(
     idempotency_key: str | None = None,
     request_digest: str | None = None,
     expected_normalized_digest: str | None = None,
+    expected_catalogue_fingerprint: str | None = None,
 ) -> CurriculumImportBatch:
     if idempotency_key is not None and request_digest is None:
         raise ImportValidationError("idempotency request digest is required")
@@ -287,14 +293,11 @@ def apply_import(
         and expected_normalized_digest != analysis.normalized_digest
     ):
         raise StaleImportBaselineError("import document changed after dry-run")
-
     profile = session.scalar(
         select(CurriculumProfile)
         .where(CurriculumProfile.code == document.profile.code)
         .with_for_update()
     )
-    if catalogue_fingerprint(session, document.profile.code) != analysis.catalogue_fingerprint:
-        raise StaleImportBaselineError("catalogue changed after dry-run")
     if profile is not None:
         duplicate = session.scalar(
             select(CurriculumImportBatch).where(
@@ -303,7 +306,17 @@ def apply_import(
             )
         )
         if duplicate is not None:
-            return duplicate
+            current_fingerprint = catalogue_fingerprint(session, document.profile.code)
+            if idempotency_key is not None or current_fingerprint == analysis.catalogue_fingerprint:
+                return duplicate
+    if (
+        expected_catalogue_fingerprint is not None
+        and expected_catalogue_fingerprint != analysis.catalogue_fingerprint
+    ):
+        raise StaleImportBaselineError("catalogue changed after dry-run")
+    if catalogue_fingerprint(session, document.profile.code) != analysis.catalogue_fingerprint:
+        raise StaleImportBaselineError("catalogue changed after dry-run")
+    if profile is not None:
         return _apply_profile_update(
             session,
             profile=profile,
@@ -771,6 +784,18 @@ def retire_profile(
         return profile
     if profile.status is not CurriculumProfileStatus.ACTIVE:
         raise ImportLifecycleError("only active profiles can be retired")
+    pending_import = session.scalar(
+        select(CurriculumImportBatch.id)
+        .where(
+            CurriculumImportBatch.profile_id == profile.id,
+            CurriculumImportBatch.status.in_(
+                [CurriculumImportStatus.DRAFT, CurriculumImportStatus.IN_REVIEW]
+            ),
+        )
+        .limit(1)
+    )
+    if pending_import is not None:
+        raise ImportLifecycleError("profile has pending imports")
     profile.retire_idempotency_key = idempotency_key
     profile.retire_request_digest = request_digest
     profile.status = CurriculumProfileStatus.RETIRED
