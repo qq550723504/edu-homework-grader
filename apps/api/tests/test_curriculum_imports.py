@@ -11,6 +11,7 @@ from edu_grader_api.models import (
     CurriculumImportStatus,
     CurriculumObjective,
     CurriculumObjectiveRevision,
+    CurriculumPrerequisite,
     CurriculumProfile,
     CurriculumProfileStatus,
     CurriculumRevisionStatus,
@@ -557,6 +558,110 @@ def test_changed_active_objective_creates_a_new_draft_revision(session: Session)
     ]
     assert revisions[1].import_batch_id == batch.id
     assert revisions[1].revision_number == 2
+
+
+def test_metadata_updates_are_persisted_only_on_activation(session: Session) -> None:
+    actor = admin_user(session)
+    initial_document = ImportDocument.model_validate(MINIMAL_DOCUMENT)
+    apply_import(
+        session,
+        document=initial_document,
+        analysis=analyse_import(session, initial_document),
+        actor=actor,
+    )
+    profile = session.scalar(select(CurriculumProfile))
+    objective = session.scalar(select(CurriculumObjective))
+    active_revision = session.scalar(select(CurriculumObjectiveRevision))
+    assert profile is not None and objective is not None and active_revision is not None
+    profile.status = CurriculumProfileStatus.ACTIVE
+    objective.status = CurriculumProfileStatus.ACTIVE
+    active_revision.status = CurriculumRevisionStatus.ACTIVE
+    session.flush()
+
+    changed_data = deepcopy(MINIMAL_DOCUMENT)
+    changed_data["grade_mappings"].append(
+        {"internal_level": "G2", "external_label": "Grade 2", "position": 2}
+    )
+    changed_data["objectives"][0]["grade_level"] = "G2"
+    changed_data["objectives"][0]["subject"] = "english"
+    changed_data["objectives"][0]["allowed_question_types"] = ["E1"]
+    changed_document = ImportDocument.model_validate(changed_data)
+    batch = apply_import(
+        session,
+        document=changed_document,
+        analysis=analyse_import(session, changed_document),
+        actor=actor,
+    )
+
+    assert objective.subject == "mathematics"
+    assert objective.grade_mapping.internal_level == "G1"
+    reviewer = reviewer_user(session, actor)
+    submit_import_for_review(session, batch=batch)
+    review_import(session, batch=batch, reviewer=reviewer, approve=True)
+    activate_import(session, batch=batch, actor=reviewer)
+
+    session.refresh(objective)
+    assert objective.subject == "english"
+    assert objective.grade_mapping.internal_level == "G2"
+
+
+def test_prerequisite_updates_remain_pending_until_activation(session: Session) -> None:
+    actor = admin_user(session)
+    initial_data = deepcopy(MINIMAL_DOCUMENT)
+    initial_data["objectives"].append(
+        {
+            **initial_data["objectives"][0],
+            "code": "EX-MATH-G1-NUM-002",
+            "text": "Compare two small whole numbers.",
+        }
+    )
+    initial_document = ImportDocument.model_validate(initial_data)
+    apply_import(
+        session,
+        document=initial_document,
+        analysis=analyse_import(session, initial_document),
+        actor=actor,
+    )
+    profile = session.scalar(select(CurriculumProfile))
+    objectives = session.scalars(select(CurriculumObjective)).all()
+    revisions = session.scalars(select(CurriculumObjectiveRevision)).all()
+    assert profile is not None and len(objectives) == 2 and len(revisions) == 2
+    profile.status = CurriculumProfileStatus.ACTIVE
+    for objective in objectives:
+        objective.status = CurriculumProfileStatus.ACTIVE
+    for revision in revisions:
+        revision.status = CurriculumRevisionStatus.ACTIVE
+    session.flush()
+
+    changed_data = deepcopy(initial_data)
+    changed_data["prerequisites"] = [
+        {
+            "objective_code": "EX-MATH-G1-NUM-001",
+            "prerequisite_code": "EX-MATH-G1-NUM-002",
+        }
+    ]
+    changed_document = ImportDocument.model_validate(changed_data)
+    batch = apply_import(
+        session,
+        document=changed_document,
+        analysis=analyse_import(session, changed_document),
+        actor=actor,
+    )
+
+    assert session.scalars(select(CurriculumPrerequisite)).all() == []
+    assert batch.summary_json["proposed_prerequisites"] == [
+        {
+            "objective_code": "EX-MATH-G1-NUM-001",
+            "prerequisite_code": "EX-MATH-G1-NUM-002",
+        }
+    ]
+    reviewer = reviewer_user(session, actor)
+    submit_import_for_review(session, batch=batch)
+    review_import(session, batch=batch, reviewer=reviewer, approve=True)
+    assert session.scalars(select(CurriculumPrerequisite)).all() == []
+    activate_import(session, batch=batch, actor=reviewer)
+
+    assert len(session.scalars(select(CurriculumPrerequisite)).all()) == 1
 
 
 def test_rejected_import_keeps_active_grade_complexity_rules_unchanged(session: Session) -> None:

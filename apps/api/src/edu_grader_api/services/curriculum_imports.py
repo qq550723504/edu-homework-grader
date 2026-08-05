@@ -167,30 +167,41 @@ def analyse_import(session: Session, document: ImportDocument) -> ImportAnalysis
     if profile is None:
         additions = [objective.code for objective in document.objectives]
     else:
-        objectives = {
-            objective.code: objective
-            for objective in session.scalars(
-                select(CurriculumObjective).where(CurriculumObjective.profile_id == profile.id)
+        objective_rows = session.execute(
+            select(CurriculumObjective, CurriculumGradeMapping)
+            .join(
+                CurriculumGradeMapping,
+                CurriculumGradeMapping.id == CurriculumObjective.grade_mapping_id,
             )
-        }
+            .where(CurriculumObjective.profile_id == profile.id)
+        ).all()
+        objectives = {objective.code: (objective, mapping) for objective, mapping in objective_rows}
+        objective_ids = [objective.id for objective, _ in objective_rows]
+        active_revisions = session.scalars(
+            select(CurriculumObjectiveRevision)
+            .where(
+                CurriculumObjectiveRevision.objective_id.in_(objective_ids),
+                CurriculumObjectiveRevision.status == CurriculumRevisionStatus.ACTIVE,
+            )
+            .order_by(
+                CurriculumObjectiveRevision.objective_id,
+                CurriculumObjectiveRevision.revision_number.desc(),
+            )
+        ).all()
+        active_revision_by_objective: dict[object, CurriculumObjectiveRevision] = {}
+        for revision in active_revisions:
+            active_revision_by_objective.setdefault(revision.objective_id, revision)
         for imported_objective in document.objectives:
-            existing_objective = objectives.get(imported_objective.code)
-            if existing_objective is None:
+            existing = objectives.get(imported_objective.code)
+            if existing is None:
                 additions.append(imported_objective.code)
                 continue
-            active_revision = session.scalar(
-                select(CurriculumObjectiveRevision)
-                .where(
-                    CurriculumObjectiveRevision.objective_id == existing_objective.id,
-                    CurriculumObjectiveRevision.status == CurriculumRevisionStatus.ACTIVE,
-                )
-                .order_by(CurriculumObjectiveRevision.revision_number.desc())
-            )
+            existing_objective, existing_mapping = existing
+            active_revision = active_revision_by_objective.get(existing_objective.id)
             if (
                 active_revision is not None
                 and _revision_matches(active_revision, imported_objective)
-                and existing_objective.grade_mapping.internal_level
-                == imported_objective.grade_level
+                and existing_mapping.internal_level == imported_objective.grade_level
                 and existing_objective.subject == imported_objective.subject
                 and existing_objective.domain == imported_objective.domain
             ):
@@ -293,11 +304,18 @@ def apply_import(
         and expected_normalized_digest != analysis.normalized_digest
     ):
         raise StaleImportBaselineError("import document changed after dry-run")
+    if (
+        expected_catalogue_fingerprint is not None
+        and expected_catalogue_fingerprint != analysis.catalogue_fingerprint
+    ):
+        raise StaleImportBaselineError("catalogue changed after dry-run")
     profile = session.scalar(
         select(CurriculumProfile)
         .where(CurriculumProfile.code == document.profile.code)
         .with_for_update()
     )
+    if catalogue_fingerprint(session, document.profile.code) != analysis.catalogue_fingerprint:
+        raise StaleImportBaselineError("catalogue changed after dry-run")
     if profile is not None:
         duplicate = session.scalar(
             select(CurriculumImportBatch).where(
@@ -306,16 +324,7 @@ def apply_import(
             )
         )
         if duplicate is not None:
-            current_fingerprint = catalogue_fingerprint(session, document.profile.code)
-            if idempotency_key is not None or current_fingerprint == analysis.catalogue_fingerprint:
-                return duplicate
-    if (
-        expected_catalogue_fingerprint is not None
-        and expected_catalogue_fingerprint != analysis.catalogue_fingerprint
-    ):
-        raise StaleImportBaselineError("catalogue changed after dry-run")
-    if catalogue_fingerprint(session, document.profile.code) != analysis.catalogue_fingerprint:
-        raise StaleImportBaselineError("catalogue changed after dry-run")
+            return duplicate
     if profile is not None:
         return _apply_profile_update(
             session,
@@ -376,6 +385,7 @@ def apply_import(
             "updates": len(analysis.updates),
             "unchanged": len(analysis.unchanged),
             "proposed_objectives": _proposed_objective_snapshot(document),
+            "proposed_prerequisites": _proposed_prerequisite_snapshot(document),
         },
     )
     session.add(batch)
@@ -403,19 +413,14 @@ def apply_import(
             difficulty_min=objective_data.difficulty_min,
             difficulty_max=objective_data.difficulty_max,
             activity_type=objective_data.activity_type,
+            validation_subject=objective_data.subject,
+            validation_internal_level=objective_data.grade_level,
         )
         revision.created_by_user_id = actor.id
         revision.import_batch = batch
         revision.change_summary = objective_data.change_summary
         revisions[objective_data.code] = revision
     session.flush()
-
-    for prerequisite in document.prerequisites:
-        create_prerequisite(
-            session,
-            objective_revision=revisions[prerequisite.objective_code],
-            prerequisite_revision=revisions[prerequisite.prerequisite_code],
-        )
 
     return batch
 
@@ -520,6 +525,8 @@ def _apply_profile_update(
             difficulty_min=objective_data.difficulty_min,
             difficulty_max=objective_data.difficulty_max,
             activity_type=objective_data.activity_type,
+            validation_subject=objective_data.subject,
+            validation_internal_level=objective_data.grade_level,
         )
         revision.created_by_user_id = actor.id
         revision.import_batch = batch
@@ -528,20 +535,12 @@ def _apply_profile_update(
         updates += 1
     session.flush()
 
-    for prerequisite in document.prerequisites:
-        objective_revision = revisions[prerequisite.objective_code]
-        prerequisite_revision = revisions[prerequisite.prerequisite_code]
-        if objective_revision.id != prerequisite_revision.id:
-            create_prerequisite(
-                session,
-                objective_revision=objective_revision,
-                prerequisite_revision=prerequisite_revision,
-            )
     batch.summary_json = {
         "additions": additions,
         "updates": updates,
         "unchanged": len(document.objectives) - additions - updates,
         "proposed_objectives": _proposed_objective_snapshot(document),
+        "proposed_prerequisites": _proposed_prerequisite_snapshot(document),
         "proposed_grade_complexity_rules": {
             mapping.internal_level: mapping.complexity_rules for mapping in document.grade_mappings
         },
@@ -665,17 +664,104 @@ def activate_import(
         complexity_rule_updates.append((mappings[internal_level], rules))
     for mapping, rules in complexity_rule_updates:
         mapping.complexity_rules_json = rules
+    _apply_proposed_objective_metadata(session, batch=batch, mappings=mappings)
     for revision in batch.objective_revisions:
         if revision.objective.status is CurriculumProfileStatus.IN_REVIEW:
             revision.objective.status = CurriculumProfileStatus.ACTIVE
     session.flush()
     for revision in batch.objective_revisions:
         activate_objective_revision(session, revision=revision, reviewer_user_id=actor.id)
+    _apply_proposed_prerequisites(session, batch=batch)
     batch.status = CurriculumImportStatus.ACTIVE
     batch.activated_by_user_id = actor.id
     batch.activated_at = utc_now()
     session.flush()
     return batch
+
+
+def _apply_proposed_objective_metadata(
+    session: Session,
+    *,
+    batch: CurriculumImportBatch,
+    mappings: dict[str, CurriculumGradeMapping],
+) -> None:
+    proposed = batch.summary_json.get("proposed_objectives", [])
+    if not isinstance(proposed, list):
+        raise ImportLifecycleError("invalid proposed objective metadata")
+    objectives = {
+        objective.code: objective
+        for objective in session.scalars(
+            select(CurriculumObjective).where(CurriculumObjective.profile_id == batch.profile_id)
+        )
+    }
+    for item in proposed:
+        if not isinstance(item, dict):
+            raise ImportLifecycleError("invalid proposed objective metadata")
+        code = item.get("code")
+        grade_level = item.get("grade_level")
+        subject = item.get("subject")
+        domain = item.get("domain")
+        if (
+            not isinstance(code, str)
+            or not isinstance(grade_level, str)
+            or not isinstance(subject, str)
+            or not isinstance(domain, str)
+            or code not in objectives
+            or grade_level not in mappings
+        ):
+            raise ImportLifecycleError("invalid proposed objective metadata")
+        objective = objectives[code]
+        objective.grade_mapping = mappings[grade_level]
+        objective.subject = subject
+        objective.domain = domain
+
+
+def _apply_proposed_prerequisites(session: Session, *, batch: CurriculumImportBatch) -> None:
+    proposed = batch.summary_json.get("proposed_prerequisites", [])
+    if not isinstance(proposed, list):
+        raise ImportLifecycleError("invalid proposed prerequisites")
+    rows = session.execute(
+        select(CurriculumObjective.code, CurriculumObjectiveRevision)
+        .join(
+            CurriculumObjectiveRevision,
+            CurriculumObjectiveRevision.objective_id == CurriculumObjective.id,
+        )
+        .where(
+            CurriculumObjective.profile_id == batch.profile_id,
+            CurriculumObjectiveRevision.status == CurriculumRevisionStatus.ACTIVE,
+        )
+    ).all()
+    revisions = {code: revision for code, revision in rows}
+    for item in proposed:
+        if not isinstance(item, dict):
+            raise ImportLifecycleError("invalid proposed prerequisites")
+        objective_code = item.get("objective_code")
+        prerequisite_code = item.get("prerequisite_code")
+        objective_revision = revisions.get(objective_code)
+        prerequisite_revision = revisions.get(prerequisite_code)
+        if (
+            not isinstance(objective_code, str)
+            or not isinstance(prerequisite_code, str)
+            or objective_revision is None
+            or prerequisite_revision is None
+            or objective_revision.id == prerequisite_revision.id
+        ):
+            raise ImportLifecycleError("invalid proposed prerequisites")
+        existing = session.scalar(
+            select(CurriculumPrerequisite).where(
+                CurriculumPrerequisite.objective_revision_id == objective_revision.id,
+                CurriculumPrerequisite.prerequisite_revision_id == prerequisite_revision.id,
+            )
+        )
+        if existing is None:
+            try:
+                create_prerequisite(
+                    session,
+                    objective_revision=objective_revision,
+                    prerequisite_revision=prerequisite_revision,
+                )
+            except CurriculumValidationError as error:
+                raise ImportLifecycleError(str(error)) from error
 
 
 def export_active_profile(session: Session, *, profile_code: str) -> ImportDocument | None:
@@ -853,6 +939,10 @@ def _batch_change_summary(document: ImportDocument) -> str:
 
 def _proposed_objective_snapshot(document: ImportDocument) -> list[dict[str, object]]:
     return [objective.model_dump(mode="json") for objective in document.objectives]
+
+
+def _proposed_prerequisite_snapshot(document: ImportDocument) -> list[dict[str, object]]:
+    return [prerequisite.model_dump(mode="json") for prerequisite in document.prerequisites]
 
 
 def _revision_matches(revision: CurriculumObjectiveRevision, objective: ImportObjective) -> bool:

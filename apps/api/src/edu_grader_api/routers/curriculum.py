@@ -782,7 +782,11 @@ def submit_curriculum_import_review_route(
     try:
         session.rollback()
         with session.begin():
-            batch = session.get(CurriculumImportBatch, batch_id)
+            batch = session.scalar(
+                select(CurriculumImportBatch)
+                .where(CurriculumImportBatch.id == batch_id)
+                .with_for_update()
+            )
             if batch is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
@@ -826,7 +830,11 @@ def review_curriculum_import_route(
     try:
         session.rollback()
         with session.begin():
-            batch = session.get(CurriculumImportBatch, batch_id)
+            batch = session.scalar(
+                select(CurriculumImportBatch)
+                .where(CurriculumImportBatch.id == batch_id)
+                .with_for_update()
+            )
             if batch is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
@@ -871,7 +879,11 @@ def activate_curriculum_import_route(
     try:
         session.rollback()
         with session.begin():
-            batch = session.get(CurriculumImportBatch, batch_id)
+            batch = session.scalar(
+                select(CurriculumImportBatch)
+                .where(CurriculumImportBatch.id == batch_id)
+                .with_for_update()
+            )
             if batch is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"

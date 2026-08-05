@@ -858,6 +858,13 @@ def test_duplicate_content_does_not_append_a_second_create_audit_event(
             select(AuditLog).where(AuditLog.event_type == "curriculum.import_created")
         ).all()
     )
+    assert first.status_code == 201
+    second_dry_run = curriculum_context.client.post(
+        "/v1/admin/curriculum/imports/dry-run",
+        json={"format": "json", "document": import_document()},
+        headers=headers("admin-token"),
+    )
+    request["catalogue_fingerprint"] = second_dry_run.json()["catalogue_fingerprint"]
     second = curriculum_context.client.post(
         "/v1/admin/curriculum/imports",
         json=request,
@@ -868,8 +875,6 @@ def test_duplicate_content_does_not_append_a_second_create_audit_event(
             select(AuditLog).where(AuditLog.event_type == "curriculum.import_created")
         ).all()
     )
-
-    assert first.status_code == 201
     assert second.status_code == 201
     assert second.json()["id"] == first.json()["id"]
     assert second_count == first_count

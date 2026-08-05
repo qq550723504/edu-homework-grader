@@ -33,13 +33,20 @@ def create_objective_revision(
     difficulty_min: float,
     difficulty_max: float,
     activity_type: CurriculumActivityType,
+    validation_subject: str | None = None,
+    validation_internal_level: str | None = None,
 ) -> CurriculumObjectiveRevision:
-    _validate_revision(
-        objective,
-        allowed_question_types,
-        difficulty_min,
-        difficulty_max,
-        activity_type,
+    validate_revision_payload(
+        subject=validation_subject if validation_subject is not None else objective.subject,
+        internal_level=(
+            validation_internal_level
+            if validation_internal_level is not None
+            else objective.grade_mapping.internal_level
+        ),
+        allowed_question_types=allowed_question_types,
+        difficulty_min=difficulty_min,
+        difficulty_max=difficulty_max,
+        activity_type=activity_type,
     )
     revision = CurriculumObjectiveRevision(
         objective=objective,
@@ -143,23 +150,6 @@ def list_active_objective_revisions(session: Session) -> list[CurriculumObjectiv
             )
             .order_by(CurriculumObjective.code, CurriculumObjectiveRevision.revision_number)
         )
-    )
-
-
-def _validate_revision(
-    objective: CurriculumObjective,
-    allowed_question_types: list[str],
-    difficulty_min: float,
-    difficulty_max: float,
-    activity_type: CurriculumActivityType,
-) -> None:
-    validate_revision_payload(
-        subject=objective.subject,
-        internal_level=objective.grade_mapping.internal_level,
-        allowed_question_types=allowed_question_types,
-        difficulty_min=difficulty_min,
-        difficulty_max=difficulty_max,
-        activity_type=activity_type,
     )
 
 
