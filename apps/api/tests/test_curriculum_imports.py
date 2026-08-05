@@ -11,6 +11,7 @@ from edu_grader_api.models import (
     CurriculumImportStatus,
     CurriculumObjective,
     CurriculumObjectiveRevision,
+    CurriculumPrerequisite,
     CurriculumProfile,
     CurriculumProfileStatus,
     CurriculumRevisionStatus,
@@ -20,12 +21,14 @@ from edu_grader_api.models import (
 )
 from edu_grader_api.services.curriculum_imports import (
     ImportDocument,
+    ImportLifecycleError,
     StaleImportBaselineError,
     activate_import,
     analyse_import,
     apply_import,
     export_active_profile,
     parse_csv_document,
+    retire_profile,
     review_import,
     submit_import_for_review,
 )
@@ -258,6 +261,88 @@ def test_apply_import_creates_a_draft_catalogue_candidate(session: Session) -> N
     assert revision.status is CurriculumRevisionStatus.DRAFT
     assert revision.created_by_user_id == batch.submitted_by_user_id
     assert revision.import_batch_id == batch.id
+    assert batch.summary_json["proposed_objectives"] == [
+        {
+            "code": "EX-MATH-G1-NUM-001",
+            "grade_level": "G1",
+            "subject": "mathematics",
+            "domain": "number",
+            "text": "Represent small whole numbers with drawings and objects.",
+            "source_locator": "section 1",
+            "allowed_question_types": ["M1"],
+            "difficulty_min": 0.0,
+            "difficulty_max": 0.3,
+            "activity_type": "scored_question",
+            "change_summary": "Initial curated objective",
+        }
+    ]
+
+
+def test_analysis_classifies_additions_updates_and_unchanged_objectives(
+    session: Session,
+) -> None:
+    actor = admin_user(session)
+    initial_document = ImportDocument.model_validate(MINIMAL_DOCUMENT)
+    apply_import(
+        session,
+        document=initial_document,
+        analysis=analyse_import(session, initial_document),
+        actor=actor,
+    )
+    profile = session.scalar(select(CurriculumProfile))
+    objective = session.scalar(select(CurriculumObjective))
+    active_revision = session.scalar(select(CurriculumObjectiveRevision))
+    assert profile is not None and objective is not None and active_revision is not None
+    profile.status = CurriculumProfileStatus.ACTIVE
+    objective.status = CurriculumProfileStatus.ACTIVE
+    active_revision.status = CurriculumRevisionStatus.ACTIVE
+    session.flush()
+
+    unchanged = analyse_import(session, initial_document)
+    assert unchanged.additions == []
+    assert unchanged.updates == []
+    assert unchanged.unchanged == ["EX-MATH-G1-NUM-001"]
+
+    changed_data = deepcopy(MINIMAL_DOCUMENT)
+    changed_data["objectives"][0]["text"] = "Compare small whole numbers with drawings and objects."
+    changed_data["objectives"].append(
+        {
+            **changed_data["objectives"][0],
+            "code": "EX-MATH-G1-NUM-002",
+            "text": "Compare two small whole numbers.",
+        }
+    )
+    changed = analyse_import(session, ImportDocument.model_validate(changed_data))
+    assert changed.additions == ["EX-MATH-G1-NUM-002"]
+    assert changed.updates == ["EX-MATH-G1-NUM-001"]
+    assert changed.unchanged == []
+
+
+def test_analysis_classifies_objective_metadata_changes_as_updates(session: Session) -> None:
+    actor = admin_user(session)
+    initial_document = ImportDocument.model_validate(MINIMAL_DOCUMENT)
+    apply_import(
+        session,
+        document=initial_document,
+        analysis=analyse_import(session, initial_document),
+        actor=actor,
+    )
+    profile = session.scalar(select(CurriculumProfile))
+    objective = session.scalar(select(CurriculumObjective))
+    active_revision = session.scalar(select(CurriculumObjectiveRevision))
+    assert profile is not None and objective is not None and active_revision is not None
+    profile.status = CurriculumProfileStatus.ACTIVE
+    objective.status = CurriculumProfileStatus.ACTIVE
+    active_revision.status = CurriculumRevisionStatus.ACTIVE
+    session.flush()
+
+    changed_data = deepcopy(MINIMAL_DOCUMENT)
+    changed_data["objectives"][0]["subject"] = "arithmetic"
+    changed = analyse_import(session, ImportDocument.model_validate(changed_data))
+
+    assert changed.additions == []
+    assert changed.updates == ["EX-MATH-G1-NUM-001"]
+    assert changed.unchanged == []
 
 
 def test_apply_import_is_idempotent_for_the_same_normalized_document(session: Session) -> None:
@@ -273,6 +358,195 @@ def test_apply_import_is_idempotent_for_the_same_normalized_document(session: Se
 
     assert second.id == first.id
     assert len(session.scalars(select(CurriculumObjective)).all()) == 1
+
+
+def test_apply_import_replays_matching_key_and_rejects_changed_request(
+    session: Session,
+) -> None:
+    document = ImportDocument.model_validate(MINIMAL_DOCUMENT)
+    actor = admin_user(session)
+    analysis = analyse_import(session, document)
+
+    first = apply_import(
+        session,
+        document=document,
+        analysis=analysis,
+        actor=actor,
+        idempotency_key="create-replay-key",
+        request_digest="a" * 64,
+    )
+    replay = apply_import(
+        session,
+        document=document,
+        analysis=analyse_import(session, document),
+        actor=actor,
+        idempotency_key="create-replay-key",
+        request_digest="a" * 64,
+    )
+    assert replay.id == first.id
+
+    with pytest.raises(ValueError, match="idempotency key conflict"):
+        apply_import(
+            session,
+            document=document,
+            analysis=analyse_import(session, document),
+            actor=actor,
+            idempotency_key="create-replay-key",
+            request_digest="b" * 64,
+        )
+
+
+def test_import_lifecycle_replays_actions_and_rejects_second_review(session: Session) -> None:
+    document = ImportDocument.model_validate(MINIMAL_DOCUMENT)
+    actor = admin_user(session)
+    reviewer = reviewer_user(session, actor)
+    batch = apply_import(
+        session, document=document, analysis=analyse_import(session, document), actor=actor
+    )
+
+    submit_import_for_review(
+        session, batch=batch, idempotency_key="submit-replay-key", request_digest="s" * 64
+    )
+    assert (
+        submit_import_for_review(
+            session, batch=batch, idempotency_key="submit-replay-key", request_digest="s" * 64
+        ).id
+        == batch.id
+    )
+    review_import(
+        session,
+        batch=batch,
+        reviewer=reviewer,
+        approve=True,
+        idempotency_key="review-replay-key",
+        request_digest="r" * 64,
+    )
+    assert (
+        review_import(
+            session,
+            batch=batch,
+            reviewer=reviewer,
+            approve=True,
+            idempotency_key="review-replay-key",
+            request_digest="r" * 64,
+        ).id
+        == batch.id
+    )
+    with pytest.raises(ValueError, match="only in-review imports can be reviewed"):
+        review_import(
+            session,
+            batch=batch,
+            reviewer=reviewer,
+            approve=False,
+            idempotency_key="different-review-key",
+            request_digest="x" * 64,
+        )
+    activate_import(
+        session,
+        batch=batch,
+        actor=reviewer,
+        idempotency_key="activate-replay-key",
+        request_digest="v" * 64,
+    )
+    assert (
+        activate_import(
+            session,
+            batch=batch,
+            actor=reviewer,
+            idempotency_key="activate-replay-key",
+            request_digest="v" * 64,
+        ).id
+        == batch.id
+    )
+
+
+def test_import_lifecycle_rejects_a_key_used_by_another_batch(session: Session) -> None:
+    actor = admin_user(session)
+    first_document = ImportDocument.model_validate(MINIMAL_DOCUMENT)
+    second_data = deepcopy(MINIMAL_DOCUMENT)
+    second_data["profile"]["code"] = "another-example-math-2026"
+    second_document = ImportDocument.model_validate(second_data)
+    first = apply_import(
+        session,
+        document=first_document,
+        analysis=analyse_import(session, first_document),
+        actor=actor,
+    )
+    second = apply_import(
+        session,
+        document=second_document,
+        analysis=analyse_import(session, second_document),
+        actor=actor,
+    )
+
+    submit_import_for_review(
+        session, batch=first, idempotency_key="shared-submit-key", request_digest="s" * 64
+    )
+    with pytest.raises(ImportLifecycleError, match="idempotency key already used"):
+        submit_import_for_review(
+            session,
+            batch=second,
+            idempotency_key="shared-submit-key",
+            request_digest="s" * 64,
+        )
+
+
+def test_retire_profile_replays_matching_key(session: Session) -> None:
+    document = ImportDocument.model_validate(MINIMAL_DOCUMENT)
+    actor = admin_user(session)
+    batch = apply_import(
+        session, document=document, analysis=analyse_import(session, document), actor=actor
+    )
+    profile = batch.profile
+    profile.status = CurriculumProfileStatus.ACTIVE
+    batch.status = CurriculumImportStatus.ACTIVE
+    session.flush()
+
+    retired = retire_profile(
+        session,
+        profile=profile,
+        idempotency_key="retire-replay-key",
+        request_digest="t" * 64,
+    )
+    assert (
+        retire_profile(
+            session,
+            profile=profile,
+            idempotency_key="retire-replay-key",
+            request_digest="t" * 64,
+        ).id
+        == retired.id
+    )
+
+
+def test_retire_profile_rejects_profiles_with_pending_imports(session: Session) -> None:
+    actor = admin_user(session)
+    initial_document = ImportDocument.model_validate(MINIMAL_DOCUMENT)
+    apply_import(
+        session,
+        document=initial_document,
+        analysis=analyse_import(session, initial_document),
+        actor=actor,
+    )
+    profile = session.scalar(select(CurriculumProfile))
+    assert profile is not None
+    profile.status = CurriculumProfileStatus.ACTIVE
+    session.flush()
+
+    changed_data = deepcopy(MINIMAL_DOCUMENT)
+    changed_data["objectives"][0]["text"] = "A pending update."
+    changed_document = ImportDocument.model_validate(changed_data)
+    apply_import(
+        session,
+        document=changed_document,
+        analysis=analyse_import(session, changed_document),
+        actor=actor,
+    )
+
+    with pytest.raises(ImportLifecycleError, match="profile has pending imports"):
+        retire_profile(
+            session, profile=profile, idempotency_key="pending-retire", request_digest="p" * 64
+        )
 
 
 def test_changed_active_objective_creates_a_new_draft_revision(session: Session) -> None:
@@ -315,6 +589,161 @@ def test_changed_active_objective_creates_a_new_draft_revision(session: Session)
     ]
     assert revisions[1].import_batch_id == batch.id
     assert revisions[1].revision_number == 2
+
+
+def test_metadata_updates_are_persisted_only_on_activation(session: Session) -> None:
+    actor = admin_user(session)
+    initial_document = ImportDocument.model_validate(MINIMAL_DOCUMENT)
+    apply_import(
+        session,
+        document=initial_document,
+        analysis=analyse_import(session, initial_document),
+        actor=actor,
+    )
+    profile = session.scalar(select(CurriculumProfile))
+    objective = session.scalar(select(CurriculumObjective))
+    active_revision = session.scalar(select(CurriculumObjectiveRevision))
+    assert profile is not None and objective is not None and active_revision is not None
+    profile.status = CurriculumProfileStatus.ACTIVE
+    objective.status = CurriculumProfileStatus.ACTIVE
+    active_revision.status = CurriculumRevisionStatus.ACTIVE
+    session.flush()
+
+    changed_data = deepcopy(MINIMAL_DOCUMENT)
+    changed_data["grade_mappings"].append(
+        {"internal_level": "G2", "external_label": "Grade 2", "position": 2}
+    )
+    changed_data["objectives"][0]["grade_level"] = "G2"
+    changed_data["objectives"][0]["subject"] = "english"
+    changed_data["objectives"][0]["allowed_question_types"] = ["E1"]
+    changed_document = ImportDocument.model_validate(changed_data)
+    batch = apply_import(
+        session,
+        document=changed_document,
+        analysis=analyse_import(session, changed_document),
+        actor=actor,
+    )
+
+    assert objective.subject == "mathematics"
+    assert objective.grade_mapping.internal_level == "G1"
+    reviewer = reviewer_user(session, actor)
+    submit_import_for_review(session, batch=batch)
+    review_import(session, batch=batch, reviewer=reviewer, approve=True)
+    activate_import(session, batch=batch, actor=reviewer)
+
+    session.refresh(objective)
+    assert objective.subject == "english"
+    assert objective.grade_mapping.internal_level == "G2"
+
+
+def test_grade_mapping_updates_are_persisted_only_on_activation(session: Session) -> None:
+    actor = admin_user(session)
+    initial_document = ImportDocument.model_validate(MINIMAL_DOCUMENT)
+    apply_import(
+        session,
+        document=initial_document,
+        analysis=analyse_import(session, initial_document),
+        actor=actor,
+    )
+    profile = session.scalar(select(CurriculumProfile))
+    mapping = session.scalar(select(CurriculumGradeMapping))
+    objective = session.scalar(select(CurriculumObjective))
+    active_revision = session.scalar(select(CurriculumObjectiveRevision))
+    assert profile is not None and mapping is not None and objective is not None
+    assert active_revision is not None
+    profile.status = CurriculumProfileStatus.ACTIVE
+    objective.status = CurriculumProfileStatus.ACTIVE
+    active_revision.status = CurriculumRevisionStatus.ACTIVE
+    session.flush()
+
+    changed_data = deepcopy(MINIMAL_DOCUMENT)
+    changed_data["grade_mappings"][0]["external_label"] = "Grade One"
+    changed_data["grade_mappings"][0]["position"] = 2
+    changed_document = ImportDocument.model_validate(changed_data)
+    changed_batch = apply_import(
+        session,
+        document=changed_document,
+        analysis=analyse_import(session, changed_document),
+        actor=actor,
+    )
+
+    assert mapping.external_label == "Grade 1"
+    assert mapping.position == 1
+    assert changed_batch.summary_json["proposed_grade_mappings"] == [
+        {
+            "internal_level": "G1",
+            "external_label": "Grade One",
+            "position": 2,
+            "complexity_rules": {},
+        }
+    ]
+    reviewer = reviewer_user(session, actor)
+    submit_import_for_review(session, batch=changed_batch)
+    review_import(session, batch=changed_batch, reviewer=reviewer, approve=True)
+    activate_import(session, batch=changed_batch, actor=reviewer)
+
+    session.refresh(mapping)
+    assert mapping.external_label == "Grade One"
+    assert mapping.position == 2
+
+
+def test_prerequisite_updates_remain_pending_until_activation(session: Session) -> None:
+    actor = admin_user(session)
+    initial_data = deepcopy(MINIMAL_DOCUMENT)
+    initial_data["objectives"].append(
+        {
+            **initial_data["objectives"][0],
+            "code": "EX-MATH-G1-NUM-002",
+            "text": "Compare two small whole numbers.",
+        }
+    )
+    initial_document = ImportDocument.model_validate(initial_data)
+    apply_import(
+        session,
+        document=initial_document,
+        analysis=analyse_import(session, initial_document),
+        actor=actor,
+    )
+    profile = session.scalar(select(CurriculumProfile))
+    objectives = session.scalars(select(CurriculumObjective)).all()
+    revisions = session.scalars(select(CurriculumObjectiveRevision)).all()
+    assert profile is not None and len(objectives) == 2 and len(revisions) == 2
+    profile.status = CurriculumProfileStatus.ACTIVE
+    for objective in objectives:
+        objective.status = CurriculumProfileStatus.ACTIVE
+    for revision in revisions:
+        revision.status = CurriculumRevisionStatus.ACTIVE
+    session.flush()
+
+    changed_data = deepcopy(initial_data)
+    changed_data["prerequisites"] = [
+        {
+            "objective_code": "EX-MATH-G1-NUM-001",
+            "prerequisite_code": "EX-MATH-G1-NUM-002",
+        }
+    ]
+    changed_document = ImportDocument.model_validate(changed_data)
+    batch = apply_import(
+        session,
+        document=changed_document,
+        analysis=analyse_import(session, changed_document),
+        actor=actor,
+    )
+
+    assert session.scalars(select(CurriculumPrerequisite)).all() == []
+    assert batch.summary_json["proposed_prerequisites"] == [
+        {
+            "objective_code": "EX-MATH-G1-NUM-001",
+            "prerequisite_code": "EX-MATH-G1-NUM-002",
+        }
+    ]
+    reviewer = reviewer_user(session, actor)
+    submit_import_for_review(session, batch=batch)
+    review_import(session, batch=batch, reviewer=reviewer, approve=True)
+    assert session.scalars(select(CurriculumPrerequisite)).all() == []
+    activate_import(session, batch=batch, actor=reviewer)
+
+    assert len(session.scalars(select(CurriculumPrerequisite)).all()) == 1
 
 
 def test_rejected_import_keeps_active_grade_complexity_rules_unchanged(session: Session) -> None:

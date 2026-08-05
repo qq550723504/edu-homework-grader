@@ -25,6 +25,18 @@ from edu_grader_api.services.ai_evaluation_operational import (
 from edu_grader_api.settings import settings
 
 
+def test_e2e_grader_normalizes_mathjson_to_the_safe_ast_contract() -> None:
+    client = DeterministicM2Client("unused")
+
+    assert client.normalize_math_answer({"mathjson": ["Add", "x", 1], "variables": ["x"]}) == {
+        "type": "add",
+        "args": [
+            {"type": "symbol", "name": "x"},
+            {"type": "number", "value": "1"},
+        ],
+    }
+
+
 def test_e2e_grader_evaluates_m1_numeric_answers_against_the_rule() -> None:
     client = DeterministicM2Client("unused")
 
