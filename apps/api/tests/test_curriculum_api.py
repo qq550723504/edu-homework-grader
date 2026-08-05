@@ -722,6 +722,7 @@ def test_curriculum_admin_can_list_profiles_and_import_batch_details(
     assert batches.json()["items"][0]["id"] == str(batch_id)
     assert "proposed_objectives" not in batches.json()["items"][0]
     assert "proposed_objectives" not in batches.json()["items"][0]["summary"]
+    assert "proposed_prerequisites" not in batches.json()["items"][0]["summary"]
     assert detail.status_code == 200
     assert detail.json()["profile"]["code"] == "example-math-2026"
     assert detail.json()["proposed_objectives"][0]["text"] == (

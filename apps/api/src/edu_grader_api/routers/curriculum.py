@@ -1058,6 +1058,8 @@ def _import_batch_payload(
     summary = dict(batch.summary_json)
     if not include_proposed_objectives:
         summary.pop("proposed_objectives", None)
+        summary.pop("proposed_grade_mappings", None)
+        summary.pop("proposed_prerequisites", None)
     payload = {
         "id": str(batch.id),
         "status": batch.status.value,

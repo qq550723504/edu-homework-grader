@@ -460,6 +460,37 @@ def test_import_lifecycle_replays_actions_and_rejects_second_review(session: Ses
     )
 
 
+def test_import_lifecycle_rejects_a_key_used_by_another_batch(session: Session) -> None:
+    actor = admin_user(session)
+    first_document = ImportDocument.model_validate(MINIMAL_DOCUMENT)
+    second_data = deepcopy(MINIMAL_DOCUMENT)
+    second_data["profile"]["code"] = "another-example-math-2026"
+    second_document = ImportDocument.model_validate(second_data)
+    first = apply_import(
+        session,
+        document=first_document,
+        analysis=analyse_import(session, first_document),
+        actor=actor,
+    )
+    second = apply_import(
+        session,
+        document=second_document,
+        analysis=analyse_import(session, second_document),
+        actor=actor,
+    )
+
+    submit_import_for_review(
+        session, batch=first, idempotency_key="shared-submit-key", request_digest="s" * 64
+    )
+    with pytest.raises(ImportLifecycleError, match="idempotency key already used"):
+        submit_import_for_review(
+            session,
+            batch=second,
+            idempotency_key="shared-submit-key",
+            request_digest="s" * 64,
+        )
+
+
 def test_retire_profile_replays_matching_key(session: Session) -> None:
     document = ImportDocument.model_validate(MINIMAL_DOCUMENT)
     actor = admin_user(session)
@@ -603,6 +634,57 @@ def test_metadata_updates_are_persisted_only_on_activation(session: Session) -> 
     session.refresh(objective)
     assert objective.subject == "english"
     assert objective.grade_mapping.internal_level == "G2"
+
+
+def test_grade_mapping_updates_are_persisted_only_on_activation(session: Session) -> None:
+    actor = admin_user(session)
+    initial_document = ImportDocument.model_validate(MINIMAL_DOCUMENT)
+    apply_import(
+        session,
+        document=initial_document,
+        analysis=analyse_import(session, initial_document),
+        actor=actor,
+    )
+    profile = session.scalar(select(CurriculumProfile))
+    mapping = session.scalar(select(CurriculumGradeMapping))
+    objective = session.scalar(select(CurriculumObjective))
+    active_revision = session.scalar(select(CurriculumObjectiveRevision))
+    assert profile is not None and mapping is not None and objective is not None
+    assert active_revision is not None
+    profile.status = CurriculumProfileStatus.ACTIVE
+    objective.status = CurriculumProfileStatus.ACTIVE
+    active_revision.status = CurriculumRevisionStatus.ACTIVE
+    session.flush()
+
+    changed_data = deepcopy(MINIMAL_DOCUMENT)
+    changed_data["grade_mappings"][0]["external_label"] = "Grade One"
+    changed_data["grade_mappings"][0]["position"] = 2
+    changed_document = ImportDocument.model_validate(changed_data)
+    changed_batch = apply_import(
+        session,
+        document=changed_document,
+        analysis=analyse_import(session, changed_document),
+        actor=actor,
+    )
+
+    assert mapping.external_label == "Grade 1"
+    assert mapping.position == 1
+    assert changed_batch.summary_json["proposed_grade_mappings"] == [
+        {
+            "internal_level": "G1",
+            "external_label": "Grade One",
+            "position": 2,
+            "complexity_rules": {},
+        }
+    ]
+    reviewer = reviewer_user(session, actor)
+    submit_import_for_review(session, batch=changed_batch)
+    review_import(session, batch=changed_batch, reviewer=reviewer, approve=True)
+    activate_import(session, batch=changed_batch, actor=reviewer)
+
+    session.refresh(mapping)
+    assert mapping.external_label == "Grade One"
+    assert mapping.position == 2
 
 
 def test_prerequisite_updates_remain_pending_until_activation(session: Session) -> None:
